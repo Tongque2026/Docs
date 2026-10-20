@@ -1,0 +1,518 @@
+[
+  {
+    "symbol": "decode_device",
+    "source": "torch/_inductor/utils.py:222",
+    "owner": "codegen-runtime/kernels/backends-loops/dispatch",
+    "status": "已完整逐行覆盖；Worker接口为共享边界，本机CPU默认/设备描述fixture已验证"
+  },
+  {
+    "symbol": "get_storage/get_node_storage/get_fake/get_fake_args_kwargs",
+    "source": "torch/_inductor/fx_utils.py:188",
+    "owner": "graph-preparation/properties/incremental",
+    "status": "已完整逐行覆盖"
+  },
+  {
+    "symbol": "mutation region helper family",
+    "source": "torch/_inductor/pattern_matcher.py:1609",
+    "owner": "graph-preparation/rewrites/cleanup-order",
+    "status": "已完整逐行覆盖；模式模块链接引用"
+  },
+  {
+    "symbol": "statically_known_true/sym_eq/rebind_unbacked/compute_unbacked_bindings",
+    "source": "torch/fx/experimental/symbolic_shapes.py",
+    "owner": "Inductor 边界外的符号设施",
+    "status": "叶子解释相关接口；不递归讲整个上层系统"
+  },
+  {
+    "symbol": "FX Graph DCE/map_arg/Node.prepend",
+    "source": "torch/fx/graph.py and torch/fx/node.py",
+    "owner": "Inductor 边界外的 FX 容器设施",
+    "status": "解释已调用接口；没有声称覆盖通用 FX 全部源码"
+  },
+  {
+    "symbol": "register_decomposition registry protocol",
+    "source": "torch/_decomp/__init__.py:150",
+    "owner": "Inductor 边界外注册设施",
+    "status": "核对 overload 与 unsafe/registry 接口，不展开上游 decomposition 系统"
+  },
+  {
+    "symbol": "PatternExpr/Match/MatchContext and pattern expression families",
+    "source": "torch/_inductor/pattern_matcher.py:132–966",
+    "owner": "graph-preparation/rewrites/patterns/matching",
+    "status": "本层接口与实际状态实验完成；完整逐行待覆盖"
+  },
+  {
+    "symbol": "pattern registration, generation, tracing and serialization",
+    "source": "torch/_inductor/pattern_matcher.py:973–1000,1193–1606,1740–1890",
+    "owner": "graph-preparation/rewrites/patterns/registration",
+    "status": "本层接口与函数式 replacement 实验完成；完整逐行待覆盖"
+  },
+  {
+    "symbol": "three PatternEntry implementations and PatternMatcherPass",
+    "source": "torch/_inductor/pattern_matcher.py:1002–1190,1660–1737",
+    "owner": "graph-preparation/rewrites/patterns/application",
+    "status": "本层接口与三类 entry 实验完成；完整逐行待覆盖"
+  },
+  {
+    "symbol": "fallback_node_due_to_unsupported_type",
+    "source": "torch/_inductor/lowering.py:1741",
+    "owner": "lowering/interpretation/dispatch-results",
+    "status": "模式入口复用的候选过滤接口；完整逐行待覆盖"
+  },
+  {
+    "symbol": "post-grad batch fusion selection and rules",
+    "source": "torch/_inductor/fx_passes/group_batch_fusion.py",
+    "owner": "graph-preparation/rewrites/batch-communication/batch",
+    "status": "五个 CPU 改写对照与独立子集验证；完整逐行待覆盖；pre-grad 专属规则在输入边界外"
+  },
+  {
+    "symbol": "TP collective matching and fused graph construction",
+    "source": "torch/_inductor/fx_passes/micro_pipeline_tp.py",
+    "owner": "graph-preparation/rewrites/batch-communication/tp",
+    "status": "接口与源码条件已解释；只验证 all-gather 图匹配，未执行通信"
+  },
+  {
+    "symbol": "DDP CommBlock, bucket fusion and wait scheduling",
+    "source": "torch/_inductor/fx_passes/ddp_fusion.py",
+    "owner": "graph-preparation/rewrites/batch-communication/ddp",
+    "status": "接口、真实图 wait 排序与 dispatcher 验证；未执行通信"
+  },
+  {
+    "symbol": "ViewOp, graph_call_function, generalized scatter helpers and decomposition/canonicalization",
+    "source": "torch/_inductor/fx_passes/reinplace.py:36–325",
+    "owner": "graph-preparation/mutation/view-scatter",
+    "status": "完整原始实现与逐行解释；八组图流程与七项 helper/失败边界证据"
+  },
+  {
+    "symbol": "is_node_realized",
+    "source": "torch/_inductor/fx_utils.py:222",
+    "owner": "lowering/materialization/storage-realization",
+    "status": "View/scatter 篇解释真实接口与漏报限制；完整逐行待覆盖"
+  },
+  {
+    "symbol": "_is_view_op",
+    "source": "torch/fx/passes/reinplace.py:23",
+    "owner": "Inductor 边界外的 FX schema/alias 设施",
+    "status": "按源码解释第一个参数 alias_info 且非写入的判断；不扩展整个通用 FX 原地化系统"
+  },
+  {
+    "symbol": "InplaceableOp, candidate registries, reinplace core and entry",
+    "source": "torch/_inductor/fx_passes/reinplace.py:29–33,328–688",
+    "owner": "graph-preparation/mutation/storage-reinplace",
+    "status": "完整逐行解释；22 项执行/边界对照；Triton 依赖缺失单独登记"
+  },
+  {
+    "symbol": "decompose_auto_functionalized",
+    "source": "torch/_inductor/fx_passes/post_grad.py:800–892",
+    "owner": "graph-preparation/mutation/functional-wrappers",
+    "status": "完整逐行解释；复用十个实际包装分解案例，新增八项边界对照"
+  },
+  {
+    "symbol": "get_mutable_args, auto_functionalized_dense/v2_dense and view metadata encoding",
+    "source": "torch/_higher_order_ops/auto_functionalize.py:303,550,623",
+    "owner": "Inductor 边界外的高阶算子设施",
+    "status": "依实际源码解释可变参数、参数名/base 名单、clone 与 view 重建接口；不扩展上游功能化全系统"
+  },
+  {
+    "symbol": "triton_kernel_wrapper_functional_dense / mutation wrapper",
+    "source": "torch/_higher_order_ops/triton_kernel_wrap.py:666",
+    "owner": "Inductor 边界外的 Triton 包装设施",
+    "status": "核对名单与字典输出接口；本机没有 Triton，正常分解和运行未验证"
+  },
+  {
+    "symbol": "immutable_list.__hash__ and immutable_dict",
+    "source": "torch/fx/immutable_collections.py:59",
+    "owner": "Inductor 边界外的 FX 容器设施",
+    "status": "按源码核对可哈希性，实际 mutable List 分解对照通过"
+  },
+  {
+    "symbol": "register_foreach_inplace",
+    "source": "torch/_inductor/lowering.py:5960",
+    "owner": "lowering/special-ops/template-integration/composite-lists",
+    "status": "接口与既有真实 CPU mutation 返回证据；本层新增普通展开/能力登记对照；完整逐行仍待子篇"
+  },
+  {
+    "symbol": "_args and stable_topological_sort",
+    "source": "torch/_inductor/pattern_matcher.py:1893–1932",
+    "owner": "graph-preparation/finalization/order-entry",
+    "status": "完整逐行；九项排序、入口与副作用边界对照"
+  },
+  {
+    "symbol": "post_grad finalization handoff block",
+    "source": "torch/_inductor/fx_passes/post_grad.py:133–148",
+    "owner": "graph-preparation/finalization/order-entry",
+    "status": "完整调用责任范围逐行；内部跨模块 helper 不因此被视为完整覆盖"
+  },
+  {
+    "symbol": "ConstructorMoverPass, placement guard and entry",
+    "source": "torch/_inductor/fx_passes/post_grad.py:1088–1318",
+    "owner": "graph-preparation/finalization/constructor-devices",
+    "status": "完整逐行；二十二项谓词/Fake metadata 对照，无 GPU 执行"
+  },
+  {
+    "symbol": "GraphModule.recompile / Graph.lint / Node.append",
+    "source": "torch/fx/graph_module.py:755; torch/fx/graph.py:1514; torch/fx/node.py",
+    "owner": "Inductor 边界外 FX 容器设施",
+    "status": "按实际源码解释并测试相关契约，不扩展整个 FX codegen"
+  },
+  {
+    "symbol": "_is_tensor_constructor",
+    "source": "torch/_subclasses/fake_impls.py:115",
+    "owner": "Inductor 边界外的 FakeTensor schema 设施",
+    "status": "核对无 Tensor 输入且单 Tensor 返回的构造识别契约"
+  },
+  {
+    "symbol": "get_gpu_type",
+    "source": "torch/_inductor/utils.py:55",
+    "owner": "codegen-runtime/kernels/backends-loops",
+    "status": "构造迁移篇说明 cuda/xpu 选择与默认值，完整设备接入说明优先继续"
+  },
+  {
+    "symbol": "reinplace_fsdp_all_gather",
+    "source": "torch/_inductor/comms.py:345",
+    "owner": "graph-preparation/rewrites/batch-communication",
+    "status": "收尾篇解释调用与图改写契约；完整通信辅助实现仍待通信子篇覆盖"
+  },
+  {
+    "symbol": "DeviceCodegen, registries, BackendFeature and init_backend_registration",
+    "source": "torch/_inductor/codegen/common.py:87–91,96–113,116–246,256–268",
+    "owner": "codegen-runtime/kernels/backends-loops/registration",
+    "status": "已完整原始源码与逐行解释；复用十worker证据，补六隔离进程的默认配置延迟、None探测/精确key、导入缓存、PrivateUse1失败与部分状态；没有新硬件执行"
+  },
+  {
+    "symbol": "BaseScheduling, Scheduler create_backend/get_backend and CUDACombinedScheduling",
+    "source": "torch/_inductor/scheduler.py:3333,3592; torch/_inductor/codegen/cuda_combined_scheduling.py:16",
+    "owner": "codegen-runtime/kernels/backends-loops/dispatch",
+    "status": "本层接口、实际 CPU 消费及私有设备 fixture 已验证，完整逐行待覆盖"
+  },
+  {
+    "symbol": "CppScheduling loop codegen, CppKernelProxy, KernelGroup and SIMD node schedule",
+    "source": "torch/_inductor/codegen/cpp.py:3821,4454,4581; torch/_inductor/codegen/simd.py:1136",
+    "owner": "codegen-runtime/kernels/backends-loops/loops",
+    "status": "本层交接与真实 CPU kernel 证据完成；GPU 路径为源码接口研究，完整逐行待覆盖"
+  },
+  {
+    "symbol": "rename_privateuse1_backend, _register_device_module, _get_custom_mod_func",
+    "source": "torch/utils/backend_registration.py:18,345; torch/__init__.py:2457",
+    "owner": "Inductor 边界外的设备类型与模块设施",
+    "status": "解释与实际隔离进程验证相关契约，不扩大到设备 allocator/算子注册全系统"
+  },
+  {
+    "symbol": "DeviceOpOverrides concrete device strings and wrapper consumers",
+    "source": "torch/_inductor/codegen/cuda/device_op_overrides.py; torch/_inductor/codegen/xpu/device_op_overrides.py; torch/_inductor/graph.py:1643",
+    "owner": "codegen-runtime/wrapper/entry-device-calls",
+    "status": "本层说明与生成字符串验证，设备上下文/stream/调用实现下一篇优先展开"
+  },
+  {
+    "symbol": "write_prefix/codegen_inputs/_generate",
+    "source": "torch/_inductor/codegen/wrapper.py:661",
+    "owner": "codegen-runtime/wrapper/entry-device-calls/entry-assembly",
+    "status": "本层协议已解释与实验；完整实现待子篇逐行覆盖"
+  },
+  {
+    "symbol": "EnterDeviceContextManagerLine/ExitDeviceContextManagerLine/write_get_raw_stream",
+    "source": "torch/_inductor/codegen/wrapper.py:299",
+    "owner": "codegen-runtime/wrapper/entry-device-calls/contexts-streams",
+    "status": "本层协议已解释与实验；完整实现待子篇逐行覆盖"
+  },
+  {
+    "symbol": "prepare_triton_kernel_call/generate_kernel_call and C++ overrides",
+    "source": "torch/_inductor/codegen/wrapper.py:1560",
+    "owner": "codegen-runtime/wrapper/entry-device-calls/launch-arguments",
+    "status": "本层协议已解释与实验；完整实现待子篇逐行覆盖"
+  },
+  {
+    "symbol": "GraphLowering state constructor, sizes, devices, names/subgraphs; Virtualized/V; convert_shape_to_inductor/get_device_type",
+    "source": "torch/_inductor/graph.py:261–465,631–660,717–726,1157–1164; torch/_inductor/virtualized.py:82–167,293–361; utils.py:295–304; ir.py:309–314",
+    "owner": "lowering/interpretation/context-symbols",
+    "status": "十一段原始实现完整逐行覆盖；十三项真实/受控证据；相邻模块链接引用"
+  },
+  {
+    "symbol": "SizeVarAllocator simplification, range/loop caches and precomputed expressions",
+    "source": "torch/_inductor/sizevars.py",
+    "owner": "lowering/expressions/views-indexing",
+    "status": "图上下文篇解释共享 ShapeEnv 接口；完整索引与尺寸算法归布局索引职责，仍待覆盖"
+  },
+  {
+    "symbol": "decide_layout_opt/find_nodes_prefer_channels_last/mark_nodes_dislike_padding",
+    "source": "torch/_inductor/graph.py:189,468,662",
+    "owner": "lowering/materialization/output-layouts",
+    "status": "构造器调用接口已解释；完整布局选择和 padding 启发式待覆盖"
+  },
+  {
+    "symbol": "ShapeEnv creation, duck-shaping, deferred runtime assert store/freeze",
+    "source": "torch/fx/experimental/symbolic_shapes.py:2835,3342,5342",
+    "owner": "Inductor 边界外的符号设施",
+    "status": "按实际源码和真实 API 验证本篇消费契约；不展开整个上游 ShapeEnv"
+  },
+  {
+    "symbol": "OpsValue/OpsWrapper/MockHandler operation interpretation",
+    "source": "torch/_inductor/virtualized.py:170–290; torch/_inductor/ops_handler.py",
+    "owner": "codegen-runtime/kernels/expressions-code/ops-types",
+    "status": "上下文机制由 context-symbols 完整解释；算术操作解释和包装另归表达式代码生成"
+  },
+  {
+    "symbol": "extern_node_json_serializer and external node metadata",
+    "source": "torch/_inductor/extern_node_serializer.py",
+    "owner": "lowering/special-ops/external-fallback/calls-effects",
+    "status": "本层说明 C++/AOT 调用导出与序列化接口；未验证相应 runtime executor，完整实现待子篇"
+  },
+  {
+    "symbol": "Scheduler.can_fuse/can_fuse_vertical/fusable_weak_dep/fusable_read_and_write, shared-data loop reorder and WhyNoFuse",
+    "source": "torch/_inductor/scheduler.py:703,2808–3111",
+    "owner": "scheduling/fusion/legality-backends/constraints-deps",
+    "status": "本层流程和十八项协议/九项依赖对照；完整逐行待子篇"
+  },
+  {
+    "symbol": "CppScheduling and SIMD/concrete template fusion predicates",
+    "source": "torch/_inductor/codegen/cpp.py:3990–4156; simd.py:951–1063; cuda/cuda_cpp_scheduling.py:44",
+    "owner": "scheduling/fusion/legality-backends/device-predicates",
+    "status": "真实 CPU 消费、五项 SIMD fixture 与 CUDA C++ 未实现边界已验证；完整逐行待子篇；循环生成归 backends-loops；CUDACombinedScheduling完整转交现归dispatch叶子，不在本处重复逐行覆盖"
+  },
+  {
+    "symbol": "will_fusion_create_cycle/speedup_by_fusion/_any_atomic_add",
+    "source": "torch/_inductor/scheduler.py:2380–2533,2676–2720",
+    "owner": "scheduling/fusion/legality-backends/cycles-benchmark",
+    "status": "本层流程、真实 DFS 元信息组和 CPU benchmark 跳过对照；GPU 测时未执行；完整逐行待子篇"
+  },
+  {
+    "symbol": "can_fusion_increase_peak_memory",
+    "source": "torch/_inductor/scheduler.py:2722–2749",
+    "owner": "scheduling/fusion/legality-backends/constraints-deps",
+    "status": "横向距离策略接口与64/65边界已验证；未称实际峰值内存测量"
+  },
+  {
+    "symbol": "fuse_nodes_once orchestration and Foreach/Grouped fusion merge metadata",
+    "source": "torch/_inductor/scheduler.py:1250–1360,1601–1643,2535–2582",
+    "owner": "scheduling/fusion/merge-groups",
+    "status": "合法性篇说明调用和重复判定；完整组更新与特殊节点实现仍待覆盖"
+  },
+  {
+    "symbol": "score_fusion_memory/dep_size_hint and fusion diagnostics",
+    "source": "torch/_inductor/scheduler.py:2751–2806,3131–3183",
+    "owner": "scheduling/fusion/candidates-priority",
+    "status": "合法性篇说明共享 score 接口；协议案例 score 是明确 fixture，完整算法待候选篇"
+  },
+  {
+    "symbol": "LoopBody capture/replay, InterpreterShim and IndexPropagation/SimplifyIndexing capture wrappers",
+    "source": "torch/_inductor/loop_body.py:21–45,78–137,360–376,405–581; index_propagation.py; sizevars.py:SimplifyIndexing",
+    "owner": "codegen-runtime/kernels/expressions-code/ops-types",
+    "status": "本层流程与三段真实 CPU LoopBody 回放证据；完整逐行待子篇；尺寸代数算法主要归 lowering/expressions/views-indexing"
+  },
+  {
+    "symbol": "DataTypePropagation, device OpOverrides and CPU lowp legalization",
+    "source": "torch/_inductor/codegen/common.py:352–444,731; cpp.py:528,3484; cpp_utils.py:94–171; triton.py:610",
+    "owner": "codegen-runtime/kernels/expressions-code/ops-types",
+    "status": "本层类型接口、目标文本与真实 CPU 低精度往返差异已保留；完整逐行待子篇；不宣称 emulate_precision_casts 可修复本 CPU 案例"
+  },
+  {
+    "symbol": "KernelArgs/CppWrapperKernelArgs, rename_indexing and device load/store",
+    "source": "torch/_inductor/codegen/common.py:1194–1421,1450–1465,2029–2048; cpp.py:1894,2449,3106; triton.py:1721–1857",
+    "owner": "codegen-runtime/kernels/expressions-code/arguments-memory",
+    "status": "本层参数映射、原地指针、workspace 字节与访存接口已解释；非连续/广播 CPU 实际执行，GPU 访存未执行；完整逐行待子篇"
+  },
+  {
+    "symbol": "CSE/CSEVariable, target CSE annotations, Kernel CSEProxy/ScopedDict/generated buffers and codegen_body",
+    "source": "torch/_inductor/codegen/common.py:1424–1448,1468–1561,1581–2027; cpp_utils.py:173–225; triton.py:593–608,2360–2402",
+    "owner": "codegen-runtime/kernels/expressions-code/cse-buffers",
+    "status": "本层区分普通表达式缓存与 store forwarding，失效/must_keep/clone/元信息受控证据齐全；完整逐行待子篇；作用域基础引用 context-symbols"
+  },
+  {
+    "symbol": "Scheduler.remove_kernel_local_buffers/remove_buffer and DeferredLine removal",
+    "source": "torch/_inductor/scheduler.py:3252; torch/_inductor/utils.py:DeferredLine",
+    "owner": "scheduling/lifetime/release-local",
+    "status": "元素生成篇解释实际移除中间 buf0 的协作与结果；完整生命周期删除算法待子篇"
+  },
+  {
+    "symbol": "make_fallback/fallback_handler, fallback registration and layout constraints",
+    "source": "torch/_inductor/lowering.py:92–150,1696–1709,1778–1823,2096–2100",
+    "owner": "lowering/special-ops/external-fallback/registration-layout",
+    "status": "本层交接与显式登记+implicit_fallbacks=False 真实编译已验证；完整逐行待子篇"
+  },
+  {
+    "symbol": "GraphLowering.call_function/run_node fallback dispatch",
+    "source": "torch/_inductor/graph.py:981–1028,1287–1305",
+    "owner": "lowering/interpretation/dispatch-results",
+    "status": "外部协议篇说明注册和类型 fallback 消费，复用旧未知算子拒绝证据；完整派发实现归原节点"
+  },
+  {
+    "symbol": "ExternKernel.process_kernel/realize_input/convert_to_reinterpret_view and FallbackKernel.create/find_device/tensor_to_layout/MultiOutput",
+    "source": "torch/_inductor/ir.py:4523–4887,5936–5954,6098–6179,6214–6265",
+    "owner": "lowering/special-ops/external-fallback/packing-outputs",
+    "status": "结构参数、输出取项、冻结布局、代表设备及失败边界已解释与实验；完整逐行待子篇"
+  },
+  {
+    "symbol": "ExternKernel metadata/arg formatting, ExternKernelOut/Alloc and FallbackKernel schema/effects/codegen/export",
+    "source": "torch/_inductor/ir.py:4320–4521,4889–4980,5060–5175,5717–5934,5956–6097; extern_node_serializer.py",
+    "owner": "lowering/special-ops/external-fallback/calls-effects",
+    "status": "CPU Python 调用、view alias、mutable None、拒绝可变自定义 alias 返回等实际证据；C++/AOT runtime dispatch 未执行，完整逐行待子篇"
+  },
+  {
+    "symbol": "GraphLowering.propagate_mutation/MutationOutput/mark_buffer_mutated",
+    "source": "torch/_inductor/graph.py:propagate_mutation; torch/_inductor/ir.py:5178",
+    "owner": "lowering/materialization/mutation-values",
+    "status": "外部约束副本写回真实 CPU 案例通过；完整输入写入传播算法仍归物化与副作用"
+  },
+  {
+    "symbol": "Wrapper generate_fallback_kernel/extern alloc/out and C++ runtime dispatch consumers",
+    "source": "torch/_inductor/codegen/wrapper.py:752–853; cpp_wrapper_cpu.py:1311",
+    "owner": "codegen-runtime/wrapper/entry-device-calls/launch-arguments",
+    "status": "外部协议篇解释调用数据与 None 返回语义；wrapper 具体代码实现保留主要归属"
+  },
+  {
+    "symbol": "mutates_and_returns_first_arg/can_auto_functionalize/zip_schema/dispatcher registry",
+    "source": "torch/_library/utils.py:124; torch/_higher_order_ops/auto_functionalize.py:254",
+    "owner": "Inductor 边界外的 schema 与 dispatcher 设施",
+    "status": "按源码说明 ATen namespace 特例、自定义 mutable 限制及已有设备实现要求；不展开 dispatcher 全系统"
+  },
+  {
+    "symbol": "GEMM/conv lowering shape/layout/choice construction including mm_args and backend gates",
+    "source": "torch/_inductor/kernel/mm_common.py:416; mm.py:159,279,323; bmm.py:107; conv.py:445; utils.py:1056–1270",
+    "owner": "lowering/special-ops/template-integration/matrix-conv-choices",
+    "status": "本层交接，真实 CPU extern/packed GEMM/形状分解/空候选策略及 gate fixture 已验证；完整逐行待子篇，卷积/其他家族仍须保留覆盖"
+  },
+  {
+    "symbol": "make_foreach_pointwise/register_foreach_pointwise/_register_foreach_lowering and composite family lowering",
+    "source": "torch/_inductor/lowering.py:297–319,548–625,774–782,5925–6014",
+    "owner": "lowering/special-ops/template-integration/composite-lists",
+    "status": "本层真实 CPU 展开与 Lowering-only 能力分组；Scheduler 原生 foreach 生成不由该实验证明；完整逐行待子篇"
+  },
+  {
+    "symbol": "triton_kernel_wrap_/UserDefinedTritonKernel, with_effects/EffectfulKernel and collective/wait IR adapters",
+    "source": "torch/_inductor/lowering.py:6181–6192,6252–6420; ir.py:5201–5300,6687–6728,6749–6935",
+    "owner": "lowering/special-ops/template-integration/user-special-calls",
+    "status": "本层专用 IR 接口与显式用户 kernel 描述/分析/wrapper fixture；无 Triton、effect 或通信运行，完整逐行待子篇"
+  },
+  {
+    "symbol": "ChoiceCaller output nodes, template buffer interfaces and packed/template source rendering",
+    "source": "torch/_inductor/select_algorithm.py:782–1100,1170,1714; ir.py:3889–4110; codegen/cpp_gemm_template.py:507; codegen/cpp_template_kernel.py:315",
+    "owner": "codegen-runtime/kernels/template-selection/callers-templates",
+    "status": "本层交接与实际 CPU Caller/模板执行；完整生成和 output_node/渲染实现待本子篇，selector/caches 归兄弟子篇"
+  },
+  {
+    "symbol": "ordinary pointwise transform/register helpers reused by composite adapters",
+    "source": "torch/_inductor/lowering.py:219–392,465–547",
+    "owner": "lowering/expressions/pointwise-types",
+    "status": "模板接入篇仅说明复用接口，普通类型/广播语义及注册包装完整实现保留原归属"
+  },
+  {
+    "symbol": "Triton kernel side table/identify_mutated_tensors and dispatcher HOP descriptors",
+    "source": "torch/_higher_order_ops/triton_kernel_wrap.py",
+    "owner": "Inductor 边界外的用户 kernel 捕获与分析设施",
+    "status": "相关接口按源码说明；实验替换真实 Triton 描述和 mutation 分析，未声称验证这些外部算法或执行真实 kernel"
+  },
+  {
+    "symbol": "KernelTemplate, ExternKernelChoice/Caller, template generators/callers, data processors and template output buffers",
+    "source": "torch/_inductor/codegen/common.py:2074–2166; select_algorithm.py:118–1125; ir.py:3889–4036,4090–4110; codegen/cpp_template.py; codegen/cpp_template_kernel.py:315; codegen/cpp_gemm_template.py",
+    "owner": "codegen-runtime/kernels/template-selection/callers-templates",
+    "status": "本层对象与原生 CPU 双候选已解释，完整模板渲染与各设备实现待子篇，未运行GPU"
+  },
+  {
+    "symbol": "AlgorithmSelector precompile futures/make_benchmark_fn and BenchmarkRequest candidate execution",
+    "source": "torch/_inductor/select_algorithm.py:1220–1331,1394–1550; autotune_process.py:BenchmarkRequest/TritonBenchmarkRequest/CppBenchmarkRequest; runtime/benchmarking.py",
+    "owner": "codegen-runtime/kernels/template-selection/compile-benchmark",
+    "status": "本层真实 CPU 预编译/VERIFY/两候选计时与命中跳过；GPU/子进程测试路径未运行；完整逐行待子篇"
+  },
+  {
+    "symbol": "AlgorithmSelectorCache orchestration/input keys, PersistentCache timing lookup and MultiTemplateBuffer lazy delivery",
+    "source": "torch/_inductor/select_algorithm.py:1137–1392,1678–1730; codecache.py:190–379; ir.py:4037–4089",
+    "owner": "codegen-runtime/kernels/template-selection/cache-delivery",
+    "status": "本层跨进程真实计时缓存与十项明确排序槽位协议；完整缓存和延迟实现待子篇，非FX图/二进制缓存"
+  },
+  {
+    "symbol": "Scheduler.finalize_multi_template_buffers graph map replacement",
+    "source": "torch/_inductor/scheduler.py:2314–2378",
+    "owner": "scheduling/fusion/merge-groups",
+    "status": "选择篇解释延迟对象消费者接口；完整图映射替换待融合维护职责，epilogue收益归合法性cycles-benchmark"
+  },
+  {
+    "symbol": "AsyncCompile backend entry methods, _worker_compile_triton and reload descriptors",
+    "source": "torch/_inductor/async_compile.py:183–254; runtime/compile_tasks.py:12–69",
+    "owner": "codegen-runtime/build-load/tasks-wait/backend-tasks",
+    "status": "本层交接已讲；真实CPU同步/线程编译与普通进程任务、异常回传及明确Triton描述fixture；完整逐行待子篇，GPU设备编译未运行"
+  },
+  {
+    "symbol": "AsyncCompile thread/process pools, prefork properties, SubprocPool protocol and watchdog lifecycle",
+    "source": "torch/_inductor/async_compile.py:53–181,295–303; compile_worker/subproc_pool.py; compile_worker/__main__.py; compile_worker/watchdog.py",
+    "owner": "codegen-runtime/build-load/tasks-wait/pools-workers",
+    "status": "本层交接已讲；真实CPU同步/线程编译与普通进程任务、异常回传及明确Triton描述fixture；完整逐行待子篇，GPU设备编译未运行"
+  },
+  {
+    "symbol": "AsyncCompile.wait and CodeCacheFuture/TritonFuture/LambdaFuture",
+    "source": "torch/_inductor/async_compile.py:256–292; codecache.py:3322–3353",
+    "owner": "codegen-runtime/build-load/tasks-wait/future-scope",
+    "status": "本层交接已讲；真实CPU同步/线程编译与普通进程任务、异常回传及明确Triton描述fixture；完整逐行待子篇，GPU设备编译未运行"
+  },
+  {
+    "symbol": "code_hash/get_hash/get_path/write/write_text/write_atomic/get_lock_dir and cache_dir",
+    "source": "torch/_inductor/codecache.py:380–473; runtime/runtime_utils.py:89–102",
+    "owner": "codegen-runtime/build-load/source-binary-cache/keys-files",
+    "status": "本层六项实际源键协议对照；完整逐行待子篇"
+  },
+  {
+    "symbol": "CppBuilder build options/toolchain, CppCodeCache source command key and locked worker, CUDA/ROCm commands",
+    "source": "torch/_inductor/cpp_builder.py; codecache.py:2111–2220,2930–3065,3155–3208,3240–3302; codegen/rocm/compile_command.py",
+    "owner": "codegen-runtime/build-load/source-binary-cache/conditions-locks",
+    "status": "本层原生CPU条件变化和双进程锁复用已验证；额外ISA探测构建单独保留，GPU命令仅源码/fixture；完整逐行待子篇"
+  },
+  {
+    "symbol": "CppCodeCache load closures, CppPythonBindingsCodeCache, Halide generated artifacts/runtime, CUDA/ROCm CacheEntry/load and DLLWrapper",
+    "source": "torch/_inductor/codecache.py:2078–2110,2173–2195,2223–2385,2452–2842,3068–3320",
+    "owner": "codegen-runtime/build-load/source-binary-cache/backend-artifacts",
+    "status": "本层原生CPU同进程对象身份与跨进程二进制复用已验证；GPU/Halide装载未执行，完整逐行待子篇，Python模块加载归jit-aot-loading"
+  },
+  {
+    "symbol": "GraphLowering compile_to_module/compile_to_fn JIT exit, PyCodeCache module/attrs/linemap and source reload",
+    "source": "torch/_inductor/graph.py:1835–1920; codecache.py:2845–2921; runtime/compile_tasks.py:26–48",
+    "owner": "codegen-runtime/build-load/jit-aot-loading/jit-module",
+    "status": "本层真实JIT常量占位→attrs安装→CPU执行、缓存命中属性保留/行映射/错误对照；完整逐行待子篇；Triton重载专用适配归任务backend-tasks"
+  },
+  {
+    "symbol": "GraphLowering AOT compile exit, AotCodeCompiler constants/artifacts/link and package output",
+    "source": "torch/_inductor/graph.py:1890–1917; codecache.py:1490–1500,1529–1948; package/package.py; package/build_package.py",
+    "owner": "codegen-runtime/build-load/jit-aot-loading/aot-artifacts",
+    "status": "本层abi_compatible=True、保留常量weight的真实CPU AOT构建并原生runner执行；包/mmap/常量折叠和GPU未执行，完整逐行待子篇；CppBuilder通用选项归conditions-locks"
+  },
+  {
+    "symbol": "AOTIModelContainerRunner/CPU/CUDA bindings, AOT runtime container/model/device/handles and exported interface",
+    "source": "torch/csrc/inductor/aoti_runner/; aoti_runtime/model.h,model_container.h,device_utils.h,interface.h; aoti_torch/tensor_converter.h; torch/_inductor/codegen/aoti_runtime/interface.cpp",
+    "owner": "codegen-runtime/build-load/jit-aot-loading/aot-container",
+    "status": "本层真实CPU跨进程装载/重复调用与weight常量映射；设备分支fixture明确、C++仅cpu/cuda限制已核源码，完整运行容器/所有权/事件/常量更新逐行待子篇；生成wrapper主体归wrapper模块"
+  },
+  {
+    "symbol": "aot_load/package load call_spec flatten/rebuild adapter",
+    "source": "torch/_export/__init__.py:291–324; torch/_inductor/package/package.py:186–240",
+    "owner": "codegen-runtime/build-load/jit-aot-loading/aot-container",
+    "status": "只解释运行入口输入/输出适配边界，不扩展export捕获；真实CPU aot_load两次调用与CUDA fixture分开登记"
+  },
+  {
+    "symbol": "FxGraphCache.post_compile/cudagraph_post_compile, CudagraphCachedInfo and disable/mutation/metadata diagnostics",
+    "source": "torch/_inductor/codecache.py:803–895,1140–1184; compile_fx.py:558–643; cudagraph_utils.py:30–44,60–237,323–331; utils.py:BoxedBool,set_tracing_context_output_strides",
+    "owner": "codegen-runtime/cache-runtime/call-adaptation/policy-state",
+    "status": "本层真实CPU禁用后普通执行、输出stride回填、禁用/允许/通知/修改条件fixture完成；完整逐行待子篇；树运行mutation管理不由本元数据证明"
+  },
+  {
+    "symbol": "get_input_idxs_to_check/maybe_realign_inputs, alignment/stride clone/static filtering and CompiledFxGraph.__call__",
+    "source": "torch/_inductor/compile_fx.py:933–965; codecache.py:898–914,1476–1478; utils.py:1886–1905,1968–2015",
+    "owner": "codegen-runtime/cache-runtime/call-adaptation/alignment-call",
+    "status": "本层真实CPUhelper与16B余数4输入图、强制helper无写回边界和FakeTensor索引选择；完整逐行待子篇；is_gpu/guard设备分类共享归backend dispatch，CPU未冒充默认进入GPU对齐"
+  },
+  {
+    "symbol": "deferred cudagraphify, legacy CUDA graph capture/replay, Graph Trees manager/nodes/storage state and runtime helpers",
+    "source": "torch/_inductor/compile_fx.py:968–1118; cudagraph_trees.py; cudagraph_utils.py:24–28,45–58,238–321",
+    "owner": "codegen-runtime/cache-runtime/call-adaptation/capture-trees",
+    "status": "本层legacy/Trees延迟factory与整型键协议明确fixtures；GPU捕获/重放/allocator checkpoint/输出生命期未执行，完整实现待子篇；对齐共用alignment-call，早期条件共用policy-state"
+  },
+  {
+    "symbol": "_get_custom_mod_func and torch.device/PrivateUse1 device module registration",
+    "source": "torch/utils/backend_registration.py:345–382; torch device/module facilities",
+    "owner": "Inductor 边界外设备注册设施",
+    "status": "注册叶子按实际代码说明缺模块/None属性RuntimeError、False返回与模块查找契约；不扩展整个torch设备注册系统"
+  },
+  {
+    "symbol": "Scheduler.create_backend/get_backend, BaseScheduling and CUDACombinedScheduling",
+    "source": "torch/_inductor/scheduler.py:3333–3361,3592–3696; codegen/cuda_combined_scheduling.py:1–100; utils.py:1799–1801",
+    "owner": "codegen-runtime/kernels/backends-loops/dispatch",
+    "status": "已完整逐行覆盖；真实CPU实例复用/数值，设备/Triton属性与delegate为明确fixture；未运行GPU，具体节点合并/循环/模板仍分别归原职责"
+  }
+]

@@ -1,0 +1,11 @@
+graph():
+    %x_1 : [num_users=1] = placeholder[target=x_1]
+    %y_1 : [num_users=1] = placeholder[target=y_1]
+    %mm : [num_users=1] = call_function[target=torch.ops.aten.mm.default](args = (%x_1, %y_1), kwargs = {})
+    %relu : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%mm,), kwargs = {})
+    return (relu,)
+
+x_1: FakeTensor shape=(2, 3) stride=(3, 1) dtype=torch.float32 device=cpu
+y_1: FakeTensor shape=(3, 2) stride=(2, 1) dtype=torch.float32 device=cpu
+mm: FakeTensor shape=(2, 2) stride=(2, 1) dtype=torch.float32 device=cpu
+relu: FakeTensor shape=(2, 2) stride=(2, 1) dtype=torch.float32 device=cpu

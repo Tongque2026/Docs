@@ -1,0 +1,6 @@
+graph():
+    %x_1 : [num_users=1] = placeholder[target=x_1]
+    %auto_functionalized_v2 : [num_users=2] = call_function[target=torch.ops.higher_order.auto_functionalized_v2](args = (inductor_reinplace_lesson.twice.default,), kwargs = {_x_base_index: 0, _x_size: [2], _x_stride: [1], _x_storage_offset: 0, _y_base_index: 0, _y_size: [2], _y_stride: [1], _y_storage_offset: 2, _all_bases: [%x_1]})
+    %getitem : [num_users=0] = call_function[target=operator.getitem](args = (%auto_functionalized_v2, 0), kwargs = {})
+    %getitem_1 : [num_users=1] = call_function[target=operator.getitem](args = (%auto_functionalized_v2, 1), kwargs = {})
+    return (getitem_1,)

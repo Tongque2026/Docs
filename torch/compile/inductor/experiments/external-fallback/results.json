@@ -1,0 +1,1042 @@
+{
+  "cpu": {
+    "packed": {
+      "operations": [
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf0"
+        },
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf1"
+        },
+        {
+          "kind": "FallbackKernel",
+          "name": "buf2",
+          "target": "inductor_external_lesson.pack.default",
+          "tensor_inputs": [
+            {
+              "name": "buf0",
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            },
+            {
+              "name": "buf1",
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            }
+          ],
+          "non_tensor_args": [
+            "0",
+            "3.0",
+            "True"
+          ],
+          "rebuilt": "((['T0', 'T1'], 'C0'), {'alpha': 'C1', 'reverse': 'C2'})",
+          "outputs": [
+            {
+              "kind": "MultiOutput",
+              "name": "buf3",
+              "indices": [
+                [
+                  "tuple",
+                  0
+                ]
+              ],
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            },
+            [
+              {
+                "kind": "MultiOutput",
+                "name": "buf4",
+                "indices": [
+                  [
+                    "tuple",
+                    1
+                  ],
+                  [
+                    "list",
+                    0
+                  ]
+                ],
+                "size": [
+                  "2",
+                  "3"
+                ],
+                "stride": [
+                  "3",
+                  "1"
+                ]
+              },
+              {
+                "kind": "MultiOutput",
+                "name": "buf5",
+                "indices": [
+                  [
+                    "tuple",
+                    1
+                  ],
+                  [
+                    "list",
+                    1
+                  ]
+                ],
+                "size": [
+                  "2",
+                  "3"
+                ],
+                "stride": [
+                  "3",
+                  "1"
+                ]
+              }
+            ]
+          ],
+          "side_effects": false,
+          "alias_names": [],
+          "mutation_names": [],
+          "mutation_outputs": [],
+          "should_allocate": false
+        },
+        {
+          "kind": "MultiOutput",
+          "name": "buf3"
+        },
+        {
+          "kind": "MultiOutput",
+          "name": "buf4"
+        },
+        {
+          "kind": "MultiOutput",
+          "name": "buf5"
+        },
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf6"
+        }
+      ],
+      "mutated_buffers": [],
+      "compile_counts": {
+        "pack_fake": 2
+      },
+      "input_layouts": [
+        {
+          "shape": [
+            2,
+            3
+          ],
+          "stride": [
+            3,
+            1
+          ]
+        },
+        {
+          "shape": [
+            2,
+            3
+          ],
+          "stride": [
+            3,
+            1
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "outputs": [
+            [
+              [
+                5.0,
+                7.0,
+                10.0
+              ],
+              [
+                8.0,
+                6.0,
+                9.0
+              ]
+            ],
+            [
+              [
+                2.0,
+                2.0,
+                2.0
+              ],
+              [
+                2.0,
+                2.0,
+                2.0
+              ]
+            ],
+            [
+              [
+                -1.0,
+                1.0,
+                4.0
+              ],
+              [
+                2.0,
+                0.0,
+                3.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                -2.0,
+                0.0,
+                3.0
+              ],
+              [
+                1.0,
+                -1.0,
+                2.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                1.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0,
+                1.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false,
+              false
+            ],
+            [
+              false,
+              false
+            ],
+            [
+              false,
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "pack",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        },
+        {
+          "outputs": [
+            [
+              [
+                5.0,
+                7.0,
+                10.0
+              ],
+              [
+                8.0,
+                6.0,
+                9.0
+              ]
+            ],
+            [
+              [
+                2.0,
+                2.0,
+                2.0
+              ],
+              [
+                2.0,
+                2.0,
+                2.0
+              ]
+            ],
+            [
+              [
+                -1.0,
+                1.0,
+                4.0
+              ],
+              [
+                2.0,
+                0.0,
+                3.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                -2.0,
+                0.0,
+                3.0
+              ],
+              [
+                1.0,
+                -1.0,
+                2.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                1.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0,
+                1.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false,
+              false
+            ],
+            [
+              false,
+              false
+            ],
+            [
+              false,
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "pack",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        }
+      ],
+      "scope": "complete CPU compilation/execution; numeric, input mutation, strides and storage aliases checked"
+    },
+    "contiguous": {
+      "operations": [
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf0"
+        },
+        {
+          "kind": "FallbackKernel",
+          "name": "buf1",
+          "target": "inductor_external_lesson.contiguous.default",
+          "tensor_inputs": [
+            {
+              "name": "buf0",
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            }
+          ],
+          "non_tensor_args": [],
+          "rebuilt": "(('T0',), {})",
+          "outputs": [
+            {
+              "kind": "MultiOutput",
+              "name": "buf2",
+              "indices": [],
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            }
+          ],
+          "side_effects": false,
+          "alias_names": [],
+          "mutation_names": [],
+          "mutation_outputs": [],
+          "should_allocate": false
+        },
+        {
+          "kind": "MultiOutput",
+          "name": "buf2"
+        }
+      ],
+      "mutated_buffers": [],
+      "compile_counts": {
+        "contiguous_fake": 2
+      },
+      "input_layouts": [
+        {
+          "shape": [
+            2,
+            3
+          ],
+          "stride": [
+            1,
+            2
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "outputs": [
+            [
+              [
+                0.0,
+                4.0,
+                8.0
+              ],
+              [
+                2.0,
+                6.0,
+                10.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                0.0,
+                2.0,
+                4.0
+              ],
+              [
+                1.0,
+                3.0,
+                5.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "contiguous",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        },
+        {
+          "outputs": [
+            [
+              [
+                0.0,
+                4.0,
+                8.0
+              ],
+              [
+                2.0,
+                6.0,
+                10.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                0.0,
+                2.0,
+                4.0
+              ],
+              [
+                1.0,
+                3.0,
+                5.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "contiguous",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        }
+      ],
+      "scope": "complete CPU compilation/execution; numeric, input mutation, strides and storage aliases checked"
+    },
+    "mutation": {
+      "operations": [
+        {
+          "kind": "FallbackKernel",
+          "name": "buf0",
+          "target": "inductor_external_lesson.bump.default",
+          "tensor_inputs": [
+            {
+              "name": "x_1",
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            }
+          ],
+          "non_tensor_args": [
+            "3.0"
+          ],
+          "rebuilt": "(('T0', 'C0'), {})",
+          "outputs": [
+            {
+              "kind": "NoneType",
+              "value": "None"
+            }
+          ],
+          "side_effects": true,
+          "alias_names": [
+            "x_1"
+          ],
+          "mutation_names": [],
+          "mutation_outputs": [
+            {
+              "name": "buf1",
+              "mutations": [
+                "x_1"
+              ]
+            }
+          ],
+          "should_allocate": false
+        },
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf2"
+        }
+      ],
+      "mutated_buffers": [
+        "x_1"
+      ],
+      "compile_counts": {
+        "bump_fake": 2
+      },
+      "input_layouts": [
+        {
+          "shape": [
+            2,
+            3
+          ],
+          "stride": [
+            3,
+            1
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "outputs": [
+            [
+              [
+                2.0,
+                6.0,
+                12.0
+              ],
+              [
+                8.0,
+                4.0,
+                10.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                1.0,
+                3.0,
+                6.0
+              ],
+              [
+                4.0,
+                2.0,
+                5.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "bump",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        },
+        {
+          "outputs": [
+            [
+              [
+                2.0,
+                6.0,
+                12.0
+              ],
+              [
+                8.0,
+                4.0,
+                10.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                1.0,
+                3.0,
+                6.0
+              ],
+              [
+                4.0,
+                2.0,
+                5.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "bump",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        }
+      ],
+      "scope": "complete CPU compilation/execution; numeric, input mutation, strides and storage aliases checked"
+    },
+    "mutation_copy": {
+      "operations": [
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf0"
+        },
+        {
+          "kind": "FallbackKernel",
+          "name": "buf1",
+          "target": "inductor_external_lesson.bump_copy.default",
+          "tensor_inputs": [
+            {
+              "name": "buf0",
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "3",
+                "1"
+              ]
+            }
+          ],
+          "non_tensor_args": [
+            "3.0"
+          ],
+          "rebuilt": "(('T0', 'C0'), {})",
+          "outputs": [
+            {
+              "kind": "NoneType",
+              "value": "None"
+            }
+          ],
+          "side_effects": true,
+          "alias_names": [
+            "buf0"
+          ],
+          "mutation_names": [],
+          "mutation_outputs": [
+            {
+              "name": "buf2",
+              "mutations": [
+                "buf0"
+              ]
+            }
+          ],
+          "should_allocate": false
+        },
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf3"
+        },
+        {
+          "kind": "ComputedBuffer",
+          "name": "buf4"
+        }
+      ],
+      "mutated_buffers": [
+        "buf0",
+        "x_1"
+      ],
+      "compile_counts": {
+        "bump_copy_fake": 2
+      },
+      "input_layouts": [
+        {
+          "shape": [
+            2,
+            3
+          ],
+          "stride": [
+            1,
+            2
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "outputs": [
+            [
+              [
+                6.0,
+                10.0,
+                14.0
+              ],
+              [
+                8.0,
+                12.0,
+                16.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                3.0,
+                5.0,
+                7.0
+              ],
+              [
+                4.0,
+                6.0,
+                8.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "bump_copy",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        },
+        {
+          "outputs": [
+            [
+              [
+                6.0,
+                10.0,
+                14.0
+              ],
+              [
+                8.0,
+                12.0,
+                16.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                3.0,
+                5.0,
+                7.0
+              ],
+              [
+                4.0,
+                6.0,
+                8.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              false
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "bump_copy",
+              "stride": [
+                3,
+                1
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        }
+      ],
+      "scope": "complete CPU compilation/execution; numeric, input mutation, strides and storage aliases checked"
+    },
+    "view": {
+      "operations": [
+        {
+          "kind": "FallbackKernel",
+          "name": "buf0",
+          "target": "inductor_external_lesson.view.default",
+          "tensor_inputs": [
+            {
+              "name": "x_1",
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "1",
+                "2"
+              ]
+            }
+          ],
+          "non_tensor_args": [],
+          "rebuilt": "(('T0',), {})",
+          "outputs": [
+            {
+              "kind": "MultiOutput",
+              "name": "buf1",
+              "indices": [],
+              "size": [
+                "2",
+                "3"
+              ],
+              "stride": [
+                "1",
+                "2"
+              ]
+            }
+          ],
+          "side_effects": false,
+          "alias_names": [
+            "x_1"
+          ],
+          "mutation_names": [],
+          "mutation_outputs": [],
+          "should_allocate": false
+        },
+        {
+          "kind": "MultiOutput",
+          "name": "buf1"
+        }
+      ],
+      "mutated_buffers": [],
+      "compile_counts": {
+        "view_fake": 2
+      },
+      "input_layouts": [
+        {
+          "shape": [
+            2,
+            3
+          ],
+          "stride": [
+            1,
+            2
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "outputs": [
+            [
+              [
+                0.0,
+                2.0,
+                4.0
+              ],
+              [
+                1.0,
+                3.0,
+                5.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                0.0,
+                2.0,
+                4.0
+              ],
+              [
+                1.0,
+                3.0,
+                5.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              true
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "view",
+              "stride": [
+                1,
+                2
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        },
+        {
+          "outputs": [
+            [
+              [
+                0.0,
+                2.0,
+                4.0
+              ],
+              [
+                1.0,
+                3.0,
+                5.0
+              ]
+            ]
+          ],
+          "inputs_after": [
+            [
+              [
+                0.0,
+                2.0,
+                4.0
+              ],
+              [
+                1.0,
+                3.0,
+                5.0
+              ]
+            ]
+          ],
+          "output_input_aliases": [
+            [
+              true
+            ]
+          ],
+          "runtime_events": [
+            {
+              "op": "view",
+              "stride": [
+                1,
+                2
+              ],
+              "device": "cpu"
+            }
+          ],
+          "runtime_calls": 1
+        }
+      ],
+      "scope": "complete CPU compilation/execution; numeric, input mutation, strides and storage aliases checked"
+    }
+  },
+  "boundaries": {
+    "unsupported_mutable_alias": {
+      "error": "LoweringException",
+      "message": "NotImplementedError: NYI: Can't generate FallbackKernel for inductor_external_lesson.bad.default\n  target: inductor_external_lesson.bad.default\n  args[0]: TensorBox(StorageBox(\n    InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1]))\n  ))"
+    },
+    "fake_is_not_runtime": {
+      "dispatch_keys": {
+        "CPU": true,
+        "CUDA": false,
+        "Meta": true
+      },
+      "fake_device": "cuda:0",
+      "scope": "real dispatch registry query and metadata-only FakeTensor CUDA call; no GPU allocation/execution"
+    },
+    "find_device": {
+      "first_input_wins": "cpu",
+      "output_sequence_device": "cuda:0",
+      "dict_without_inputs": null,
+      "no_tensor_sequence_error": "IndexError",
+      "scope": "actual helper with explicit first-input fixture and fake outputs; no device transfer"
+    },
+    "callable": {
+      "error": "RuntimeError",
+      "message": "Unsupported fallback <function <lambda> at 0x7f4e063bf370> with type <class 'function'>"
+    },
+    "decomp": {
+      "error": "AssertionError",
+      "message": "both a fallback and a decomp for same op: aten.t.default"
+    }
+  },
+  "config": {
+    "implicit_fallbacks": false,
+    "registration": "explicit make_fallback in an isolated process"
+  }
+}

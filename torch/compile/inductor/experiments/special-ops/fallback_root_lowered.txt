@@ -1,0 +1,106 @@
+FallbackKernel(
+  python_kernel_name='torch.ops.inductor_learning_examples.pair.default',
+  name=buf0,
+  layout=MultiOutputLayout(device=device(type='cpu')),
+  inputs=[InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=torch.ops.inductor_learning_examples.pair.default,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=[],
+  op_overload=inductor_learning_examples.pair.default,
+  arg_properties=[{'name': 'x', 'type': Tensor, 'default_value': None}],
+  kwarg_properties=None,
+  unbacked_bindings=None,
+  mutation_outputs=[],
+  origin_node=None,
+  origins=OrderedSet([pair])
+)
+MultiOutput(
+  python_kernel_name=None,
+  name=buf1,
+  layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]),
+  inputs=[FallbackKernel(
+    python_kernel_name='torch.ops.inductor_learning_examples.pair.default',
+    name=buf0,
+    layout=MultiOutputLayout(device=device(type='cpu')),
+    inputs=[InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=torch.ops.inductor_learning_examples.pair.default,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=[],
+    op_overload=inductor_learning_examples.pair.default,
+    arg_properties=[{'name': 'x', 'type': Tensor, 'default_value': None}],
+    kwarg_properties=None,
+    unbacked_bindings=None,
+    mutation_outputs=[],
+    origin_node=None,
+    origins=OrderedSet([pair])
+  )],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=getitem,
+  origins=OrderedSet([pair])
+)
+MultiOutput(
+  python_kernel_name=None,
+  name=buf2,
+  layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]),
+  inputs=[FallbackKernel(
+    python_kernel_name='torch.ops.inductor_learning_examples.pair.default',
+    name=buf0,
+    layout=MultiOutputLayout(device=device(type='cpu')),
+    inputs=[InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=torch.ops.inductor_learning_examples.pair.default,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=[],
+    op_overload=inductor_learning_examples.pair.default,
+    arg_properties=[{'name': 'x', 'type': Tensor, 'default_value': None}],
+    kwarg_properties=None,
+    unbacked_bindings=None,
+    mutation_outputs=[],
+    origin_node=None,
+    origins=OrderedSet([pair])
+  )],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=getitem_1,
+  origins=OrderedSet([pair])
+)
+ComputedBuffer(name='buf3', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]), data=Pointwise(
+  'cpu',
+  torch.float32,
+  def inner_fn(index):
+      i0 = index
+      tmp0 = ops.load(buf1, i0)
+      tmp1 = ops.relu(tmp0)
+      return tmp1
+  ,
+  ranges=[3],
+  origin_node=relu,
+  origins=OrderedSet([relu])
+))

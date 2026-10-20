@@ -1,0 +1,195 @@
+{
+  "addmm_tensor": {
+    "before_targets": [
+      "aten.mm.default",
+      "aten.add.Tensor"
+    ],
+    "after_targets": [
+      "aten.addmm.default"
+    ],
+    "output": [
+      [
+        [
+          5.0,
+          12.0
+        ],
+        [
+          32.0,
+          48.0
+        ]
+      ]
+    ],
+    "input0_after": [
+      [
+        -2.0,
+        -1.0,
+        0.0
+      ],
+      [
+        1.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "output_alias_input0": [
+      false
+    ],
+    "numeric_mutation_alias_checks": "pass"
+  },
+  "addmm_scalar": {
+    "before_targets": [
+      "aten.mm.default",
+      "aten.add.Tensor"
+    ],
+    "after_targets": [
+      "aten.mm.default",
+      "aten.add.Tensor"
+    ],
+    "output": [
+      [
+        [
+          -4.0,
+          -7.0
+        ],
+        [
+          23.0,
+          29.0
+        ]
+      ]
+    ],
+    "input0_after": [
+      [
+        -2.0,
+        -1.0,
+        0.0
+      ],
+      [
+        1.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "output_alias_input0": [
+      false
+    ],
+    "numeric_mutation_alias_checks": "pass"
+  },
+  "internal": {
+    "before_targets": [
+      "aten.add.Tensor",
+      "aten.index_put.default"
+    ],
+    "after_targets": [
+      "aten.add.Tensor",
+      "aten.index_put_.default"
+    ],
+    "output": [
+      [
+        0.0,
+        9.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "input0_after": [
+      0.0,
+      1.0,
+      2.0,
+      3.0
+    ],
+    "output_alias_input0": [
+      false
+    ],
+    "numeric_mutation_alias_checks": "pass"
+  },
+  "input_only": {
+    "before_targets": [
+      "aten.index_put.default"
+    ],
+    "after_targets": [
+      "aten.index_put.default"
+    ],
+    "output": [
+      [
+        0.0,
+        9.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "input0_after": [
+      0.0,
+      1.0,
+      2.0,
+      3.0
+    ],
+    "output_alias_input0": [
+      false
+    ],
+    "numeric_mutation_alias_checks": "pass"
+  },
+  "copy_back": {
+    "before_targets": [
+      "aten.index_put.default",
+      "aten.copy_.default"
+    ],
+    "after_targets": [
+      "aten.index_put_.default"
+    ],
+    "output": [
+      [
+        0.0,
+        9.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "input0_after": [
+      0.0,
+      9.0,
+      2.0,
+      3.0
+    ],
+    "output_alias_input0": [
+      true
+    ],
+    "numeric_mutation_alias_checks": "pass"
+  },
+  "old_reader": {
+    "before_targets": [
+      "aten.index_put.default",
+      "aten.add.Tensor",
+      "aten.copy_.default"
+    ],
+    "after_targets": [
+      "aten.index_put.default",
+      "aten.add.Tensor",
+      "aten.copy_.default"
+    ],
+    "output": [
+      [
+        2.0,
+        3.0,
+        4.0,
+        5.0
+      ],
+      [
+        0.0,
+        9.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "input0_after": [
+      0.0,
+      9.0,
+      2.0,
+      3.0
+    ],
+    "output_alias_input0": [
+      false,
+      true
+    ],
+    "numeric_mutation_alias_checks": "pass"
+  }
+}

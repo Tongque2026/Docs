@@ -1,0 +1,102 @@
+{
+  "input_shape": [
+    2,
+    3
+  ],
+  "input_stride": [
+    1,
+    2
+  ],
+  "events": [
+    {
+      "name": "x_1",
+      "op": "placeholder",
+      "target": "x_1",
+      "ir_chain": [
+        "TensorBox",
+        "StorageBox",
+        "InputBuffer"
+      ],
+      "operations_so_far": 0,
+      "constant_keys": [],
+      "layout": "FixedLayout('cpu', torch.float32, size=[2, 3], stride=[1, 2])"
+    },
+    {
+      "name": "_tensor_constant0",
+      "op": "get_attr",
+      "target": "_tensor_constant0",
+      "ir_chain": [
+        "TensorBox",
+        "StorageBox",
+        "ConstantBuffer"
+      ],
+      "operations_so_far": 0,
+      "constant_keys": [
+        "_tensor_constant0"
+      ],
+      "layout": "FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1])"
+    },
+    {
+      "name": "add",
+      "op": "call_function",
+      "target": "aten.add.Tensor",
+      "ir_chain": [
+        "TensorBox",
+        "StorageBox",
+        "Pointwise"
+      ],
+      "operations_so_far": 0,
+      "constant_keys": [
+        "_tensor_constant0"
+      ]
+    },
+    {
+      "name": "_tensor_constant1",
+      "op": "get_attr",
+      "target": "_tensor_constant1",
+      "ir_chain": [
+        "Constant"
+      ],
+      "operations_so_far": 0,
+      "constant_keys": [
+        "_tensor_constant0"
+      ]
+    },
+    {
+      "name": "mul",
+      "op": "call_function",
+      "target": "aten.mul.Tensor",
+      "ir_chain": [
+        "TensorBox",
+        "StorageBox",
+        "ComputedBuffer"
+      ],
+      "operations_so_far": 1,
+      "constant_keys": [
+        "_tensor_constant0"
+      ]
+    },
+    {
+      "name": "output",
+      "op": "output",
+      "target": "output",
+      "ir_chain": [
+        "NoneType"
+      ],
+      "operations_so_far": 1,
+      "constant_keys": [
+        "_tensor_constant0"
+      ]
+    }
+  ],
+  "graph_inputs": [
+    "x_1"
+  ],
+  "constants": [
+    "_tensor_constant0"
+  ],
+  "operations": 1,
+  "outputs": 1,
+  "lowered": "ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[1, 2]), data=Pointwise(\n  'cpu',\n  torch.float32,\n  def inner_fn(index):\n      i0, i1 = index\n      tmp0 = ops.load(x_1, i0 + 2 * i1)\n      tmp1 = ops.load(_tensor_constant0, i1 + 3 * i0)\n      tmp2 = tmp0 + tmp1\n      tmp3 = ops.constant(2.0, torch.float32)\n      tmp4 = tmp2 * tmp3\n      return tmp4\n  ,\n  ranges=[2, 3],\n  origin_node=mul,\n  origins=OrderedSet([mul, add])\n))",
+  "mode": "real Lowering; no kernel compilation or execution"
+}

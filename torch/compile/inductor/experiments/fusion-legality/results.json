@@ -1,0 +1,425 @@
+{
+  "protocol": {
+    "horizontal": {
+      "allowed": true,
+      "backend_calls": [
+        "horizontal"
+      ],
+      "reasons": []
+    },
+    "backend_veto": {
+      "allowed": false,
+      "backend_calls": [
+        "horizontal"
+      ],
+      "reasons": []
+    },
+    "vertical": {
+      "allowed": true,
+      "backend_calls": [
+        "vertical"
+      ],
+      "reasons": []
+    },
+    "reverse": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "node1 must go before node2"
+      ]
+    },
+    "different_device": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "device mismatch (cpu vs cuda:0)"
+      ]
+    },
+    "max_size": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "exceeds max fusion"
+      ]
+    },
+    "explicit_no_fuse": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "fusion for buffer explicit disabled"
+      ]
+    },
+    "template_as_consumer": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "templates can only fuse epilogues"
+      ]
+    },
+    "template_reduction_epilogue": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "template epilogue not satisfied"
+      ]
+    },
+    "offset_mismatch": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "memory deps did not match"
+      ]
+    },
+    "star_unmatched": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "memory deps did not match"
+      ]
+    },
+    "intermediate": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "intermediate nodes between node1 & node2"
+      ]
+    },
+    "peak_distance_64": {
+      "allowed": true,
+      "backend_calls": [
+        "horizontal"
+      ],
+      "reasons": []
+    },
+    "peak_distance_65": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "will increase peak memory"
+      ]
+    },
+    "no_shared": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "no shared data"
+      ]
+    },
+    "aggressive_no_shared": {
+      "allowed": true,
+      "backend_calls": [
+        "horizontal"
+      ],
+      "reasons": []
+    },
+    "aggressive_reduction": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": [
+        "no shared data"
+      ]
+    },
+    "same_node": {
+      "allowed": false,
+      "backend_calls": [],
+      "reasons": []
+    }
+  },
+  "dependencies": {
+    "exact": {
+      "allowed": true,
+      "scope": "actual matcher + real dependencies; mode special case is not a general cross-buffer fusion claim"
+    },
+    "shift": {
+      "allowed": false,
+      "scope": "actual matcher + real dependencies; mode special case is not a general cross-buffer fusion claim"
+    },
+    "broadcast_prefix": {
+      "allowed": true,
+      "scope": "actual matcher + real dependencies; mode special case is not a general cross-buffer fusion claim"
+    },
+    "star": {
+      "allowed": false,
+      "scope": "actual matcher + real dependencies; mode special case is not a general cross-buffer fusion claim"
+    },
+    "mode_star": {
+      "allowed": true,
+      "scope": "actual matcher + real dependencies; mode special case is not a general cross-buffer fusion claim"
+    },
+    "mode_memory_early_return": {
+      "allowed": true,
+      "scope": "actual matcher + real dependencies; mode special case is not a general cross-buffer fusion claim"
+    },
+    "renamed": {
+      "allowed": true
+    },
+    "indirect": {
+      "allowed": false
+    },
+    "weak": {
+      "same_index": true,
+      "different_index": false
+    }
+  },
+  "cycles": {
+    "new_path": true,
+    "no_new_path": false,
+    "scope": "actual DFS with metadata-only fused groups, not a full scheduling run"
+  },
+  "simd": {
+    "pointwise_equal": {
+      "allowed": true,
+      "reasons": [],
+      "scope": "actual SIMD predicate + metadata fixtures; no Triton execution"
+    },
+    "pointwise_mismatch": {
+      "allowed": false,
+      "reasons": [
+        "numel/rnumel mismatch (non-reduce) (6, 7), (1, 1)"
+      ],
+      "scope": "actual SIMD predicate + metadata fixtures; no Triton execution"
+    },
+    "reduction_equal": {
+      "allowed": true,
+      "reasons": [],
+      "scope": "actual SIMD predicate + metadata fixtures; no Triton execution"
+    },
+    "reduction_mismatch": {
+      "allowed": false,
+      "reasons": [
+        "numel/rnumel mismatch (reduce) (2, 3), (3, 2)"
+      ],
+      "scope": "actual SIMD predicate + metadata fixtures; no Triton execution"
+    },
+    "split_scan_reason_only": {
+      "allowed": true,
+      "reasons": [
+        "Split scan cannot fuse with reductions"
+      ],
+      "scope": "actual SIMD predicate + metadata fixtures; no Triton execution"
+    }
+  },
+  "cpu": {
+    "horizontal_allow": {
+      "calls": [
+        {
+          "hook": "horizontal",
+          "allowed": true
+        },
+        {
+          "hook": "horizontal",
+          "allowed": true
+        }
+      ],
+      "before": [
+        "op0",
+        "op1"
+      ],
+      "after": [
+        {
+          "kind": "FusedSchedulerNode",
+          "name": "op0_op1"
+        }
+      ],
+      "outputs": [
+        [
+          [
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            2.0,
+            4.0
+          ],
+          [
+            6.0,
+            8.0,
+            10.0
+          ]
+        ]
+      ],
+      "generated_kernel_count": 1,
+      "input_preserved": true,
+      "outputs_do_not_alias_input": true,
+      "scope": "real full CPU compilation/execution; hook veto is an explicit experimental policy, not a registered new device"
+    },
+    "horizontal_veto": {
+      "calls": [
+        {
+          "hook": "horizontal",
+          "allowed": false
+        }
+      ],
+      "before": [
+        "op0",
+        "op1"
+      ],
+      "after": [
+        {
+          "kind": "SchedulerNode",
+          "name": "op0"
+        },
+        {
+          "kind": "SchedulerNode",
+          "name": "op1"
+        }
+      ],
+      "outputs": [
+        [
+          [
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            2.0,
+            4.0
+          ],
+          [
+            6.0,
+            8.0,
+            10.0
+          ]
+        ]
+      ],
+      "generated_kernel_count": 2,
+      "input_preserved": true,
+      "outputs_do_not_alias_input": true,
+      "scope": "real full CPU compilation/execution; hook veto is an explicit experimental policy, not a registered new device"
+    },
+    "vertical_allow": {
+      "calls": [
+        {
+          "hook": "vertical",
+          "allowed": true
+        },
+        {
+          "hook": "vertical",
+          "allowed": true
+        }
+      ],
+      "before": [
+        "op0",
+        "op1"
+      ],
+      "after": [
+        {
+          "kind": "FusedSchedulerNode",
+          "name": "op0_op1"
+        }
+      ],
+      "outputs": [
+        [
+          [
+            1.0,
+            2.7182817459106445,
+            7.389056205749512
+          ],
+          [
+            20.08553695678711,
+            54.598148345947266,
+            148.4131622314453
+          ]
+        ],
+        [
+          [
+            2.0,
+            3.7182817459106445,
+            8.389056205749512
+          ],
+          [
+            21.08553695678711,
+            55.598148345947266,
+            149.4131622314453
+          ]
+        ]
+      ],
+      "generated_kernel_count": 1,
+      "input_preserved": true,
+      "outputs_do_not_alias_input": true,
+      "scope": "real full CPU compilation/execution; hook veto is an explicit experimental policy, not a registered new device"
+    },
+    "vertical_veto": {
+      "calls": [
+        {
+          "hook": "vertical",
+          "allowed": false
+        }
+      ],
+      "before": [
+        "op0",
+        "op1"
+      ],
+      "after": [
+        {
+          "kind": "SchedulerNode",
+          "name": "op0"
+        },
+        {
+          "kind": "SchedulerNode",
+          "name": "op1"
+        }
+      ],
+      "outputs": [
+        [
+          [
+            1.0,
+            2.7182817459106445,
+            7.389056205749512
+          ],
+          [
+            20.08553695678711,
+            54.598148345947266,
+            148.4131622314453
+          ]
+        ],
+        [
+          [
+            2.0,
+            3.7182817459106445,
+            8.389056205749512
+          ],
+          [
+            21.08553695678711,
+            55.598148345947266,
+            149.4131622314453
+          ]
+        ]
+      ],
+      "generated_kernel_count": 2,
+      "input_preserved": true,
+      "outputs_do_not_alias_input": true,
+      "scope": "real full CPU compilation/execution; hook veto is an explicit experimental policy, not a registered new device"
+    }
+  },
+  "cuda_cpp_horizontal_boundary": {
+    "error": "NotImplementedError",
+    "scope": "direct backend hook with metadata-only template; no real template compilation"
+  },
+  "base_hooks": {
+    "vertical": "NotImplementedError",
+    "horizontal": "NotImplementedError"
+  },
+  "cpu_benchmark_bypass": {
+    "allowed": true,
+    "benchmark_called": false
+  },
+  "scope": "protocol fixtures do not prove GPU execution or speed; full CPU runs validate actual consumer/backend integration"
+}

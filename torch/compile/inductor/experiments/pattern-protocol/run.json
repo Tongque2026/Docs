@@ -1,0 +1,582 @@
+{
+  "graph_success": {
+    "count": 1,
+    "events": [
+      {
+        "phase": "extra_check",
+        "match": {
+          "nodes": [
+            "neg",
+            "neg_1"
+          ],
+          "args": [],
+          "kwargs": {
+            "x": "x_1"
+          },
+          "output_nodes": [
+            "neg_1"
+          ]
+        }
+      },
+      {
+        "phase": "graph_handler",
+        "arg_type": "Node"
+      }
+    ],
+    "targets": [
+      "aten.mul.Tensor"
+    ],
+    "regions": {
+      "x_1": 0,
+      "mul_tensor": 0,
+      "output": 0
+    },
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "graph_extra_false": {
+    "count": 0,
+    "events": [
+      {
+        "phase": "extra_check",
+        "match": {
+          "nodes": [
+            "neg",
+            "neg_1"
+          ],
+          "args": [],
+          "kwargs": {
+            "x": "x_1"
+          },
+          "output_nodes": [
+            "neg_1"
+          ]
+        }
+      }
+    ],
+    "targets": [
+      "aten.neg.default",
+      "aten.neg.default"
+    ],
+    "regions": {
+      "x_1": 0,
+      "neg": 0,
+      "neg_1": 0,
+      "output": 0
+    },
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "inner_multiuser": {
+    "count": 0,
+    "events": [],
+    "targets": [
+      "aten.neg.default",
+      "aten.neg.default",
+      "aten.sin.default"
+    ],
+    "regions": {
+      "x_1": 0,
+      "neg": 0,
+      "neg_1": 0,
+      "sin": 0,
+      "output": 0
+    },
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ],
+      [
+        [
+          0.9092974066734314,
+          0.8414709568023682,
+          -0.0
+        ],
+        [
+          -0.8414709568023682,
+          -0.9092974066734314,
+          -0.14112000167369843
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ],
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "root_multiuser": {
+    "count": 1,
+    "events": [
+      {
+        "phase": "extra_check",
+        "match": {
+          "nodes": [
+            "neg",
+            "neg_1"
+          ],
+          "args": [],
+          "kwargs": {
+            "x": "x_1"
+          },
+          "output_nodes": [
+            "neg_1"
+          ]
+        }
+      },
+      {
+        "phase": "graph_handler",
+        "arg_type": "Node"
+      }
+    ],
+    "targets": [
+      "aten.mul.Tensor",
+      "aten.add.Tensor"
+    ],
+    "regions": {
+      "x_1": 0,
+      "mul_tensor": 0,
+      "add": 0,
+      "output": 0
+    },
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ],
+      [
+        [
+          -1.0,
+          0.0,
+          1.0
+        ],
+        [
+          2.0,
+          3.0,
+          4.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ],
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "mutation_barrier": {
+    "count": 0,
+    "events": [],
+    "targets": [
+      "aten.neg.default",
+      "aten.add_.Tensor",
+      "aten.neg.default"
+    ],
+    "regions": {
+      "x_1": 0,
+      "neg": 0,
+      "add_": 1,
+      "neg_1": 1,
+      "output": 1
+    },
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ],
+      [
+        [
+          -1.0,
+          0.0,
+          1.0
+        ],
+        [
+          2.0,
+          3.0,
+          4.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -1.0,
+          0.0,
+          1.0
+        ],
+        [
+          2.0,
+          3.0,
+          4.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ],
+      [
+        true
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "named_same": {
+    "matched": true,
+    "detail": {
+      "nodes": [
+        "add"
+      ],
+      "args": [],
+      "kwargs": {
+        "x": "x_1"
+      },
+      "output_nodes": [
+        "add"
+      ]
+    }
+  },
+  "named_different": {
+    "matched": false,
+    "detail": "kwarg mismatch: x"
+  },
+  "same_root_entries": {
+    "count": 2,
+    "events": [
+      "observe_without_edit",
+      "edit"
+    ],
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "candidate_snapshot": {
+    "count": 1,
+    "events": [
+      "neg"
+    ],
+    "targets": [
+      "aten.neg.default"
+    ],
+    "outputs": [
+      [
+        [
+          2.0,
+          1.0,
+          -0.0
+        ],
+        [
+          -1.0,
+          -2.0,
+          -3.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "replacement_entry": {
+    "count": 1,
+    "registration_events": [
+      {
+        "phase": "trace",
+        "fn": "search",
+        "shape": [
+          [
+            2,
+            3
+          ]
+        ]
+      }
+    ],
+    "application_events": [
+      {
+        "phase": "trace",
+        "fn": "search",
+        "shape": [
+          [
+            2,
+            3
+          ]
+        ]
+      },
+      {
+        "phase": "specific_extra",
+        "match": {
+          "nodes": [
+            "neg",
+            "neg_1"
+          ],
+          "args": [],
+          "kwargs": {
+            "x": "x_1"
+          },
+          "output_nodes": [
+            "neg_1"
+          ]
+        }
+      },
+      {
+        "phase": "trace",
+        "fn": "replacement",
+        "shape": [
+          [
+            2,
+            3
+          ]
+        ]
+      }
+    ],
+    "targets": [
+      "aten.mul.Tensor"
+    ],
+    "outputs": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "inputs_after": [
+      [
+        [
+          -2.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ]
+    ],
+    "output_input_aliases": [
+      [
+        false
+      ]
+    ],
+    "checks": "numeric, input mutation, storage alias pass"
+  },
+  "lowered_graph_repropagation": {
+    "error": "StopIteration",
+    "events": [
+      {
+        "arg_type": "FakeTensor",
+        "match_nodes": [
+          "neg",
+          "neg_1"
+        ]
+      }
+    ],
+    "meaning": "IR handler received FakeTensor before GraphLowering"
+  },
+  "lowering_entry": {
+    "count": 1,
+    "calls_after_apply": 0,
+    "calls_after_compile": 1,
+    "calls_after_runtime": 1,
+    "events": [
+      {
+        "arg_type": "TensorBox",
+        "match_nodes": [
+          "neg",
+          "neg_1"
+        ]
+      }
+    ],
+    "output": [
+      [
+        -2.0,
+        -1.0,
+        0.0
+      ],
+      [
+        1.0,
+        2.0,
+        3.0
+      ]
+    ],
+    "checks": "numeric, unchanged input, no input alias pass"
+  }
+}

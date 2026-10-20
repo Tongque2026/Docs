@@ -1,0 +1,173 @@
+{
+  "cache_directory": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/cache-fxgraph-proof/run-b48b825l",
+  "workers": {
+    "cold": {
+      "pid": 1026645,
+      "calls": {
+        "lowering": 1,
+        "post_compile": 1
+      },
+      "counters": {
+        "fxgraph_cache_miss": 1
+      },
+      "input": [
+        [
+          0.0,
+          1.0,
+          2.0
+        ],
+        [
+          3.0,
+          4.0,
+          5.0
+        ]
+      ],
+      "output": [
+        [
+          2.0,
+          4.0,
+          6.0
+        ],
+        [
+          8.0,
+          10.0,
+          12.0
+        ]
+      ],
+      "shape": [
+        2,
+        3
+      ],
+      "cache_key": "f2lsh6l3hssft4fap5gvcj5bmppckzm3jgw4y5bsesr47hqufijt",
+      "callable_loaded": true,
+      "check": "numeric pass"
+    },
+    "warm": {
+      "pid": 1027356,
+      "calls": {
+        "lowering": 1,
+        "post_compile": 1
+      },
+      "counters": {
+        "fxgraph_cache_miss": 1
+      },
+      "input": [
+        [
+          100.0,
+          101.0,
+          102.0
+        ],
+        [
+          103.0,
+          104.0,
+          105.0
+        ]
+      ],
+      "output": [
+        [
+          202.0,
+          204.0,
+          206.0
+        ],
+        [
+          208.0,
+          210.0,
+          212.0
+        ]
+      ],
+      "shape": [
+        2,
+        3
+      ],
+      "cache_key": "ffh4cnt2db3orgzo357466o3qtfkzdre6hx7w4mdnvbsoz4b2loo",
+      "callable_loaded": true,
+      "check": "numeric pass"
+    },
+    "new_shape": {
+      "pid": 1027724,
+      "calls": {
+        "lowering": 1,
+        "post_compile": 1
+      },
+      "counters": {
+        "fxgraph_cache_miss": 1
+      },
+      "input": [
+        [
+          0.0,
+          1.0
+        ],
+        [
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          5.0
+        ]
+      ],
+      "output": [
+        [
+          2.0,
+          4.0
+        ],
+        [
+          6.0,
+          8.0
+        ],
+        [
+          10.0,
+          12.0
+        ]
+      ],
+      "shape": [
+        3,
+        2
+      ],
+      "cache_key": "fj6r6z56stw4r4azzicjuypqpiljgcknopi7xub2viyuqtryrsog",
+      "callable_loaded": true,
+      "check": "numeric pass"
+    },
+    "bypass": {
+      "pid": 1028165,
+      "calls": {
+        "lowering": 1,
+        "post_compile": 1
+      },
+      "counters": {
+        "fxgraph_cache_bypass": 1
+      },
+      "input": [
+        [
+          0.0,
+          1.0,
+          2.0
+        ],
+        [
+          3.0,
+          4.0,
+          5.0
+        ]
+      ],
+      "output": [
+        [
+          2.0,
+          4.0,
+          6.0
+        ],
+        [
+          8.0,
+          10.0,
+          12.0
+        ]
+      ],
+      "shape": [
+        2,
+        3
+      ],
+      "cache_key": null,
+      "callable_loaded": true,
+      "check": "numeric pass"
+    }
+  }
+}

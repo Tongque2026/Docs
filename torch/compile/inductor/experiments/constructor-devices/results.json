@@ -1,0 +1,247 @@
+{
+  "movable": {
+    "constructor_kwargs_after": [
+      "cuda:0"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "output_blocked": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 1,
+      "output": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "output_allowed": {
+    "constructor_kwargs_after": [
+      "cuda:0"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 1,
+      "output": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "no_target": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 2,
+      "output": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "multiple_targets": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "no_device_kwarg": {
+    "constructor_kwargs_after": [
+      "absent"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "string_device": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "cpu_input_blocked": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "add_tensor": 2,
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "two_constructors": {
+    "constructor_kwargs_after": [
+      "cuda:0",
+      "cuda:0"
+    ],
+    "metadata_devices_after": [
+      "cpu",
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "add_tensor": 2,
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "linked_output_blocked": {
+    "constructor_kwargs_after": [
+      "cpu",
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu",
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "add_tensor": 2,
+      "copy_default": 1,
+      "output": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "repeated_input": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "add_tensor": 2,
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "opaque_blocked": {
+    "constructor_kwargs_after": [
+      "cpu"
+    ],
+    "metadata_devices_after": [
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "opaque": 1,
+      "copy_default": 1
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "gpu_boundary_two_inputs": {
+    "constructor_kwargs_after": [
+      "cuda:0",
+      "cuda:0"
+    ],
+    "metadata_devices_after": [
+      "cpu",
+      "cpu"
+    ],
+    "cpu_indeg_before": {
+      "index_put_default": 2
+    },
+    "identity_and_metadata_unchanged": true,
+    "execution": "metadata-only FX pass; no GPU allocation or collective"
+  },
+  "bool_scalar": {
+    "guarded": true,
+    "value_device_kwarg_after": "cpu",
+    "input_dtype": "torch.bool",
+    "value_shape": [],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "int8_scalar": {
+    "guarded": true,
+    "value_device_kwarg_after": "cpu",
+    "input_dtype": "torch.int8",
+    "value_shape": [],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "uint8_scalar": {
+    "guarded": false,
+    "value_device_kwarg_after": "cuda:0",
+    "input_dtype": "torch.uint8",
+    "value_shape": [],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "int64_scalar": {
+    "guarded": false,
+    "value_device_kwarg_after": "cuda:0",
+    "input_dtype": "torch.int64",
+    "value_shape": [],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "bool_singleton": {
+    "guarded": true,
+    "value_device_kwarg_after": "cpu",
+    "input_dtype": "torch.bool",
+    "value_shape": [
+      1
+    ],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "bool_vector": {
+    "guarded": false,
+    "value_device_kwarg_after": "cuda:0",
+    "input_dtype": "torch.bool",
+    "value_shape": [
+      2
+    ],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "bool_gpu_value": {
+    "guarded": false,
+    "value_device_kwarg_after": "cuda:0",
+    "input_dtype": "torch.bool",
+    "value_shape": [],
+    "scope": "source predicate and Fake metadata pass only; not ATen index execution validity"
+  },
+  "invalid_target": {
+    "error": "AssertionError",
+    "message": "target should be a string representing the device type. Got: device"
+  },
+  "tuple_metadata": {
+    "device": null,
+    "scope": "get_node_device accepts a Tensor, not arbitrary nested Tensor collections"
+  }
+}

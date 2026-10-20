@@ -1,0 +1,23 @@
+op0: SchedulerNode(ComputedBuffer)
+op0.writes = [MemoryDep('buf0', c0, {c0: 6}, None)]
+op0.unmet_dependencies = []
+op0.met_dependencies = [MemoryDep('x_1', c0, {c0: 6}, None)]
+op0.outputs = [
+    buf0: ComputedBuffer
+    buf0.layout = FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1])
+    buf0.users = [NodeUser(node=OUTPUT, can_inplace=False, is_weak=False)]
+]
+op0.group.device = cpu
+op0.group.iteration = ((6,), ())
+op0.sizes = ([6], [])
+x_1_layout = FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1])
+buf0_layout = FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1])
+class op0_loop_body:
+    var_ranges = {z0: 6}
+    index0 = z0
+    def body(self, ops):
+        get_index = self.get_index('index0')
+        load = ops.load('x_1', get_index)
+        get_index_1 = self.get_index('index0')
+        store = ops.store('buf0', get_index_1, load, None)
+        return store

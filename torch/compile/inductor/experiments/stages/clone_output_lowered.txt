@@ -1,0 +1,12 @@
+ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1]), data=Pointwise(
+  'cpu',
+  torch.float32,
+  def inner_fn(index):
+      i0, i1 = index
+      tmp0 = ops.load(x_1, i1 + 3 * i0)
+      return tmp0
+  ,
+  ranges=[2, 3],
+  origin_node=clone,
+  origins=OrderedSet([clone])
+))

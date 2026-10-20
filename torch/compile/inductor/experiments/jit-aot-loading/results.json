@@ -1,0 +1,114 @@
+{
+  "jit": {
+    "events": [
+      {
+        "phase": "load_request",
+        "key": "clf6k3dua4wdmw5b7misunvrkkweakkweggw7qrrq6mptsb5wedl",
+        "attrs": [
+          "_tensor_constant0"
+        ],
+        "linemap_count": 1
+      },
+      {
+        "phase": "module_executed",
+        "key": "clf6k3dua4wdmw5b7misunvrkkweakkweggw7qrrq6mptsb5wedl",
+        "constant_names_present": [
+          "_tensor_constant0"
+        ],
+        "constant_placeholders": {
+          "_tensor_constant0": true
+        }
+      },
+      {
+        "phase": "load_return",
+        "attrs_present": true,
+        "callable": true
+      }
+    ],
+    "attrs": [
+      "_tensor_constant0"
+    ],
+    "module_file": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/jit-aot-loading/cache-mab7njrx/tmpuy188r_v/lf/clf6k3dua4wdmw5b7misunvrkkweakkweggw7qrrq6mptsb5wedl.py",
+    "key": "clf6k3dua4wdmw5b7misunvrkkweakkweggw7qrrq6mptsb5wedl",
+    "module_has_call": true,
+    "output": [
+      [
+        10.0,
+        21.0,
+        32.0
+      ],
+      [
+        13.0,
+        24.0,
+        35.0
+      ]
+    ],
+    "input_preserved": true,
+    "constant_preserved": true,
+    "args_consumed": true,
+    "output_aliases_input": false
+  },
+  "module_protocol": {
+    "attrs_cache_hit": {
+      "same_module": true,
+      "original_constant_retained": true,
+      "seen_constant_during_exec": false,
+      "has_reload_callback": false,
+      "value": 11,
+      "frames": [
+        {
+          "filename": "learning_model.py",
+          "line": 7,
+          "name": "forward"
+        }
+      ]
+    },
+    "plain_reload": {
+      "new_module": true,
+      "value": 3,
+      "same_path": true
+    },
+    "syntax": {
+      "error": "RuntimeError",
+      "message": "Failed to import /work/learning/gpt6-1sol/torch/compile/inductor/experiments/jit-aot-loading/cache-mab7njrx/vt/cvtdm5jexsnnoatkvaxuv6hjgjsorefq4vbrophwq43u2zcgvk5n.py\nSyntaxError: invalid syntax (cvtdm5jexsnnoatkvaxuv6hjgjsorefq4vbrophwq43u2zcgvk5n.py, line 1)"
+    },
+    "exec": {
+      "error": "ValueError",
+      "message": "module execution failed"
+    },
+    "aot_loader_fixture": {
+      "cpu_value": 5,
+      "cuda_value": 5,
+      "unsupported_error": "Unsupported device privateuseone:0",
+      "fixtures_only": true
+    }
+  },
+  "aot_process_exit": 0,
+  "aot": {
+    "compiled": true,
+    "path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/jit-aot-loading/model.so",
+    "exists": true,
+    "constant_names_to_fqns": {
+      "weight": "weight"
+    },
+    "loaded": true,
+    "output": [
+      [
+        10.0,
+        21.0,
+        32.0
+      ],
+      [
+        13.0,
+        24.0,
+        35.0
+      ]
+    ],
+    "input_preserved": true,
+    "output_aliases_input": false,
+    "call_spec": [
+      "[1, {\"type\": \"builtins.tuple\", \"context\": \"null\", \"children_spec\": [{\"type\": \"builtins.tuple\", \"context\": \"null\", \"children_spec\": [{\"type\": null, \"context\": null, \"children_spec\": []}]}, {\"type\": \"builtins.dict\", \"context\": \"[]\", \"children_spec\": []}]}]",
+      "[1, {\"type\": \"builtins.tuple\", \"context\": \"null\", \"children_spec\": [{\"type\": null, \"context\": null, \"children_spec\": []}]}]"
+    ]
+  }
+}

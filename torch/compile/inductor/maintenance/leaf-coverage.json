@@ -1,0 +1,425 @@
+[
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "view_to_reshape",
+    "start": 974,
+    "end": 981,
+    "sha256": "905baedf8b76725f2b43495a24124720243f98d5c69c14df84e5bd5f3765fdb6",
+    "article": "01-graph-preparation/01-properties/01-initial/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/compile_fx.py",
+    "symbol": "fake_tensor_prop",
+    "start": 392,
+    "end": 417,
+    "sha256": "d9e81606ca068292fe3a6408dcb9a7656e060800d3b171a56316455fefd3cfae",
+    "article": "01-graph-preparation/01-properties/01-initial/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_utils.py",
+    "symbol": "FakeTensorUpdater",
+    "start": 55,
+    "end": 185,
+    "sha256": "76793d468b548eb61858ab77993976cf18e7b7564ead35aa63941c6ecb4385d7",
+    "article": "01-graph-preparation/01-properties/02-incremental/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_utils.py",
+    "symbol": "get_storage through get_fake_args_kwargs",
+    "start": 188,
+    "end": 219,
+    "sha256": "9e0d9ea739e7253bf88a3813783600368b06b3572655ae1b2fa6aef91d3d0c80",
+    "article": "01-graph-preparation/01-properties/02-incremental/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "cleanup entry condition blocks",
+    "start": 79,
+    "end": 84,
+    "sha256": "888f83466d79b7c82e12287d23b2304e1b86692a62be573690c67093aec805ec",
+    "article": "01-graph-preparation/02-rewrites/01-cleanup-order/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "reorder_for_locality",
+    "start": 160,
+    "end": 189,
+    "sha256": "a7c459821fbb04a6e4c50f2e73a84e0551d79eb56ec51c3cc082cbe41900ab63",
+    "article": "01-graph-preparation/02-rewrites/01-cleanup-order/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/pattern_matcher.py",
+    "symbol": "mutation region helper family",
+    "start": 1609,
+    "end": 1657,
+    "sha256": "207dc9ed99ba25604db292a16b8265dd2e57d373aebaf4f1eb92b373133ddab7",
+    "article": "01-graph-preparation/02-rewrites/01-cleanup-order/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "same_meta and complete noop registry",
+    "start": 636,
+    "end": 736,
+    "sha256": "10aeba984c636a3c2b6b44f60ca0b08e7cb9862b6a34368c5eb29c77230fd2b8",
+    "article": "01-graph-preparation/02-rewrites/02-noop-storage/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "remove_noop_ops",
+    "start": 739,
+    "end": 797,
+    "sha256": "d23d95684e38b989e633564330045e7bed084d5b4e739a41ad3b837a339438af",
+    "article": "01-graph-preparation/02-rewrites/02-noop-storage/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "scatter maps, graph_call_function, ViewOp and generalized helpers",
+    "start": 36,
+    "end": 88,
+    "sha256": "2a553a023737ccbad105db3d00c232ad10150f3c8af8670036b67e7119bd17f5",
+    "article": "01-graph-preparation/03-mutation/01-view-scatter/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "functional and mutating scatter decomposition",
+    "start": 91,
+    "end": 160,
+    "sha256": "9d5e124dcacb4b9a47dfee6e09a77db97c9c05931f428c16851b1b3d7d09602d",
+    "article": "01-graph-preparation/03-mutation/01-view-scatter/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "scatter policy and decomposition driver",
+    "start": 163,
+    "end": 222,
+    "sha256": "b726e5874547465ea0f71a4b4e9f449376f1dbcb66f39018be13099e543bf65b",
+    "article": "01-graph-preparation/03-mutation/01-view-scatter/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "canonicalize_view_scatter_ops",
+    "start": 225,
+    "end": 325,
+    "sha256": "458e5c1adba3ca1cc599d6e42a4b5916435671e9386485518830830e56a9ae83",
+    "article": "01-graph-preparation/03-mutation/01-view-scatter/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "InplaceableOp",
+    "start": 29,
+    "end": 33,
+    "sha256": "0647027801c261c9f903ee25398857690e6a817524f9ee63cf560ed7e96228d1",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "inplace candidate registries and metadata-only ops",
+    "start": 328,
+    "end": 368,
+    "sha256": "7c044bb929f7b89ba0cbc4bf8d0cbd70dbf345c76f1a43a98453aaa9e34b43d7",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "reinplace core reverse state setup",
+    "start": 371,
+    "end": 420,
+    "sha256": "91417828b7566dfe1ef487353629d05db366ffe0b2b498e788419ee2143278fc",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "old-value uses and can_inplace",
+    "start": 422,
+    "end": 496,
+    "sha256": "5bedb61b9af61f8ab204c1ee65bc112ca18073a80238fbb72106506563593c74",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "clone decision refinement",
+    "start": 498,
+    "end": 581,
+    "sha256": "45e6436b701148fdafb2f18d9497908c24715854aea68e89f77add59f3730bea",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "node dispatch and replacement cleanup",
+    "start": 583,
+    "end": 682,
+    "sha256": "9535698219ecb6f9ea17244fdef282f2f70f6c72420c4e26f4c963bec95433a7",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/reinplace.py",
+    "symbol": "reinplace_inplaceable_ops entry",
+    "start": 685,
+    "end": 688,
+    "sha256": "d2a9699751db7ee4786021d4f1e692321b73da65d9c47d960f6ab55bcc6f3a76",
+    "article": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md",
+    "coverage": "完整原始范围与逐行解释；四段合并覆盖完整核心"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "decompose_auto_functionalized",
+    "start": 800,
+    "end": 892,
+    "sha256": "f2e36201ac2473d576ab4a4eff08e08f75d1599338e9797782236c07190ee303",
+    "article": "01-graph-preparation/03-mutation/03-functional-wrappers/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/pattern_matcher.py",
+    "symbol": "_args and stable_topological_sort",
+    "start": 1893,
+    "end": 1932,
+    "sha256": "62225a215041485412303fda11d85ca8dcbad6c7bcf42aa06be57204749c30f9",
+    "article": "01-graph-preparation/04-finalization/01-order-entry/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "post_grad finalization responsibility block",
+    "start": 133,
+    "end": 148,
+    "sha256": "976392d66f8306275024ff7ad100ec4a7e85c9132e100d3950e4f36de8d5c121",
+    "article": "01-graph-preparation/04-finalization/01-order-entry/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "index_put CPU scalar placement predicate",
+    "start": 1088,
+    "end": 1114,
+    "sha256": "55fecda6e3d4a97ed7a7fab22f40c99f7e25f07ac4cc90706b39537aab2599aa",
+    "article": "01-graph-preparation/04-finalization/02-constructor-devices/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "ConstructorMoverPass entire class",
+    "start": 1117,
+    "end": 1311,
+    "sha256": "ad64d67e7862f17558ee6d2f9cf937a8682008d0d40a1922e4562a07faf2cfe1",
+    "article": "01-graph-preparation/04-finalization/02-constructor-devices/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/fx_passes/post_grad.py",
+    "symbol": "move_constructors_to_gpu",
+    "start": 1314,
+    "end": 1318,
+    "sha256": "d22c2c077272d4f941de2149fde81a17e1c7e280f1fc2a724a8bc8566dbf574d",
+    "article": "01-graph-preparation/04-finalization/02-constructor-devices/README.md",
+    "coverage": "完整原始范围与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/graph.py",
+    "symbol": "GraphLowering.symbolic_sizes_strides/static_sizes_strides",
+    "start": 261,
+    "end": 306,
+    "sha256": "a102cd81e9262f66ae92497c26dc8e3de41480ef1e2bc9d708c08f24230da7b3",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/graph.py",
+    "symbol": "GraphLowering.__init__/has_feature",
+    "start": 308,
+    "end": 465,
+    "sha256": "ec117778b0f85b0146d8439e839c9af4c3d37a808f5a4ac0faf82cc9b11ea53c",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/graph.py",
+    "symbol": "GraphLowering.qualify_name/make_subgraph",
+    "start": 631,
+    "end": 660,
+    "sha256": "5c7edce3a2e0e7ac52d71f11f988d82245b9a503e14117fbd0a9c11b5b38d34b",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/graph.py",
+    "symbol": "GraphLowering.add_device_info/fake_mode",
+    "start": 717,
+    "end": 726,
+    "sha256": "383e7b48a49adac36f5e1b006c2efdd5fbe6728a184c117d59334e92e5092476",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/graph.py",
+    "symbol": "GraphLowering.set_current_node",
+    "start": 1157,
+    "end": 1164,
+    "sha256": "453f286cbf7544b0fc02a474ec802c11f3d4812203eb9f565dd5e8fe615cc176",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/virtualized.py",
+    "symbol": "threadlocal/NullHandler/Virtualized",
+    "start": 82,
+    "end": 135,
+    "sha256": "80e8de128a11d9e31fefb7de2ebc78ec51e8c0309ccb4814dc5e79b3dccc945f",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/virtualized.py",
+    "symbol": "Virtualized handler declarations",
+    "start": 154,
+    "end": 167,
+    "sha256": "2165f748ef35e18a52a692dfc91e4cbd9a75a583da8d1c890a7fba6584a5302f",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/virtualized.py",
+    "symbol": "_V and V",
+    "start": 293,
+    "end": 361,
+    "sha256": "47e568292c761083bf86a66b8161a559078c0521572af8602f9a2ac84b8d0b6a",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/utils.py",
+    "symbol": "convert_shape_to_inductor",
+    "start": 295,
+    "end": 304,
+    "sha256": "141e0200defdb49aa35f50d922faa12688d609e371d787e90dee1a64ee75081f",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/ir.py",
+    "symbol": "get_device_type",
+    "start": 309,
+    "end": 314,
+    "sha256": "8fdc9596201274a9487ef445877e9e0b2f9e0f25fddb87e69d38808b606c2e3a",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/virtualized.py",
+    "symbol": "NullKernelHandler",
+    "start": 138,
+    "end": 151,
+    "sha256": "808722376c44bec15811fd993985d95004a449190b0db4133d4534f8edef33c5",
+    "article": "02-lowering/01-interpretation/01-context-symbols/README.md",
+    "coverage": "完整原始实现与逐行解释"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/codegen/common.py",
+    "symbol": "DeviceCodegen",
+    "start": 87,
+    "end": 91,
+    "sha256": "eaedd81e013218e4f063cae2f0fdace6c7d843a702cacfc2fe78bb796cb5431f",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration/README.md",
+    "coverage": "完整原始实现与逐行解释；注册叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/codegen/common.py",
+    "symbol": "device registries and DeviceOpOverrides interface",
+    "start": 96,
+    "end": 113,
+    "sha256": "fb9c6c74cc5bffbf765af41ce9202f5618b53002b985dbc513c8c0ad38e33055",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration/README.md",
+    "coverage": "完整原始实现与逐行解释；注册叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/codegen/common.py",
+    "symbol": "backend registration, BackendFeature and capability/selectors",
+    "start": 116,
+    "end": 192,
+    "sha256": "fbeebd9d73b07da43414adefcaecc9bf4991f39369d570c5c64905363f707034",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration/README.md",
+    "coverage": "完整原始实现与逐行解释；注册叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/codegen/common.py",
+    "symbol": "default and PrivateUse1 backend initialization",
+    "start": 195,
+    "end": 246,
+    "sha256": "4cf5583eb7e690f86cee41ca466345201b518cd738ca9db23c922cff47146f1a",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration/README.md",
+    "coverage": "完整原始实现与逐行解释；注册叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/codegen/common.py",
+    "symbol": "device operation override register/lookup",
+    "start": 256,
+    "end": 268,
+    "sha256": "a544758f5abae7cc26b6299aa32c1c39ca2e2e0e66dccb1ccd1ca160632e90b4",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration/README.md",
+    "coverage": "完整原始实现与逐行解释；注册叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/utils.py",
+    "symbol": "decode_device",
+    "start": 222,
+    "end": 230,
+    "sha256": "989703c91e5c9afd1e2fe322b9f05a75479e3fc22bb4a7e37486c7b2a13ee415",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch/README.md",
+    "coverage": "完整原始实现与逐行解释；设备实例与委托叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/utils.py",
+    "symbol": "is_gpu",
+    "start": 1799,
+    "end": 1801,
+    "sha256": "cd6aca3ef5cc95659315f7e3c74c87422ca813683acc08cda6b657b2b2907149",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch/README.md",
+    "coverage": "完整原始实现与逐行解释；设备实例与委托叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/scheduler.py",
+    "symbol": "Scheduler.create_backend/get_backend",
+    "start": 3333,
+    "end": 3361,
+    "sha256": "f0de0132395444ddbb1d2ddc3ddfac331d94d3f680b26dc68abc251324ab3589",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch/README.md",
+    "coverage": "完整原始实现与逐行解释；设备实例与委托叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/scheduler.py",
+    "symbol": "BaseScheduling entire class",
+    "start": 3592,
+    "end": 3696,
+    "sha256": "4eeb395ba4426fe0a2ff29f9d5b7eeed44750ccf58387b043191c110220832b8",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch/README.md",
+    "coverage": "完整原始实现与逐行解释；设备实例与委托叶子五范围合并覆盖"
+  },
+  {
+    "file": "/work/pytorch/torch/_inductor/codegen/cuda_combined_scheduling.py",
+    "symbol": "CUDACombinedScheduling entire module",
+    "start": 1,
+    "end": 100,
+    "sha256": "2917ce18bbb5771665df71737d48cd94306b4c9c4cf7c4b35245c45057f4f992",
+    "article": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch/README.md",
+    "coverage": "完整原始实现与逐行解释；设备实例与委托叶子五范围合并覆盖"
+  }
+]

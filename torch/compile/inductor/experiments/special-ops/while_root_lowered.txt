@@ -1,0 +1,171 @@
+WhileLoop(name='buf0', layout=MultiOutputLayout(device=device(type='cpu')), inputs=[StorageBox(
+  InputBuffer(name='i_1', layout=FixedLayout('cpu', torch.int64, size=[], stride=[]))
+), StorageBox(
+  InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))
+)], constant_args=(), kwargs={}, output_view=None, python_kernel_name=None, cpp_kernel_name=None, ordered_kwargs_for_cpp_kernel=(), op_overload=None, arg_properties=[{}, {}], kwarg_properties=None, unbacked_bindings={}, mutation_outputs=[], carried_inputs=[StorageBox(
+  InputBuffer(name='i_1', layout=FixedLayout('cpu', torch.int64, size=[], stride=[]))
+), StorageBox(
+  InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))
+)], additional_inputs=[], cond_subgraph=Subgraph(name='while_loop_cond_graph_0', graph_module=<lambda>(), graph=<torch._inductor.graph.GraphLowering object at 0x7f2875e5a6e0>), body_subgraph=Subgraph(name='while_loop_body_graph_0', graph_module=<lambda>(), graph=<torch._inductor.graph.GraphLowering object at 0x7f2875e59450>), outputs=[MultiOutput(
+  python_kernel_name=None,
+  name=buf1,
+  layout=FixedLayout('cpu', torch.int64, size=[], stride=[]),
+  inputs=[...],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=getitem,
+  origins=OrderedSet([while_loop])
+), MultiOutput(
+  python_kernel_name=None,
+  name=buf2,
+  layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]),
+  inputs=[...],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=getitem_1,
+  origins=OrderedSet([while_loop])
+)])
+MultiOutput(
+  python_kernel_name=None,
+  name=buf1,
+  layout=FixedLayout('cpu', torch.int64, size=[], stride=[]),
+  inputs=[WhileLoop(name='buf0', layout=MultiOutputLayout(device=device(type='cpu')), inputs=[StorageBox(
+    InputBuffer(name='i_1', layout=FixedLayout('cpu', torch.int64, size=[], stride=[]))
+  ), StorageBox(
+    InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))
+  )], constant_args=(), kwargs={}, output_view=None, python_kernel_name=None, cpp_kernel_name=None, ordered_kwargs_for_cpp_kernel=(), op_overload=None, arg_properties=[{}, {}], kwarg_properties=None, unbacked_bindings={}, mutation_outputs=[], carried_inputs=[StorageBox(
+    InputBuffer(name='i_1', layout=FixedLayout('cpu', torch.int64, size=[], stride=[]))
+  ), StorageBox(
+    InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))
+  )], additional_inputs=[], cond_subgraph=Subgraph(name='while_loop_cond_graph_0', graph_module=<lambda>(), graph=<torch._inductor.graph.GraphLowering object at 0x7f2875e5a6e0>), body_subgraph=Subgraph(name='while_loop_body_graph_0', graph_module=<lambda>(), graph=<torch._inductor.graph.GraphLowering object at 0x7f2875e59450>), outputs=[MultiOutput(
+    python_kernel_name=None,
+    name=buf1,
+    layout=FixedLayout('cpu', torch.int64, size=[], stride=[]),
+    inputs=[...],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=None,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=(),
+    op_overload=None,
+    arg_properties=[{}],
+    kwarg_properties=None,
+    unbacked_bindings={},
+    mutation_outputs=[],
+    origin_node=getitem,
+    origins=OrderedSet([while_loop])
+  ), MultiOutput(
+    python_kernel_name=None,
+    name=buf2,
+    layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]),
+    inputs=[...],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=None,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=(),
+    op_overload=None,
+    arg_properties=[{}],
+    kwarg_properties=None,
+    unbacked_bindings={},
+    mutation_outputs=[],
+    origin_node=getitem_1,
+    origins=OrderedSet([while_loop])
+  )])],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=getitem,
+  origins=OrderedSet([while_loop])
+)
+MultiOutput(
+  python_kernel_name=None,
+  name=buf2,
+  layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]),
+  inputs=[WhileLoop(name='buf0', layout=MultiOutputLayout(device=device(type='cpu')), inputs=[StorageBox(
+    InputBuffer(name='i_1', layout=FixedLayout('cpu', torch.int64, size=[], stride=[]))
+  ), StorageBox(
+    InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))
+  )], constant_args=(), kwargs={}, output_view=None, python_kernel_name=None, cpp_kernel_name=None, ordered_kwargs_for_cpp_kernel=(), op_overload=None, arg_properties=[{}, {}], kwarg_properties=None, unbacked_bindings={}, mutation_outputs=[], carried_inputs=[StorageBox(
+    InputBuffer(name='i_1', layout=FixedLayout('cpu', torch.int64, size=[], stride=[]))
+  ), StorageBox(
+    InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))
+  )], additional_inputs=[], cond_subgraph=Subgraph(name='while_loop_cond_graph_0', graph_module=<lambda>(), graph=<torch._inductor.graph.GraphLowering object at 0x7f2875e5a6e0>), body_subgraph=Subgraph(name='while_loop_body_graph_0', graph_module=<lambda>(), graph=<torch._inductor.graph.GraphLowering object at 0x7f2875e59450>), outputs=[MultiOutput(
+    python_kernel_name=None,
+    name=buf1,
+    layout=FixedLayout('cpu', torch.int64, size=[], stride=[]),
+    inputs=[...],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=None,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=(),
+    op_overload=None,
+    arg_properties=[{}],
+    kwarg_properties=None,
+    unbacked_bindings={},
+    mutation_outputs=[],
+    origin_node=getitem,
+    origins=OrderedSet([while_loop])
+  ), MultiOutput(
+    python_kernel_name=None,
+    name=buf2,
+    layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]),
+    inputs=[...],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=None,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=(),
+    op_overload=None,
+    arg_properties=[{}],
+    kwarg_properties=None,
+    unbacked_bindings={},
+    mutation_outputs=[],
+    origin_node=getitem_1,
+    origins=OrderedSet([while_loop])
+  )])],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=getitem_1,
+  origins=OrderedSet([while_loop])
+)

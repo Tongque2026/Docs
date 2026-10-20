@@ -1,0 +1,19 @@
+graph():
+    %arg0_1 : [num_users=1] = placeholder[target=arg0_1]
+    %arg1_1 : [num_users=1] = placeholder[target=arg1_1]
+    %arg2_1 : [num_users=1] = placeholder[target=arg2_1]
+    %arg3_1 : [num_users=1] = placeholder[target=arg3_1]
+    %arg4_1 : [num_users=1] = placeholder[target=arg4_1]
+    %unsqueeze : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze](args = (%arg0_1,), kwargs = {dim: 0})
+    %unsqueeze_1 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze](args = (%arg1_1,), kwargs = {dim: 0})
+    %unsqueeze_2 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze](args = (%arg2_1,), kwargs = {dim: 0})
+    %unsqueeze_3 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze](args = (%arg3_1,), kwargs = {dim: 0})
+    %unsqueeze_4 : [num_users=1] = call_function[target=torch.ops.aten.unsqueeze](args = (%arg4_1,), kwargs = {dim: 0})
+    %cat : [num_users=1] = call_function[target=torch.ops.aten.cat](args = ([%unsqueeze, %unsqueeze_1, %unsqueeze_2, %unsqueeze_3, %unsqueeze_4],), kwargs = {dim: 0})
+    %relu_default : [num_users=5] = call_function[target=torch.ops.aten.relu.default](args = (%cat,), kwargs = {})
+    %select_4 : [num_users=1] = call_function[target=torch.ops.aten.select](args = (%relu_default, 0, 4), kwargs = {})
+    %select_3 : [num_users=1] = call_function[target=torch.ops.aten.select](args = (%relu_default, 0, 3), kwargs = {})
+    %select_2 : [num_users=1] = call_function[target=torch.ops.aten.select](args = (%relu_default, 0, 2), kwargs = {})
+    %select_1 : [num_users=1] = call_function[target=torch.ops.aten.select](args = (%relu_default, 0, 1), kwargs = {})
+    %select : [num_users=1] = call_function[target=torch.ops.aten.select](args = (%relu_default, 0, 0), kwargs = {})
+    return (select, select_1, select_2, select_3, select_4)

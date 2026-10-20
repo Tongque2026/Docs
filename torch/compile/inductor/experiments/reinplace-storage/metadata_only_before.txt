@@ -1,0 +1,9 @@
+graph():
+    %x : [num_users=1] = placeholder[target=x]
+    %i : [num_users=1] = placeholder[target=i]
+    %v : [num_users=1] = placeholder[target=v]
+    %add_tensor : [num_users=2] = call_function[target=torch.ops.aten.add.Tensor](args = (%x, 0), kwargs = {})
+    %index_put_default : [num_users=1] = call_function[target=torch.ops.aten.index_put.default](args = (%add_tensor, [%i], %v), kwargs = {})
+    %view_default : [num_users=1] = call_function[target=torch.ops.aten.view.default](args = (%add_tensor, [2, 2]), kwargs = {})
+    %sym_size_int : [num_users=1] = call_function[target=torch.ops.aten.sym_size.int](args = (%view_default, 0), kwargs = {})
+    return (index_put_default, sym_size_int)

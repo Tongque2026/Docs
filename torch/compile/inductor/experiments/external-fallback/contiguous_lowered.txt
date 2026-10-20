@@ -1,0 +1,90 @@
+ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1]), data=Pointwise(
+  'cpu',
+  torch.float32,
+  def inner_fn(index):
+      i0, i1 = index
+      tmp0 = ops.load(x_1, i0 + 2 * i1)
+      return tmp0
+  ,
+  ranges=[2, 3],
+  origin_node=x_1,
+  origins=OrderedSet([contiguous])
+))
+FallbackKernel(
+  python_kernel_name='torch.ops.inductor_external_lesson.contiguous.default',
+  name=buf1,
+  layout=MultiOutputLayout(device=device(type='cpu')),
+  inputs=[ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1]), data=Pointwise(
+    'cpu',
+    torch.float32,
+    def inner_fn(index):
+        i0, i1 = index
+        tmp0 = ops.load(x_1, i0 + 2 * i1)
+        return tmp0
+    ,
+    ranges=[2, 3],
+    origin_node=x_1,
+    origins=OrderedSet([contiguous])
+  ))],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=torch.ops.inductor_external_lesson.contiguous.default,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=[],
+  op_overload=inductor_external_lesson.contiguous.default,
+  arg_properties=[{'name': 'x', 'type': Tensor, 'default_value': None}],
+  kwarg_properties=None,
+  unbacked_bindings=None,
+  mutation_outputs=[],
+  origin_node=contiguous,
+  origins=OrderedSet([contiguous])
+)
+MultiOutput(
+  python_kernel_name=None,
+  name=buf2,
+  layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1]),
+  inputs=[FallbackKernel(
+    python_kernel_name='torch.ops.inductor_external_lesson.contiguous.default',
+    name=buf1,
+    layout=MultiOutputLayout(device=device(type='cpu')),
+    inputs=[ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1]), data=Pointwise(
+      'cpu',
+      torch.float32,
+      def inner_fn(index):
+          i0, i1 = index
+          tmp0 = ops.load(x_1, i0 + 2 * i1)
+          return tmp0
+      ,
+      ranges=[2, 3],
+      origin_node=x_1,
+      origins=OrderedSet([contiguous])
+    ))],
+    constant_args=(),
+    kwargs={},
+    output_view=None,
+    python_kernel_name=torch.ops.inductor_external_lesson.contiguous.default,
+    cpp_kernel_name=None,
+    ordered_kwargs_for_cpp_kernel=[],
+    op_overload=inductor_external_lesson.contiguous.default,
+    arg_properties=[{'name': 'x', 'type': Tensor, 'default_value': None}],
+    kwarg_properties=None,
+    unbacked_bindings=None,
+    mutation_outputs=[],
+    origin_node=contiguous,
+    origins=OrderedSet([contiguous])
+  )],
+  constant_args=(),
+  kwargs={},
+  output_view=None,
+  python_kernel_name=None,
+  cpp_kernel_name=None,
+  ordered_kwargs_for_cpp_kernel=(),
+  op_overload=None,
+  arg_properties=[{}],
+  kwarg_properties=None,
+  unbacked_bindings={},
+  mutation_outputs=[],
+  origin_node=contiguous,
+  origins=OrderedSet([contiguous])
+)

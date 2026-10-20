@@ -1,0 +1,11 @@
+graph():
+    %x_1 : [num_users=1] = placeholder[target=x_1]
+    %y_1 : [num_users=1] = placeholder[target=y_1]
+    %add : [num_users=2] = call_function[target=torch.ops.aten.add.Tensor](args = (%x_1, 0), kwargs = {})
+    %add_1 : [num_users=2] = call_function[target=torch.ops.aten.add.Tensor](args = (%y_1, 0), kwargs = {})
+    %as_strided_default : [num_users=1] = call_function[target=torch.ops.aten.as_strided.default](args = (%add, [4], [1], 0), kwargs = {})
+    %clone_default : [num_users=1] = call_function[target=torch.ops.aten.clone.default](args = (%as_strided_default,), kwargs = {})
+    %as_strided_default_1 : [num_users=2] = call_function[target=torch.ops.aten.as_strided.default](args = (%clone_default, [4], [1], 0), kwargs = {})
+    %twice_default : [num_users=0] = call_function[target=torch.ops.inductor_reinplace_lesson.twice.default](args = (%as_strided_default_1, %add_1), kwargs = {})
+    %add_2 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%add, 3), kwargs = {})
+    return (as_strided_default_1, add_1, add_2)

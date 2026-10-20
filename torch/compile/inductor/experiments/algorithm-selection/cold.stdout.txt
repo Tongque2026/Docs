@@ -1,0 +1,41 @@
+{
+  "phase": "cold",
+  "benchmark_fn_calls": 1,
+  "precompile_calls": [
+    "cpp_packed_gemm_0"
+  ],
+  "timings_ms": {
+    "mm": 0.008941045962274075,
+    "cpp_packed_gemm_0": 0.0014139804989099503
+  },
+  "candidate_hashes": {
+    "mm": "mm-cqrjyn5jqdhj5q3lohxxeq3fxnpvy6qsigzdm2ykqas7fpkl7zrz",
+    "cpp_packed_gemm_0": "packed_gemm-cglnrsltozibjvywmlpq6zggp2nze5flwqyutkc5swcb2k5tvw2k"
+  },
+  "candidate_kinds": {
+    "mm": "ExternKernelCaller",
+    "cpp_packed_gemm_0": "CppTemplateCaller"
+  },
+  "selected_ir": "CppTemplateBuffer",
+  "selected_choice": "cpp_packed_gemm_0",
+  "verify_enabled": true,
+  "output_sample": [
+    1.30224609375,
+    1.3027267456054688,
+    1.3032073974609375,
+    1.3036880493164062
+  ],
+  "output_shape": [
+    16,
+    64
+  ],
+  "input_preserved": true,
+  "output_aliases_input": false,
+  "captured_weight_preserved": true,
+  "cache_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/cache-algorithm-selection/real-cpu-9fw414dv/cache/44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "system": {
+    "hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "python_version": "3.10.12 (main, Mar  3 2026, 11:56:32) [GCC 11.4.0]",
+  "scope": "real native CPU benchmark and execution; VERIFY applies when candidates actually benchmark; cache hit skips benchmark/VERIFY"
+}

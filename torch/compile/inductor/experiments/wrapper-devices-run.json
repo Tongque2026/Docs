@@ -1,0 +1,132 @@
+{
+  "stream_protocol": {
+    "body": "    with device_api.guard(0):\n        device_api.set_device(0)\n        stream0 = get_raw_stream(0)\n        kernel_a.run(x, scalar.item(), grid=grid(6), stream=stream0)\n        kernel_b.run(x, scalar.item(), grid=grid(6), stream=stream0)\n",
+    "first_events": [
+      [
+        "guard_enter",
+        0
+      ],
+      [
+        "set_device",
+        0
+      ],
+      [
+        "stream",
+        0
+      ],
+      [
+        "a",
+        [
+          6
+        ],
+        123,
+        4
+      ],
+      [
+        "b",
+        [
+          6
+        ],
+        123,
+        4
+      ],
+      [
+        "guard_exit",
+        0
+      ]
+    ],
+    "stream_queries_two_invocations": 2,
+    "scope": "actual generated body executed with explicit Python stub guard/stream/kernel; not GPU execution"
+  },
+  "stream_cache_keys": {
+    "names": [
+      "stream0",
+      "stream0",
+      "stream0"
+    ],
+    "assignments": 2,
+    "import_count": 1
+  },
+  "cpu_call": {
+    "body": "compiled_kernel(x, out)\n",
+    "scope": "generated source only; no kernel executed"
+  },
+  "cuda_cpp_call": {
+    "body": "stream2 = get_raw_stream(2)\ncompiled_kernel.compiled_kernel(x, out, c_void_p(stream2))\n",
+    "scope": "generated source only; no kernel executed"
+  },
+  "triton_callable_grid": {
+    "body": "stream2 = get_raw_stream(2)\ncompiled_kernel.run(x, out, grid=grid, stream=stream2)\n",
+    "scope": "generated source only; no kernel executed"
+  },
+  "autotune_sections": {
+    "main_launches": 2,
+    "example_launches": 1,
+    "main": "with device_api.guard(0):\n    device_api.set_device(0)\n    stream0 = get_raw_stream(0)\n    tuned.run(x, out, grid=grid(6), stream=stream0)\n    tuned.run(x, out, grid=grid(6), stream=stream0)\n",
+    "autotune": "\nimport triton\nimport triton.language as tl\nfrom torch._inductor.runtime.triton_heuristics import grid, split_scan_grid, grid_combo_kernels, start_graph, end_graph\nfrom lesson_runtime import get_raw_stream as get_raw_stream\nwith device_api.guard(0):\n    device_api.set_device(0)\n    stream0 = get_raw_stream(0)\n    x = generate_example_value((6,), (1,), 'cuda:0', torch.float32, 0)\n    out = generate_example_value((6,), (1,), 'cuda:0', torch.float32, 0)\n    tuned.run(x, out, grid=grid(6), stream=stream0)\n    del x, out\n\n",
+    "scope": "source generation only; sample tensors and autotune not executed"
+  },
+  "argument_types_rejected": {
+    "error": "AssertionError",
+    "message": "call_args and arg_types do not match"
+  },
+  "cpp_jit_first": {
+    "source": "\nAOTICudaGuard device_guard(2);\n",
+    "scope": "C++ source emission only; no native compilation or execution"
+  },
+  "cpp_jit_next": {
+    "source": "\ndevice_guard.set_index(3);\n",
+    "scope": "C++ source emission only; no native compilation or execution"
+  },
+  "cpp_jit_native": {
+    "source": "\nat::cuda::CUDAGuard device_guard(2);\n",
+    "scope": "C++ source emission only; no native compilation or execution"
+  },
+  "aot_first": {
+    "source": "\nAOTICudaStreamGuard stream_guard(stream, this->device_idx_);\n",
+    "scope": "C++ source emission only; no native compilation or execution"
+  },
+  "aot_native": {
+    "source": "\nat::cuda::CUDAStreamGuard stream_guard(at::cuda::getStreamFromExternal(stream, this->device_idx_));\n",
+    "scope": "C++ source emission only; no native compilation or execution"
+  },
+  "aot_same": {
+    "source": "\n",
+    "scope": "C++ source emission only; no native compilation or execution"
+  },
+  "aot_mismatch": {
+    "error": "AssertionError",
+    "message": "AOTInductor only supports running on one CUDA device"
+  },
+  "prefix": {
+    "source": "\n\nasync_compile.wait(globals())\ndel async_compile\n\ndef call(args):\n    device_api.synchronize()\n    x, = args\n    args.clear()\n    x_size = x.size()\n    n = x_size[0]\n    assert_size_stride(x, (n, 3), (3, 1))\n",
+    "scope": "source generation only"
+  },
+  "cpu_compile": {
+    "output": [
+      [
+        1.0,
+        2.0,
+        3.0
+      ],
+      [
+        4.0,
+        5.0,
+        6.0
+      ]
+    ],
+    "args_cleared": true,
+    "input_tensor_unchanged": true,
+    "layout_rejections": {
+      "wrong_shape": {
+        "error": "AssertionError",
+        "message": "expected size 3==2, stride 2==3 at dim=0; expected size 2==3, stride 1==1 at dim=1"
+      },
+      "wrong_stride": {
+        "error": "AssertionError",
+        "message": "expected size 2==2, stride 1==3 at dim=0; expected size 3==3, stride 2==1 at dim=1"
+      }
+    },
+    "scope": "complete CPU compilation and execution"
+  }
+}

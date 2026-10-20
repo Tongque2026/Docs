@@ -1,0 +1,5 @@
+# Captured compiler output and logs retain their original whitespace.
+# Handwritten articles and experiment drivers still use normal diff checks.
+torch/compile/inductor/experiments/**/*.txt -whitespace
+torch/compile/inductor/experiments/**/*_output.py -whitespace
+torch/compile/inductor/experiments/**/*_output.cpp -whitespace

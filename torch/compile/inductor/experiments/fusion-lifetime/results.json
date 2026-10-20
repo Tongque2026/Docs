@@ -1,0 +1,299 @@
+{
+  "fusion_allowed": {
+    "config": {
+      "max_fusion_size": 64
+    },
+    "fusion": {
+      "before": [
+        {
+          "name": "op0",
+          "kind": "SchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ],
+      "after": [
+        {
+          "name": "op0_op1",
+          "kind": "FusedSchedulerNode"
+        }
+      ]
+    },
+    "last_usage": {
+      "op0_op1": [
+        "y_1",
+        "x_1"
+      ]
+    },
+    "after_codegen": {
+      "completed_operations": [
+        "op0",
+        "op1"
+      ],
+      "available_buffers": [
+        "x_1",
+        "y_1",
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_allocated": [
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_freed": [],
+      "removed_buffers": []
+    },
+    "generated_kernel_count": 1,
+    "outputs": [
+      [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          5.0,
+          6.0
+        ]
+      ],
+      [
+        [
+          2.0,
+          4.0,
+          6.0
+        ],
+        [
+          8.0,
+          10.0,
+          12.0
+        ]
+      ]
+    ],
+    "check": "numeric, input preservation and aliases pass"
+  },
+  "fusion_limited": {
+    "config": {
+      "max_fusion_size": 1
+    },
+    "fusion": {
+      "before": [
+        {
+          "name": "op0",
+          "kind": "SchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ],
+      "after": [
+        {
+          "name": "op0",
+          "kind": "SchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ]
+    },
+    "last_usage": {
+      "op0": [],
+      "op1": [
+        "y_1",
+        "x_1"
+      ]
+    },
+    "after_codegen": {
+      "completed_operations": [
+        "op0",
+        "op1"
+      ],
+      "available_buffers": [
+        "x_1",
+        "y_1",
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_allocated": [
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_freed": [],
+      "removed_buffers": []
+    },
+    "generated_kernel_count": 2,
+    "outputs": [
+      [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          5.0,
+          6.0
+        ]
+      ],
+      [
+        [
+          2.0,
+          4.0,
+          6.0
+        ],
+        [
+          8.0,
+          10.0,
+          12.0
+        ]
+      ]
+    ],
+    "check": "numeric, input preservation and aliases pass"
+  },
+  "reuse_allowed": {
+    "config": {
+      "inplace_buffers": true,
+      "allow_buffer_reuse": true
+    },
+    "fusion": {
+      "before": [
+        {
+          "name": "op0",
+          "kind": "ExternKernelSchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ],
+      "after": [
+        {
+          "name": "op0",
+          "kind": "ExternKernelSchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ]
+    },
+    "last_usage": {
+      "op0": [
+        "y_1",
+        "x_1"
+      ],
+      "op1": [
+        "buf0"
+      ]
+    },
+    "after_codegen": {
+      "completed_operations": [
+        "op0",
+        "op1"
+      ],
+      "available_buffers": [
+        "x_1",
+        "y_1",
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_allocated": [
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_freed": [
+        "buf0"
+      ],
+      "removed_buffers": []
+    },
+    "generated_kernel_count": 1,
+    "outputs": [
+      [
+        [
+          13.0,
+          16.0
+        ],
+        [
+          40.0,
+          52.0
+        ]
+      ]
+    ],
+    "check": "numeric, input preservation and aliases pass"
+  },
+  "reuse_disabled": {
+    "config": {
+      "inplace_buffers": false,
+      "allow_buffer_reuse": false
+    },
+    "fusion": {
+      "before": [
+        {
+          "name": "op0",
+          "kind": "ExternKernelSchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ],
+      "after": [
+        {
+          "name": "op0",
+          "kind": "ExternKernelSchedulerNode"
+        },
+        {
+          "name": "op1",
+          "kind": "SchedulerNode"
+        }
+      ]
+    },
+    "last_usage": {
+      "op0": [
+        "y_1",
+        "x_1"
+      ],
+      "op1": [
+        "buf0"
+      ]
+    },
+    "after_codegen": {
+      "completed_operations": [
+        "op0",
+        "op1"
+      ],
+      "available_buffers": [
+        "x_1",
+        "y_1",
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_allocated": [
+        "buf0",
+        "buf1"
+      ],
+      "wrapper_freed": [
+        "buf0"
+      ],
+      "removed_buffers": []
+    },
+    "generated_kernel_count": 1,
+    "outputs": [
+      [
+        [
+          13.0,
+          16.0
+        ],
+        [
+          40.0,
+          52.0
+        ]
+      ]
+    ],
+    "check": "numeric, input preservation and aliases pass"
+  }
+}

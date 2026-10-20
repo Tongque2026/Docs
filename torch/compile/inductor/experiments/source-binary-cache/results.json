@@ -1,0 +1,136 @@
+{
+  "native": {
+    "cold": {
+      "label": "cold",
+      "key": "cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva",
+      "source_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.cpp",
+      "binary_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.so",
+      "builds_before_get_result": 4,
+      "build_calls": 1,
+      "all_build_calls_including_isa_probes": 5,
+      "commands": [
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/kx/ckxcxlmlgrizsljjjsvym7psrddsds23o5quhpymybxbk7pv3niu.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -mamx-tile -mamx-bf16 -mamx-int8 -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/kx/ckxcxlmlgrizsljjjsvym7psrddsds23o5quhpymybxbk7pv3niu.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/nj/cnjjtigphm6nlhmwygvcrdil36eab5tzjsnhhpkmcn447ssax2dd.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -mamx-tile -mamx-bf16 -mamx-int8 -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/nj/cnjjtigphm6nlhmwygvcrdil36eab5tzjsnhhpkmcn447ssax2dd.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/cw/ccwkip3sgavngdgpnt3z2r2a7mjai526e3jrl5q72vcvctte2oza.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/cw/ccwkip3sgavngdgpnt3z2r2a7mjai526e3jrl5q72vcvctte2oza.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/ed/ced2zna63oq3rllbpjseo7grvk66gy34ihd4swuo43qmpwiwzfaf.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX2 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx2 -mfma -mf16c -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/ed/ced2zna63oq3rllbpjseo7grvk66gy34ihd4swuo43qmpwiwzfaf.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -Wall -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.so"
+      ],
+      "same_getter": true,
+      "same_library": true,
+      "value": 12,
+      "source_exists": true,
+      "binary_exists": true,
+      "flags": []
+    },
+    "warm": {
+      "label": "warm",
+      "key": "cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva",
+      "source_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.cpp",
+      "binary_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.so",
+      "builds_before_get_result": 0,
+      "build_calls": 0,
+      "all_build_calls_including_isa_probes": 0,
+      "commands": [],
+      "same_getter": true,
+      "same_library": true,
+      "value": 12,
+      "source_exists": true,
+      "binary_exists": true,
+      "flags": []
+    },
+    "variant": {
+      "label": "variant",
+      "key": "c43kp4c7ahqlsewaxoptzarmxtyzofef7w5tyr5j3uzb5fddnmqj",
+      "source_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/43/c43kp4c7ahqlsewaxoptzarmxtyzofef7w5tyr5j3uzb5fddnmqj.cpp",
+      "binary_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/43/c43kp4c7ahqlsewaxoptzarmxtyzofef7w5tyr5j3uzb5fddnmqj.so",
+      "builds_before_get_result": 0,
+      "build_calls": 1,
+      "all_build_calls_including_isa_probes": 1,
+      "commands": [
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/43/c43kp4c7ahqlsewaxoptzarmxtyzofef7w5tyr5j3uzb5fddnmqj.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -Wall -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -DLEARNING_INCREMENT=9 -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/cache/43/c43kp4c7ahqlsewaxoptzarmxtyzofef7w5tyr5j3uzb5fddnmqj.so"
+      ],
+      "same_getter": true,
+      "same_library": true,
+      "value": 14,
+      "source_exists": true,
+      "binary_exists": true,
+      "flags": [
+        "-DLEARNING_INCREMENT=9"
+      ]
+    },
+    "race_a": {
+      "label": "race_a",
+      "key": "cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva",
+      "source_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.cpp",
+      "binary_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.so",
+      "builds_before_get_result": 0,
+      "build_calls": 0,
+      "all_build_calls_including_isa_probes": 0,
+      "commands": [],
+      "same_getter": true,
+      "same_library": true,
+      "value": 12,
+      "source_exists": true,
+      "binary_exists": true,
+      "flags": []
+    },
+    "race_b": {
+      "label": "race_b",
+      "key": "cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva",
+      "source_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.cpp",
+      "binary_path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.so",
+      "builds_before_get_result": 4,
+      "build_calls": 1,
+      "all_build_calls_including_isa_probes": 5,
+      "commands": [
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/kx/ckxcxlmlgrizsljjjsvym7psrddsds23o5quhpymybxbk7pv3niu.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -mamx-tile -mamx-bf16 -mamx-int8 -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/kx/ckxcxlmlgrizsljjjsvym7psrddsds23o5quhpymybxbk7pv3niu.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/nj/cnjjtigphm6nlhmwygvcrdil36eab5tzjsnhhpkmcn447ssax2dd.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -mamx-tile -mamx-bf16 -mamx-int8 -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/nj/cnjjtigphm6nlhmwygvcrdil36eab5tzjsnhhpkmcn447ssax2dd.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/cw/ccwkip3sgavngdgpnt3z2r2a7mjai526e3jrl5q72vcvctte2oza.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/cw/ccwkip3sgavngdgpnt3z2r2a7mjai526e3jrl5q72vcvctte2oza.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/ed/ced2zna63oq3rllbpjseo7grvk66gy34ihd4swuo43qmpwiwzfaf.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX2 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx2 -mfma -mf16c -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/ed/ced2zna63oq3rllbpjseo7grvk66gy34ihd4swuo43qmpwiwzfaf.so",
+        "g++ /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.cpp -D TORCH_INDUCTOR_CPP_WRAPPER -D C10_USING_CUSTOM_GENERATED_MACROS -D CPU_CAPABILITY_AVX512 -shared -fPIC -O3 -DNDEBUG -ffast-math -fno-finite-math-only -fno-unsafe-math-optimizations -ffp-contract=off -march=native -Wall -std=c++17 -Wno-unused-variable -Wno-unknown-pragmas -fopenmp -I/usr/include/python3.10 -I/usr/include/python3.10 -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -I/work/pytorch/torch/include -I/work/pytorch/torch/include/torch/csrc/api/include -I/work/pytorch/torch/include/TH -I/work/pytorch/torch/include/THC -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma -D_GLIBCXX_USE_CXX11_ABI=1 -ltorch -ltorch_cpu -ltorch_python -lc10 -lgomp -L/usr/lib/x86_64-linux-gnu -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -L/work/pytorch/torch/lib -o /work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/race-cache/b5/cb5ptmf26t7gmhbpc4uju4art4ngljk45nuyqojgad4pgzhtsmva.so"
+      ],
+      "same_getter": true,
+      "same_library": true,
+      "value": 12,
+      "source_exists": true,
+      "binary_exists": true,
+      "flags": []
+    }
+  },
+  "keys": {
+    "strip_same_key": true,
+    "first_original_content_preserved": true,
+    "extension_changes_path_not_key": true,
+    "extra_changes_code_key": true,
+    "directory_changes_path_not_key": true,
+    "spv_extra_ignored": true
+  },
+  "device_protocol": {
+    "cuda": {
+      "fixtures_only": true,
+      "extra_args_same_key": true,
+      "memory_then_disk_skip": true,
+      "compiler_calls": 1,
+      "changed_extension_changes_key": true,
+      "first_command": [
+        "fixture-compiler",
+        "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/protocol-cache/5v/c5v7qcpljtoq76wx2ll2c6znkwr6dqwe36ielatu2akvovloefc5.so",
+        "--target=so",
+        "-DVALUE=1"
+      ]
+    },
+    "rocm": {
+      "fixtures_only": true,
+      "extra_args_same_key": true,
+      "memory_then_disk_skip": true,
+      "compiler_calls": 1,
+      "changed_extension_changes_key": true,
+      "first_command": [
+        "fixture-compiler",
+        "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/source-binary-cache/native-21or1f4n/protocol-cache/xu/cxuexrbypp347a3e4l76sunslkvd54agjjh3xk3uxlccynkaisyc.so",
+        "--target=so",
+        "-DVALUE=1"
+      ]
+    }
+  }
+}

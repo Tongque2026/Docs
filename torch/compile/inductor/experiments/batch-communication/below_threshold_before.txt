@@ -1,0 +1,10 @@
+graph():
+    %arg0_1 : [num_users=1] = placeholder[target=arg0_1]
+    %arg1_1 : [num_users=1] = placeholder[target=arg1_1]
+    %arg2_1 : [num_users=1] = placeholder[target=arg2_1]
+    %arg3_1 : [num_users=1] = placeholder[target=arg3_1]
+    %relu : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%arg0_1,), kwargs = {})
+    %relu_1 : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%arg1_1,), kwargs = {})
+    %relu_2 : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%arg2_1,), kwargs = {})
+    %relu_3 : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%arg3_1,), kwargs = {})
+    return (relu, relu_1, relu_2, relu_3)

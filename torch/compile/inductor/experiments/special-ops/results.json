@@ -1,0 +1,219 @@
+{
+  "fallback_forbidden": {
+    "error": "MissingOperatorWithoutDecomp",
+    "message": "missing lowering\n  target: inductor_learning_examples.pair.default\n  args[0]: TensorBox(StorageBox(\n    InputBuffer(name='x_1', layout=FixedLayout('cpu', torch.float32, size=[3], stride=[1]))\n  ))"
+  },
+  "fallback": {
+    "lowerings": [
+      {
+        "scope": "root",
+        "operations": [
+          "FallbackKernel",
+          "MultiOutput",
+          "MultiOutput",
+          "ComputedBuffer"
+        ],
+        "never_reuse_buffers": []
+      }
+    ],
+    "runs": [
+      {
+        "inputs": [
+          [
+            -2.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "outputs": [
+          [
+            0.0,
+            1.0,
+            4.0
+          ],
+          [
+            -4.0,
+            0.0,
+            6.0
+          ]
+        ],
+        "output_input_aliases": [
+          [
+            false
+          ],
+          [
+            false
+          ]
+        ],
+        "check": "numeric, inputs and aliases pass"
+      }
+    ]
+  },
+  "cond": {
+    "lowerings": [
+      {
+        "scope": "true_graph_0",
+        "operations": [
+          "ComputedBuffer"
+        ],
+        "never_reuse_buffers": []
+      },
+      {
+        "scope": "false_graph_0",
+        "operations": [
+          "ComputedBuffer"
+        ],
+        "never_reuse_buffers": []
+      },
+      {
+        "scope": "root",
+        "operations": [
+          "Conditional",
+          "MultiOutput"
+        ],
+        "never_reuse_buffers": []
+      }
+    ],
+    "runs": [
+      {
+        "inputs": [
+          true,
+          [
+            -2.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "outputs": [
+          [
+            -1.0,
+            1.0,
+            4.0
+          ]
+        ],
+        "output_input_aliases": [
+          [
+            false,
+            false
+          ]
+        ],
+        "check": "numeric, inputs and aliases pass"
+      },
+      {
+        "inputs": [
+          false,
+          [
+            -2.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "outputs": [
+          [
+            -4.0,
+            0.0,
+            6.0
+          ]
+        ],
+        "output_input_aliases": [
+          [
+            false,
+            false
+          ]
+        ],
+        "check": "numeric, inputs and aliases pass"
+      }
+    ]
+  },
+  "while": {
+    "lowerings": [
+      {
+        "scope": "while_loop_cond_graph_0",
+        "operations": [
+          "ComputedBuffer"
+        ],
+        "never_reuse_buffers": []
+      },
+      {
+        "scope": "while_loop_body_graph_0",
+        "operations": [
+          "ComputedBuffer",
+          "ComputedBuffer"
+        ],
+        "never_reuse_buffers": []
+      },
+      {
+        "scope": "root",
+        "operations": [
+          "WhileLoop",
+          "MultiOutput",
+          "MultiOutput"
+        ],
+        "never_reuse_buffers": [
+          "buf1",
+          "buf2"
+        ]
+      }
+    ],
+    "runs": [
+      {
+        "inputs": [
+          0,
+          [
+            -2.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "outputs": [
+          3,
+          [
+            1.0,
+            3.0,
+            6.0
+          ]
+        ],
+        "output_input_aliases": [
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ]
+        ],
+        "check": "numeric, inputs and aliases pass"
+      },
+      {
+        "inputs": [
+          3,
+          [
+            -2.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "outputs": [
+          3,
+          [
+            -2.0,
+            0.0,
+            3.0
+          ]
+        ],
+        "output_input_aliases": [
+          [
+            true,
+            false
+          ],
+          [
+            false,
+            true
+          ]
+        ],
+        "check": "numeric, inputs and aliases pass"
+      }
+    ]
+  }
+}

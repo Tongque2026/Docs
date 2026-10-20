@@ -1,0 +1,47 @@
+{
+  "sort": {
+    "before": [
+      "x_1",
+      "mul",
+      "add",
+      "output"
+    ],
+    "after": [
+      "x_1",
+      "add",
+      "mul",
+      "output"
+    ],
+    "actual": [
+      2.0,
+      4.0,
+      6.0,
+      8.0
+    ]
+  },
+  "cycle": "AssertionError",
+  "movable": {
+    "constructor_before": "cpu",
+    "constructor_after": "cuda:0",
+    "graph": "graph():\n    %p : [num_users=1] = placeholder[target=p]\n    %full_default : [num_users=1] = call_function[target=torch.ops.aten.full.default](args = ([2], 3.0), kwargs = {dtype: torch.float32, device: cuda:0})\n    %copy_default : [num_users=1] = call_function[target=torch.ops.aten.copy.default](args = (%p, %full_default), kwargs = {})\n    return (copy_default,)",
+    "execution": "metadata-only; no GPU kernels"
+  },
+  "output_cpu": {
+    "constructor_before": "cpu",
+    "constructor_after": "cpu",
+    "graph": "graph():\n    %p : [num_users=1] = placeholder[target=p]\n    %full_default : [num_users=2] = call_function[target=torch.ops.aten.full.default](args = ([2], 3.0), kwargs = {dtype: torch.float32, device: cpu})\n    %copy_default : [num_users=1] = call_function[target=torch.ops.aten.copy.default](args = (%p, %full_default), kwargs = {})\n    return (full_default, copy_default)",
+    "execution": "metadata-only; no GPU kernels"
+  },
+  "multiple_devices": {
+    "constructor_before": "cpu",
+    "constructor_after": "cpu",
+    "graph": "graph():\n    %p : [num_users=1] = placeholder[target=p]\n    %q : [num_users=0] = placeholder[target=q]\n    %full_default : [num_users=1] = call_function[target=torch.ops.aten.full.default](args = ([2], 3.0), kwargs = {dtype: torch.float32, device: cpu})\n    %copy_default : [num_users=1] = call_function[target=torch.ops.aten.copy.default](args = (%p, %full_default), kwargs = {})\n    return (copy_default,)",
+    "execution": "metadata-only; no GPU kernels"
+  },
+  "boolean_index": {
+    "constructor_before": "cpu",
+    "constructor_after": "cpu",
+    "graph": "graph():\n    %p : [num_users=1] = placeholder[target=p]\n    %full_default : [num_users=1] = call_function[target=torch.ops.aten.full.default](args = ([], 3.0), kwargs = {dtype: torch.float32, device: cpu})\n    %mask : [num_users=1] = placeholder[target=mask]\n    %index_put_default : [num_users=1] = call_function[target=torch.ops.aten.index_put.default](args = (%p, [%mask], %full_default), kwargs = {})\n    return (index_put_default,)",
+    "execution": "metadata-only; no GPU kernels"
+  }
+}

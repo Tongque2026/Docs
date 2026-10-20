@@ -1,0 +1,1 @@
+CppTemplateBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[8, 16], stride=[16, 1]))

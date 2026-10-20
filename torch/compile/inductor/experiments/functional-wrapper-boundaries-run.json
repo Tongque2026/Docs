@@ -1,0 +1,79 @@
+{
+  "v1_missing_decision": {
+    "outputs": [
+      [
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ]
+    ],
+    "actual_input_after": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ],
+    "reference_input_after": [
+      0.0,
+      1.0,
+      2.0,
+      3.0
+    ],
+    "same_values_but_changed_mutation": true,
+    "clone_count": 0,
+    "scope": "intentionally skipped reinplace core; consumer precondition experiment"
+  },
+  "v2_missing_decision": {
+    "outputs": [
+      [
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ]
+    ],
+    "actual_input_after": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ],
+    "reference_input_after": [
+      0.0,
+      1.0,
+      2.0,
+      3.0
+    ],
+    "same_values_but_changed_mutation": true,
+    "clone_count": 0,
+    "scope": "intentionally skipped reinplace core; consumer precondition experiment"
+  },
+  "v1_with_decision": {
+    "input_unchanged": true,
+    "clone_count": 1
+  },
+  "v2_with_decision": {
+    "input_unchanged": true,
+    "clone_count": 1
+  },
+  "v1_retained": {
+    "error": "AssertionError",
+    "message": "auto_functionalized was not removed",
+    "scope": "real CPU candidate filter and final invariant check"
+  },
+  "v2_retained": {
+    "error": "AssertionError",
+    "message": "auto_functionalized_v2 was not removed",
+    "scope": "real CPU candidate filter and final invariant check"
+  },
+  "triton_retained": {
+    "error": "AssertionError",
+    "message": "triton_kernel_wrapper_functional was not removed",
+    "scope": "constructed FX target and Fake metadata only; neither kernel lookup nor Triton execution"
+  },
+  "no_wrappers": {
+    "graph_unchanged": true,
+    "return_is_none": true
+  }
+}

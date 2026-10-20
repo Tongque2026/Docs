@@ -1,0 +1,2030 @@
+{
+  "canonical_recompile_boundary": {
+    "error": "SyntaxError",
+    "reason": "ViewOp dataclass repr is not executable generated Python"
+  },
+  "nested": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "shared_inner": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          4.0,
+          90.0,
+          91.0,
+          7.0
+        ]
+      ],
+      "output_aliases": [
+        [
+          true,
+          true
+        ],
+        [
+          true,
+          true
+        ]
+      ],
+      "offsets": [
+        0,
+        4
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ],
+        [
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true,
+          false
+        ],
+        [
+          false,
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default",
+      "aten.select.int"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          4.0,
+          90.0,
+          91.0,
+          7.0
+        ]
+      ],
+      "output_aliases": [
+        [
+          true,
+          true
+        ],
+        [
+          true,
+          true
+        ]
+      ],
+      "offsets": [
+        0,
+        4
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ],
+        [
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true,
+          false
+        ],
+        [
+          false,
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "path_mismatch": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              0
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              0
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "different_base": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            24.0,
+            90.0,
+            91.0,
+            27.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          [
+            20.0,
+            21.0,
+            22.0,
+            23.0
+          ],
+          [
+            24.0,
+            25.0,
+            26.0,
+            27.0
+          ],
+          [
+            28.0,
+            29.0,
+            30.0,
+            31.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            24.0,
+            90.0,
+            91.0,
+            27.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          [
+            20.0,
+            21.0,
+            22.0,
+            23.0
+          ],
+          [
+            24.0,
+            25.0,
+            26.0,
+            27.0
+          ],
+          [
+            28.0,
+            29.0,
+            30.0,
+            31.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "copy_back": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": false,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          true,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_inplace_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice.Tensor",
+      "aten.copy_.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          true,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "internal": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "add",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": true,
+        "should_reinplace": false,
+        "always_mutating": false
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+          ],
+          [
+            5.0,
+            90.0,
+            91.0,
+            8.0
+          ],
+          [
+            9.0,
+            10.0,
+            11.0,
+            12.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "add",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": true,
+        "should_reinplace": false,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.add.Tensor",
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+          ],
+          [
+            5.0,
+            90.0,
+            91.0,
+            8.0
+          ],
+          [
+            9.0,
+            10.0,
+            11.0,
+            12.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "diagonal": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.diagonal.default",
+            "args": [],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            90.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            91.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            92.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0,
+          92.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.diagonal.default",
+            "args": [],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "final_targets": [
+      "aten.clone",
+      "aten.diagonal.default",
+      "aten.copy_.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            90.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            91.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            92.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          90.0,
+          91.0,
+          92.0
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "as_strided": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.as_strided.default",
+            "args": [
+              [
+                2,
+                2
+              ],
+              [
+                4,
+                1
+              ],
+              5
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "canonical_execution": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            92.0,
+            93.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          [
+            90.0,
+            91.0
+          ],
+          [
+            92.0,
+            93.0
+          ]
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    },
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.as_strided.default",
+            "args": [
+              [
+                2,
+                2
+              ],
+              [
+                4,
+                1
+              ],
+              5
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "final_targets": [
+      "aten.clone",
+      "aten.as_strided.default",
+      "aten.copy_.default"
+    ],
+    "final": {
+      "outputs": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            90.0,
+            91.0,
+            7.0
+          ],
+          [
+            8.0,
+            92.0,
+            93.0,
+            11.0
+          ]
+        ]
+      ],
+      "output_aliases": [
+        [
+          true
+        ]
+      ],
+      "offsets": [
+        0
+      ],
+      "strides": [
+        [
+          4,
+          1
+        ]
+      ],
+      "expected_output_aliases": [
+        [
+          true
+        ]
+      ],
+      "input_after": [
+        [
+          [
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          [
+            4.0,
+            5.0,
+            6.0,
+            7.0
+          ],
+          [
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        ],
+        [
+          [
+            90.0,
+            91.0
+          ],
+          [
+            92.0,
+            93.0
+          ]
+        ]
+      ],
+      "output_input_aliases": [
+        [
+          false,
+          false
+        ]
+      ],
+      "check": "numeric, input mutation and input aliases pass"
+    }
+  },
+  "direct_functional": {
+    "output": [
+      [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      [
+        4.0,
+        90.0,
+        91.0,
+        7.0
+      ],
+      [
+        8.0,
+        9.0,
+        10.0,
+        11.0
+      ]
+    ],
+    "input_after": [
+      [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      [
+        4.0,
+        5.0,
+        6.0,
+        7.0
+      ],
+      [
+        8.0,
+        9.0,
+        10.0,
+        11.0
+      ]
+    ],
+    "same_object": false,
+    "shares_input": false
+  },
+  "direct_inplace": {
+    "output": [
+      [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      [
+        4.0,
+        90.0,
+        91.0,
+        7.0
+      ],
+      [
+        8.0,
+        9.0,
+        10.0,
+        11.0
+      ]
+    ],
+    "input_after": [
+      [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      [
+        4.0,
+        90.0,
+        91.0,
+        7.0
+      ],
+      [
+        8.0,
+        9.0,
+        10.0,
+        11.0
+      ]
+    ],
+    "same_object": true,
+    "shares_input": true
+  },
+  "direct_broadcast": {
+    "output": [
+      [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      [
+        4.0,
+        7.0,
+        7.0,
+        7.0
+      ],
+      [
+        8.0,
+        9.0,
+        10.0,
+        11.0
+      ]
+    ],
+    "input_unchanged": true,
+    "scope": "generalized helper copy_ broadcasting, not native scatter shape matching"
+  },
+  "copy_error": {
+    "error": "RuntimeError",
+    "message": "shape error in scatter op, can not broadcast torch.Size([3]) to torch.Size([2])",
+    "cause": "RuntimeError"
+  },
+  "view_error": {
+    "error": "IndexError",
+    "message": "select(): index 99 out of range for tensor of size [3, 4] at dimension 0",
+    "cause": null
+  },
+  "empty_path_decomposition": {
+    "error": "IndexError",
+    "scope": "manually constructed generalized node; canonicalizer never creates an empty path"
+  }
+}

@@ -1,0 +1,14 @@
+ExternKernelOut(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[2, 4], stride=[4, 1]), inputs=[InputBuffer(name='a_1', layout=FixedLayout('cpu', torch.float32, size=[2, 3], stride=[3, 1])), InputBuffer(name='b_1', layout=FixedLayout('cpu', torch.float32, size=[3, 4], stride=[4, 1]))], constant_args=(), kwargs={}, output_view=None, python_kernel_name='extern_kernels.mm', cpp_kernel_name='at::mm_out', ordered_kwargs_for_cpp_kernel=(), op_overload=None, arg_properties=[{}, {}], kwarg_properties=None, unbacked_bindings={}, mutation_outputs=[])
+ComputedBuffer(name='buf1', layout=FixedLayout('cpu', torch.float32, size=[2, 4], stride=[4, 1]), data=Pointwise(
+  'cpu',
+  torch.float32,
+  def inner_fn(index):
+      i0, i1 = index
+      tmp0 = ops.load(buf0, i1 + 4 * i0)
+      tmp1 = ops.relu(tmp0)
+      return tmp1
+  ,
+  ranges=[2, 4],
+  origin_node=relu,
+  origins=OrderedSet([relu])
+))

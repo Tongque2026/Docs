@@ -1,0 +1,4 @@
+graph():
+    %x_1 : [num_users=2] = placeholder[target=x_1]
+    %mut_default : [num_users=0] = call_function[target=torch.ops.inductor_wrapper_boundary_lesson.mut.default](args = (%x_1,), kwargs = {})
+    return (x_1,)

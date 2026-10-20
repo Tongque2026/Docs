@@ -1,0 +1,49 @@
+{
+  "compiled_in_this_process": false,
+  "path": "/work/learning/gpt6-1sol/torch/compile/inductor/experiments/jit-aot-loading/model.so",
+  "constant_names_to_fqns": {
+    "weight": "weight"
+  },
+  "runs": [
+    {
+      "shift": 0.0,
+      "output": [
+        [
+          10.0,
+          21.0,
+          32.0
+        ],
+        [
+          13.0,
+          24.0,
+          35.0
+        ]
+      ],
+      "input_preserved": true,
+      "output_aliases_input": false,
+      "output_type": "tuple"
+    },
+    {
+      "shift": 1.5,
+      "output": [
+        [
+          11.5,
+          22.5,
+          33.5
+        ],
+        [
+          14.5,
+          25.5,
+          36.5
+        ]
+      ],
+      "input_preserved": true,
+      "output_aliases_input": false,
+      "output_type": "tuple"
+    }
+  ],
+  "call_spec": [
+    "[1, {\"type\": \"builtins.tuple\", \"context\": \"null\", \"children_spec\": [{\"type\": \"builtins.tuple\", \"context\": \"null\", \"children_spec\": [{\"type\": null, \"context\": null, \"children_spec\": []}]}, {\"type\": \"builtins.dict\", \"context\": \"[]\", \"children_spec\": []}]}]",
+    "[1, {\"type\": \"builtins.tuple\", \"context\": \"null\", \"children_spec\": [{\"type\": null, \"context\": null, \"children_spec\": []}]}]"
+  ]
+}

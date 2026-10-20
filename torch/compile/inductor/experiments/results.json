@@ -1,0 +1,60 @@
+{
+  "torch_version": "2.5.0a0+gitc77adf6",
+  "torch_file": "/work/pytorch/torch/__init__.py",
+  "cases": {
+    "pointwise": {
+      "callable_type": "CompiledFxGraph",
+      "boxed_call": true,
+      "output": [
+        [
+          0.0,
+          0.0,
+          2.0
+        ],
+        [
+          4.0,
+          6.0,
+          8.0
+        ]
+      ],
+      "shape": [
+        2,
+        3
+      ],
+      "stride": [
+        3,
+        1
+      ],
+      "dtype": "torch.float32",
+      "device": "cpu",
+      "input_unchanged": true,
+      "output_aliases_x": false,
+      "generated_kernel_count": 1,
+      "args_length_after_call": 0
+    },
+    "alias": {
+      "callable_type": "CompiledFxGraph",
+      "boxed_call": true,
+      "output": [
+        -2.0,
+        -1.0,
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      "shape": [
+        6
+      ],
+      "stride": [
+        1
+      ],
+      "dtype": "torch.float32",
+      "device": "cpu",
+      "input_unchanged": true,
+      "output_aliases_x": true,
+      "generated_kernel_count": 0,
+      "args_length_after_call": 0
+    }
+  }
+}

@@ -1,0 +1,2 @@
+stream2 = get_raw_stream(2)
+compiled_kernel.run(x, out, grid=grid, stream=stream2)

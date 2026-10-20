@@ -1,0 +1,927 @@
+{
+  "source_root": "/work/pytorch",
+  "source_commit": "8332c5622aabd9535969e9a8d0ed60e4a90e4402",
+  "scope": "Inductor 输入输出与内部；不查看 PyTorch doc",
+  "root": "inductor",
+  "nodes": [
+    {
+      "id": "inductor",
+      "parent": null,
+      "title": "Inductor",
+      "path": "README.md",
+      "status": "本层完成"
+    },
+    {
+      "id": "graph-preparation",
+      "parent": "inductor",
+      "title": "图准备",
+      "directory": "01-graph-preparation",
+      "status": "本层完成",
+      "path": "01-graph-preparation/README.md"
+    },
+    {
+      "id": "lowering",
+      "parent": "inductor",
+      "title": "Lowering",
+      "directory": "02-lowering",
+      "status": "本层完成",
+      "path": "02-lowering/README.md"
+    },
+    {
+      "id": "scheduling",
+      "parent": "inductor",
+      "title": "调度与融合",
+      "directory": "03-scheduling",
+      "status": "本层完成",
+      "path": "03-scheduling/README.md"
+    },
+    {
+      "id": "codegen-runtime",
+      "parent": "inductor",
+      "title": "代码生成与运行封装",
+      "directory": "04-codegen-runtime",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/README.md"
+    },
+    {
+      "id": "graph-preparation/properties",
+      "parent": "graph-preparation",
+      "title": "属性与布局描述",
+      "directory": "01-graph-preparation/01-properties",
+      "status": "本层完成",
+      "path": "01-graph-preparation/01-properties/README.md"
+    },
+    {
+      "id": "graph-preparation/rewrites",
+      "parent": "graph-preparation",
+      "title": "图重写",
+      "directory": "01-graph-preparation/02-rewrites",
+      "status": "本层完成",
+      "path": "01-graph-preparation/02-rewrites/README.md"
+    },
+    {
+      "id": "graph-preparation/mutation",
+      "parent": "graph-preparation",
+      "title": "写入语义恢复",
+      "directory": "01-graph-preparation/03-mutation",
+      "status": "本层完成",
+      "path": "01-graph-preparation/03-mutation/README.md"
+    },
+    {
+      "id": "graph-preparation/finalization",
+      "parent": "graph-preparation",
+      "title": "图收尾",
+      "directory": "01-graph-preparation/04-finalization",
+      "status": "本层完成",
+      "path": "01-graph-preparation/04-finalization/README.md"
+    },
+    {
+      "id": "lowering/interpretation",
+      "parent": "lowering",
+      "title": "解释图与登记输入",
+      "directory": "02-lowering/01-interpretation",
+      "status": "本层完成",
+      "path": "02-lowering/01-interpretation/README.md"
+    },
+    {
+      "id": "lowering/expressions",
+      "parent": "lowering",
+      "title": "表达计算与布局",
+      "directory": "02-lowering/02-expressions",
+      "status": "本层完成",
+      "path": "02-lowering/02-expressions/README.md"
+    },
+    {
+      "id": "lowering/materialization",
+      "parent": "lowering",
+      "title": "物化与副作用",
+      "directory": "02-lowering/03-materialization",
+      "status": "本层完成",
+      "path": "02-lowering/03-materialization/README.md"
+    },
+    {
+      "id": "lowering/special-ops",
+      "parent": "lowering",
+      "title": "专用算子路径",
+      "directory": "02-lowering/04-special-ops",
+      "status": "本层完成",
+      "path": "02-lowering/04-special-ops/README.md"
+    },
+    {
+      "id": "scheduling/dependencies",
+      "parent": "scheduling",
+      "title": "依赖与合法顺序",
+      "directory": "03-scheduling/01-dependencies",
+      "status": "本层完成",
+      "path": "03-scheduling/01-dependencies/README.md"
+    },
+    {
+      "id": "scheduling/fusion",
+      "parent": "scheduling",
+      "title": "融合与分组",
+      "directory": "03-scheduling/02-fusion",
+      "status": "本层完成",
+      "path": "03-scheduling/02-fusion/README.md"
+    },
+    {
+      "id": "scheduling/lifetime",
+      "parent": "scheduling",
+      "title": "生命周期与生成驱动",
+      "directory": "03-scheduling/03-lifetime",
+      "status": "本层完成",
+      "path": "03-scheduling/03-lifetime/README.md"
+    },
+    {
+      "id": "codegen-runtime/kernels",
+      "parent": "codegen-runtime",
+      "title": "设备 kernel 与方案选择",
+      "directory": "04-codegen-runtime/01-kernels",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/01-kernels/README.md"
+    },
+    {
+      "id": "codegen-runtime/wrapper",
+      "parent": "codegen-runtime",
+      "title": "Wrapper 与存储计划",
+      "directory": "04-codegen-runtime/02-wrapper",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/02-wrapper/README.md"
+    },
+    {
+      "id": "codegen-runtime/build-load",
+      "parent": "codegen-runtime",
+      "title": "编译与加载",
+      "directory": "04-codegen-runtime/03-build-load",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/03-build-load/README.md"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime",
+      "parent": "codegen-runtime",
+      "title": "缓存与运行适配",
+      "directory": "04-codegen-runtime/04-cache-runtime",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/04-cache-runtime/README.md"
+    },
+    {
+      "id": "graph-preparation/properties/initial",
+      "parent": "graph-preparation/properties",
+      "title": "初次属性建立",
+      "directory": "01-graph-preparation/01-properties/01-initial",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/01-properties/01-initial/README.md"
+    },
+    {
+      "id": "graph-preparation/properties/incremental",
+      "parent": "graph-preparation/properties",
+      "title": "增量属性维护",
+      "directory": "01-graph-preparation/01-properties/02-incremental",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/01-properties/02-incremental/README.md"
+    },
+    {
+      "id": "graph-preparation/rewrites/cleanup-order",
+      "parent": "graph-preparation/rewrites",
+      "title": "清理与局部顺序",
+      "directory": "01-graph-preparation/02-rewrites/01-cleanup-order",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/02-rewrites/01-cleanup-order/README.md"
+    },
+    {
+      "id": "graph-preparation/rewrites/noop-storage",
+      "parent": "graph-preparation/rewrites",
+      "title": "无效操作与存储边界",
+      "directory": "01-graph-preparation/02-rewrites/02-noop-storage",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/02-rewrites/02-noop-storage/README.md"
+    },
+    {
+      "id": "graph-preparation/rewrites/patterns",
+      "parent": "graph-preparation/rewrites",
+      "title": "模式匹配与子图替换",
+      "directory": "01-graph-preparation/02-rewrites/03-patterns",
+      "status": "本层完成",
+      "path": "01-graph-preparation/02-rewrites/03-patterns/README.md"
+    },
+    {
+      "id": "graph-preparation/rewrites/batch-communication",
+      "parent": "graph-preparation/rewrites",
+      "title": "批量计算与通信改写",
+      "directory": "01-graph-preparation/02-rewrites/04-batch-communication",
+      "status": "本层完成",
+      "path": "01-graph-preparation/02-rewrites/04-batch-communication/README.md"
+    },
+    {
+      "id": "graph-preparation/mutation/view-scatter",
+      "parent": "graph-preparation/mutation",
+      "title": "View/scatter 表示与分解",
+      "directory": "01-graph-preparation/03-mutation/01-view-scatter",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/03-mutation/01-view-scatter/README.md"
+    },
+    {
+      "id": "graph-preparation/mutation/storage-reinplace",
+      "parent": "graph-preparation/mutation",
+      "title": "存储可写性与原地化",
+      "directory": "01-graph-preparation/03-mutation/02-storage-reinplace",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/03-mutation/02-storage-reinplace/README.md"
+    },
+    {
+      "id": "graph-preparation/mutation/functional-wrappers",
+      "parent": "graph-preparation/mutation",
+      "title": "自动功能化包装分解",
+      "directory": "01-graph-preparation/03-mutation/03-functional-wrappers",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/03-mutation/03-functional-wrappers/README.md"
+    },
+    {
+      "id": "graph-preparation/finalization/order-entry",
+      "parent": "graph-preparation/finalization",
+      "title": "顺序与入口一致性",
+      "directory": "01-graph-preparation/04-finalization/01-order-entry",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/04-finalization/01-order-entry/README.md"
+    },
+    {
+      "id": "graph-preparation/finalization/constructor-devices",
+      "parent": "graph-preparation/finalization",
+      "title": "构造节点设备迁移",
+      "directory": "01-graph-preparation/04-finalization/02-constructor-devices",
+      "status": "叶子·逐行完成",
+      "path": "01-graph-preparation/04-finalization/02-constructor-devices/README.md"
+    },
+    {
+      "id": "lowering/interpretation/context-symbols",
+      "parent": "lowering/interpretation",
+      "title": "图上下文与符号状态",
+      "directory": "02-lowering/01-interpretation/01-context-symbols",
+      "status": "叶子·逐行完成",
+      "path": "02-lowering/01-interpretation/01-context-symbols/README.md"
+    },
+    {
+      "id": "lowering/interpretation/inputs-constants",
+      "parent": "lowering/interpretation",
+      "title": "输入和常量登记",
+      "directory": "02-lowering/01-interpretation/02-inputs-constants",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/interpretation/dispatch-results",
+      "parent": "lowering/interpretation",
+      "title": "节点派发与结果维护",
+      "directory": "02-lowering/01-interpretation/03-dispatch-results",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/expressions/pointwise-types",
+      "parent": "lowering/expressions",
+      "title": "点表达式与类型处理",
+      "directory": "02-lowering/02-expressions/01-pointwise-types",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/expressions/views-indexing",
+      "parent": "lowering/expressions",
+      "title": "View、广播与布局索引",
+      "directory": "02-lowering/02-expressions/02-views-indexing",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/expressions/reductions-scans",
+      "parent": "lowering/expressions",
+      "title": "归约与扫描",
+      "directory": "02-lowering/02-expressions/03-reductions-scans",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/materialization/storage-realization",
+      "parent": "lowering/materialization",
+      "title": "存储实现与复用提示",
+      "directory": "02-lowering/03-materialization/01-storage-realization",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/materialization/output-layouts",
+      "parent": "lowering/materialization",
+      "title": "输出与布局约束",
+      "directory": "02-lowering/03-materialization/02-output-layouts",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/materialization/mutation-values",
+      "parent": "lowering/materialization",
+      "title": "写入与旧值保护",
+      "directory": "02-lowering/03-materialization/03-mutation-values",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/external-fallback",
+      "parent": "lowering/special-ops",
+      "title": "外部调用与 fallback 协议",
+      "directory": "02-lowering/04-special-ops/01-external-fallback",
+      "status": "本层完成",
+      "path": "02-lowering/04-special-ops/01-external-fallback/README.md"
+    },
+    {
+      "id": "lowering/special-ops/template-integration",
+      "parent": "lowering/special-ops",
+      "title": "模板与复合算子接入",
+      "directory": "02-lowering/04-special-ops/02-template-integration",
+      "status": "本层完成",
+      "path": "02-lowering/04-special-ops/02-template-integration/README.md"
+    },
+    {
+      "id": "lowering/special-ops/structured-subgraphs",
+      "parent": "lowering/special-ops",
+      "title": "条件与循环子图",
+      "directory": "02-lowering/04-special-ops/03-structured-subgraphs",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/dependencies/read-write-nodes",
+      "parent": "scheduling/dependencies",
+      "title": "读写提取与调度节点",
+      "directory": "03-scheduling/01-dependencies/01-read-write-nodes",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/dependencies/alias-mutation-symbols",
+      "parent": "scheduling/dependencies",
+      "title": "别名、写入与符号依赖",
+      "directory": "03-scheduling/01-dependencies/02-alias-mutation-symbols",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/dependencies/order-liveness",
+      "parent": "scheduling/dependencies",
+      "title": "排序、活跃性与祖先关系",
+      "directory": "03-scheduling/01-dependencies/03-order-liveness",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/fusion/candidates-priority",
+      "parent": "scheduling/fusion",
+      "title": "候选与优先级",
+      "directory": "03-scheduling/02-fusion/01-candidates-priority",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/fusion/legality-backends",
+      "parent": "scheduling/fusion",
+      "title": "合法性与后端判断",
+      "directory": "03-scheduling/02-fusion/02-legality-backends",
+      "status": "本层完成",
+      "path": "03-scheduling/02-fusion/02-legality-backends/README.md"
+    },
+    {
+      "id": "scheduling/fusion/merge-groups",
+      "parent": "scheduling/fusion",
+      "title": "合并与分组维护",
+      "directory": "03-scheduling/02-fusion/03-merge-groups",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/lifetime/last-usage",
+      "parent": "scheduling/lifetime",
+      "title": "最后使用分析",
+      "directory": "03-scheduling/03-lifetime/01-last-usage",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/lifetime/codegen-flush",
+      "parent": "scheduling/lifetime",
+      "title": "生成遍历与 flush",
+      "directory": "03-scheduling/03-lifetime/02-codegen-flush",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/lifetime/release-local",
+      "parent": "scheduling/lifetime",
+      "title": "释放与局部缓冲区消除",
+      "directory": "03-scheduling/03-lifetime/03-release-local",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/backends-loops",
+      "parent": "codegen-runtime/kernels",
+      "title": "后端与循环组织",
+      "directory": "04-codegen-runtime/01-kernels/01-backends-loops",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/01-kernels/01-backends-loops/README.md"
+    },
+    {
+      "id": "codegen-runtime/kernels/expressions-code",
+      "parent": "codegen-runtime/kernels",
+      "title": "元素表达式与目标代码",
+      "directory": "04-codegen-runtime/01-kernels/02-expressions-code",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/01-kernels/02-expressions-code/README.md"
+    },
+    {
+      "id": "codegen-runtime/kernels/template-selection",
+      "parent": "codegen-runtime/kernels",
+      "title": "模板候选与方案选择",
+      "directory": "04-codegen-runtime/01-kernels/03-template-selection",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/01-kernels/03-template-selection/README.md"
+    },
+    {
+      "id": "codegen-runtime/wrapper/entry-device-calls",
+      "parent": "codegen-runtime/wrapper",
+      "title": "入口与设备调用",
+      "directory": "04-codegen-runtime/02-wrapper/01-entry-device-calls",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/02-wrapper/01-entry-device-calls/README.md"
+    },
+    {
+      "id": "codegen-runtime/wrapper/memory-plan",
+      "parent": "codegen-runtime/wrapper",
+      "title": "存储计划与复用",
+      "directory": "04-codegen-runtime/02-wrapper/02-memory-plan",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/wrapper/outputs-subgraphs",
+      "parent": "codegen-runtime/wrapper",
+      "title": "输出、别名与子图",
+      "directory": "04-codegen-runtime/02-wrapper/03-outputs-subgraphs",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/tasks-wait",
+      "parent": "codegen-runtime/build-load",
+      "title": "编译任务与等待",
+      "directory": "04-codegen-runtime/03-build-load/01-tasks-wait",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/03-build-load/01-tasks-wait/README.md"
+    },
+    {
+      "id": "codegen-runtime/build-load/source-binary-cache",
+      "parent": "codegen-runtime/build-load",
+      "title": "源码和二进制缓存",
+      "directory": "04-codegen-runtime/03-build-load/02-source-binary-cache",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/03-build-load/02-source-binary-cache/README.md"
+    },
+    {
+      "id": "codegen-runtime/build-load/jit-aot-loading",
+      "parent": "codegen-runtime/build-load",
+      "title": "JIT 与 AOT 装载",
+      "directory": "04-codegen-runtime/03-build-load/03-jit-aot-loading",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/03-build-load/03-jit-aot-loading/README.md"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime/keys-candidates",
+      "parent": "codegen-runtime/cache-runtime",
+      "title": "键与候选适用性",
+      "directory": "04-codegen-runtime/04-cache-runtime/01-keys-candidates",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime/restore-persist",
+      "parent": "codegen-runtime/cache-runtime",
+      "title": "恢复与持久化",
+      "directory": "04-codegen-runtime/04-cache-runtime/02-restore-persist",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime/call-adaptation",
+      "parent": "codegen-runtime/cache-runtime",
+      "title": "调用适配与 CUDA Graph",
+      "directory": "04-codegen-runtime/04-cache-runtime/03-call-adaptation",
+      "status": "本层完成",
+      "path": "04-codegen-runtime/04-cache-runtime/03-call-adaptation/README.md"
+    },
+    {
+      "id": "graph-preparation/rewrites/patterns/registration",
+      "parent": "graph-preparation/rewrites/patterns",
+      "title": "规则构造与登记",
+      "directory": "01-graph-preparation/02-rewrites/03-patterns/01-registration",
+      "status": "待展开"
+    },
+    {
+      "id": "graph-preparation/rewrites/patterns/matching",
+      "parent": "graph-preparation/rewrites/patterns",
+      "title": "模式与匹配状态",
+      "directory": "01-graph-preparation/02-rewrites/03-patterns/02-matching",
+      "status": "待展开"
+    },
+    {
+      "id": "graph-preparation/rewrites/patterns/application",
+      "parent": "graph-preparation/rewrites/patterns",
+      "title": "候选应用与图维护",
+      "directory": "01-graph-preparation/02-rewrites/03-patterns/03-application",
+      "status": "待展开"
+    },
+    {
+      "id": "graph-preparation/rewrites/batch-communication/batch",
+      "parent": "graph-preparation/rewrites/batch-communication",
+      "title": "同类算子批处理",
+      "directory": "01-graph-preparation/02-rewrites/04-batch-communication/01-batch",
+      "status": "待展开"
+    },
+    {
+      "id": "graph-preparation/rewrites/batch-communication/tp",
+      "parent": "graph-preparation/rewrites/batch-communication",
+      "title": "TP 计算与通信组合",
+      "directory": "01-graph-preparation/02-rewrites/04-batch-communication/02-tp",
+      "status": "待展开"
+    },
+    {
+      "id": "graph-preparation/rewrites/batch-communication/ddp",
+      "parent": "graph-preparation/rewrites/batch-communication",
+      "title": "DDP 通信分桶与等待安排",
+      "directory": "01-graph-preparation/02-rewrites/04-batch-communication/03-ddp",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/backends-loops/registration",
+      "parent": "codegen-runtime/kernels/backends-loops",
+      "title": "后端注册与能力查询",
+      "directory": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration",
+      "status": "叶子·逐行完成",
+      "path": "04-codegen-runtime/01-kernels/01-backends-loops/01-registration/README.md"
+    },
+    {
+      "id": "codegen-runtime/kernels/backends-loops/dispatch",
+      "parent": "codegen-runtime/kernels/backends-loops",
+      "title": "调度实例与后端委托",
+      "directory": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch",
+      "status": "叶子·逐行完成",
+      "path": "04-codegen-runtime/01-kernels/01-backends-loops/02-dispatch/README.md"
+    },
+    {
+      "id": "codegen-runtime/kernels/backends-loops/loops",
+      "parent": "codegen-runtime/kernels/backends-loops",
+      "title": "循环展开与 kernel 分组",
+      "directory": "04-codegen-runtime/01-kernels/01-backends-loops/03-loops",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/wrapper/entry-device-calls/entry-assembly",
+      "parent": "codegen-runtime/wrapper/entry-device-calls",
+      "title": "入口参数与程序装配",
+      "directory": "04-codegen-runtime/02-wrapper/01-entry-device-calls/01-entry-assembly",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/wrapper/entry-device-calls/contexts-streams",
+      "parent": "codegen-runtime/wrapper/entry-device-calls",
+      "title": "设备上下文与 stream",
+      "directory": "04-codegen-runtime/02-wrapper/01-entry-device-calls/02-contexts-streams",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/wrapper/entry-device-calls/launch-arguments",
+      "parent": "codegen-runtime/wrapper/entry-device-calls",
+      "title": "kernel 调用与启动参数",
+      "directory": "04-codegen-runtime/02-wrapper/01-entry-device-calls/03-launch-arguments",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/fusion/legality-backends/constraints-deps",
+      "parent": "scheduling/fusion/legality-backends",
+      "title": "通用约束与读写匹配",
+      "directory": "03-scheduling/02-fusion/02-legality-backends/01-constraints-deps",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/fusion/legality-backends/device-predicates",
+      "parent": "scheduling/fusion/legality-backends",
+      "title": "设备融合判断",
+      "directory": "03-scheduling/02-fusion/02-legality-backends/02-device-predicates",
+      "status": "待展开"
+    },
+    {
+      "id": "scheduling/fusion/legality-backends/cycles-benchmark",
+      "parent": "scheduling/fusion/legality-backends",
+      "title": "环检测与融合收益",
+      "directory": "03-scheduling/02-fusion/02-legality-backends/03-cycles-benchmark",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/expressions-code/ops-types",
+      "parent": "codegen-runtime/kernels/expressions-code",
+      "title": "ops 解释与类型语义",
+      "directory": "04-codegen-runtime/01-kernels/02-expressions-code/01-ops-types",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/expressions-code/arguments-memory",
+      "parent": "codegen-runtime/kernels/expressions-code",
+      "title": "参数索引与访存",
+      "directory": "04-codegen-runtime/01-kernels/02-expressions-code/02-arguments-memory",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/expressions-code/cse-buffers",
+      "parent": "codegen-runtime/kernels/expressions-code",
+      "title": "临时值复用与生成区",
+      "directory": "04-codegen-runtime/01-kernels/02-expressions-code/03-cse-buffers",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/external-fallback/registration-layout",
+      "parent": "lowering/special-ops/external-fallback",
+      "title": "注册、派发与布局约束",
+      "directory": "02-lowering/04-special-ops/01-external-fallback/01-registration-layout",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/external-fallback/packing-outputs",
+      "parent": "lowering/special-ops/external-fallback",
+      "title": "参数物化与输出描述",
+      "directory": "02-lowering/04-special-ops/01-external-fallback/02-packing-outputs",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/external-fallback/calls-effects",
+      "parent": "lowering/special-ops/external-fallback",
+      "title": "调用生成与副作用",
+      "directory": "02-lowering/04-special-ops/01-external-fallback/03-calls-effects",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/template-integration/matrix-conv-choices",
+      "parent": "lowering/special-ops/template-integration",
+      "title": "矩阵与卷积的候选接入",
+      "directory": "02-lowering/04-special-ops/02-template-integration/01-matrix-conv-choices",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/template-integration/composite-lists",
+      "parent": "lowering/special-ops/template-integration",
+      "title": "列表与复合计算",
+      "directory": "02-lowering/04-special-ops/02-template-integration/02-composite-lists",
+      "status": "待展开"
+    },
+    {
+      "id": "lowering/special-ops/template-integration/user-special-calls",
+      "parent": "lowering/special-ops/template-integration",
+      "title": "用户 kernel 与专用调用",
+      "directory": "02-lowering/04-special-ops/02-template-integration/03-user-special-calls",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/template-selection/callers-templates",
+      "parent": "codegen-runtime/kernels/template-selection",
+      "title": "候选对象与模板生成",
+      "directory": "04-codegen-runtime/01-kernels/03-template-selection/01-callers-templates",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/template-selection/compile-benchmark",
+      "parent": "codegen-runtime/kernels/template-selection",
+      "title": "预编译、校验与计时",
+      "directory": "04-codegen-runtime/01-kernels/03-template-selection/02-compile-benchmark",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/kernels/template-selection/cache-delivery",
+      "parent": "codegen-runtime/kernels/template-selection",
+      "title": "计时缓存与结果交付",
+      "directory": "04-codegen-runtime/01-kernels/03-template-selection/03-cache-delivery",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/tasks-wait/backend-tasks",
+      "parent": "codegen-runtime/build-load/tasks-wait",
+      "title": "编译入口与后端任务",
+      "directory": "04-codegen-runtime/03-build-load/01-tasks-wait/01-backend-tasks",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/tasks-wait/pools-workers",
+      "parent": "codegen-runtime/build-load/tasks-wait",
+      "title": "线程池、进程池与 worker",
+      "directory": "04-codegen-runtime/03-build-load/01-tasks-wait/02-pools-workers",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/tasks-wait/future-scope",
+      "parent": "codegen-runtime/build-load/tasks-wait",
+      "title": "Future 解析与 scope 交接",
+      "directory": "04-codegen-runtime/03-build-load/01-tasks-wait/03-future-scope",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/source-binary-cache/keys-files",
+      "parent": "codegen-runtime/build-load/source-binary-cache",
+      "title": "缓存键、路径与原子写入",
+      "directory": "04-codegen-runtime/03-build-load/02-source-binary-cache/01-keys-files",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/source-binary-cache/conditions-locks",
+      "parent": "codegen-runtime/build-load/source-binary-cache",
+      "title": "编译条件与锁内构建",
+      "directory": "04-codegen-runtime/03-build-load/02-source-binary-cache/02-conditions-locks",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/source-binary-cache/backend-artifacts",
+      "parent": "codegen-runtime/build-load/source-binary-cache",
+      "title": "后端产物与进程内复用",
+      "directory": "04-codegen-runtime/03-build-load/02-source-binary-cache/03-backend-artifacts",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/jit-aot-loading/jit-module",
+      "parent": "codegen-runtime/build-load/jit-aot-loading",
+      "title": "JIT 模块与入口",
+      "directory": "04-codegen-runtime/03-build-load/03-jit-aot-loading/01-jit-module",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/jit-aot-loading/aot-artifacts",
+      "parent": "codegen-runtime/build-load/jit-aot-loading",
+      "title": "AOT 产物构建",
+      "directory": "04-codegen-runtime/03-build-load/03-jit-aot-loading/02-aot-artifacts",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/build-load/jit-aot-loading/aot-container",
+      "parent": "codegen-runtime/build-load/jit-aot-loading",
+      "title": "AOT 容器装载与运行",
+      "directory": "04-codegen-runtime/03-build-load/03-jit-aot-loading/03-aot-container",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime/call-adaptation/policy-state",
+      "parent": "codegen-runtime/cache-runtime/call-adaptation",
+      "title": "编译后策略与运行状态",
+      "directory": "04-codegen-runtime/04-cache-runtime/03-call-adaptation/01-policy-state",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime/call-adaptation/alignment-call",
+      "parent": "codegen-runtime/cache-runtime/call-adaptation",
+      "title": "输入对齐与调用转交",
+      "directory": "04-codegen-runtime/04-cache-runtime/03-call-adaptation/02-alignment-call",
+      "status": "待展开"
+    },
+    {
+      "id": "codegen-runtime/cache-runtime/call-adaptation/capture-trees",
+      "parent": "codegen-runtime/cache-runtime/call-adaptation",
+      "title": "捕获、重放与 Graph Trees",
+      "directory": "04-codegen-runtime/04-cache-runtime/03-call-adaptation/03-capture-trees",
+      "status": "待展开"
+    }
+  ],
+  "breadth_first_queue": [
+    "lowering/interpretation/inputs-constants",
+    "lowering/interpretation/dispatch-results",
+    "lowering/expressions/pointwise-types",
+    "lowering/expressions/views-indexing",
+    "lowering/expressions/reductions-scans",
+    "lowering/materialization/storage-realization",
+    "lowering/materialization/output-layouts",
+    "lowering/materialization/mutation-values",
+    "lowering/special-ops/structured-subgraphs",
+    "scheduling/dependencies/read-write-nodes",
+    "scheduling/dependencies/alias-mutation-symbols",
+    "scheduling/dependencies/order-liveness",
+    "scheduling/fusion/candidates-priority",
+    "scheduling/fusion/merge-groups",
+    "scheduling/lifetime/last-usage",
+    "scheduling/lifetime/codegen-flush",
+    "scheduling/lifetime/release-local",
+    "codegen-runtime/wrapper/memory-plan",
+    "codegen-runtime/wrapper/outputs-subgraphs",
+    "codegen-runtime/cache-runtime/keys-candidates",
+    "codegen-runtime/cache-runtime/restore-persist",
+    "graph-preparation/rewrites/patterns/registration",
+    "graph-preparation/rewrites/patterns/matching",
+    "graph-preparation/rewrites/patterns/application",
+    "graph-preparation/rewrites/batch-communication/batch",
+    "graph-preparation/rewrites/batch-communication/tp",
+    "graph-preparation/rewrites/batch-communication/ddp",
+    "lowering/special-ops/external-fallback/registration-layout",
+    "lowering/special-ops/external-fallback/packing-outputs",
+    "lowering/special-ops/external-fallback/calls-effects",
+    "lowering/special-ops/template-integration/matrix-conv-choices",
+    "lowering/special-ops/template-integration/composite-lists",
+    "lowering/special-ops/template-integration/user-special-calls",
+    "scheduling/fusion/legality-backends/constraints-deps",
+    "scheduling/fusion/legality-backends/device-predicates",
+    "scheduling/fusion/legality-backends/cycles-benchmark",
+    "codegen-runtime/kernels/backends-loops/loops",
+    "codegen-runtime/kernels/expressions-code/ops-types",
+    "codegen-runtime/kernels/expressions-code/arguments-memory",
+    "codegen-runtime/kernels/expressions-code/cse-buffers",
+    "codegen-runtime/kernels/template-selection/callers-templates",
+    "codegen-runtime/kernels/template-selection/compile-benchmark",
+    "codegen-runtime/kernels/template-selection/cache-delivery",
+    "codegen-runtime/wrapper/entry-device-calls/entry-assembly",
+    "codegen-runtime/wrapper/entry-device-calls/contexts-streams",
+    "codegen-runtime/wrapper/entry-device-calls/launch-arguments",
+    "codegen-runtime/build-load/tasks-wait/backend-tasks",
+    "codegen-runtime/build-load/tasks-wait/pools-workers",
+    "codegen-runtime/build-load/tasks-wait/future-scope",
+    "codegen-runtime/build-load/source-binary-cache/keys-files",
+    "codegen-runtime/build-load/source-binary-cache/conditions-locks",
+    "codegen-runtime/build-load/source-binary-cache/backend-artifacts",
+    "codegen-runtime/build-load/jit-aot-loading/jit-module",
+    "codegen-runtime/build-load/jit-aot-loading/aot-artifacts",
+    "codegen-runtime/build-load/jit-aot-loading/aot-container",
+    "codegen-runtime/cache-runtime/call-adaptation/policy-state",
+    "codegen-runtime/cache-runtime/call-adaptation/alignment-call",
+    "codegen-runtime/cache-runtime/call-adaptation/capture-trees"
+  ],
+  "next": "lowering/expressions/pointwise-types",
+  "shared_ownership": {
+    "FX图缓存": "codegen-runtime"
+  },
+  "deeper_structure": "四个主模块的直接子模块已完成流程篇，开始按广度优先完成现有叶子；新增拆分仅用于独立复杂职责。",
+  "priority_focus": {
+    "requested_at_cst": "2026-10-20 20:54 +0800",
+    "request": "写完这个之后，优先讲解和支持新设备有关系的部分模块",
+    "policy": "先完成本轮图收尾；之后设备接入相关节点及其后代优先，选定范围内保持层次顺序，其余保留广度优先。整体范围不缩减。",
+    "nodes": [
+      "codegen-runtime/kernels/backends-loops",
+      "graph-preparation/rewrites/patterns",
+      "codegen-runtime/wrapper/entry-device-calls",
+      "lowering/interpretation/context-symbols",
+      "scheduling/fusion/legality-backends",
+      "codegen-runtime/kernels/expressions-code",
+      "lowering/special-ops/external-fallback",
+      "lowering/special-ops/template-integration",
+      "codegen-runtime/kernels/template-selection",
+      "codegen-runtime/build-load/tasks-wait",
+      "codegen-runtime/build-load/source-binary-cache",
+      "codegen-runtime/build-load/jit-aot-loading",
+      "codegen-runtime/cache-runtime/call-adaptation",
+      "lowering/expressions",
+      "lowering/materialization",
+      "scheduling/dependencies",
+      "scheduling/lifetime"
+    ],
+    "reason": "设备接入：后端与运行时、模式匹配/子图替换（自定义融合算子）、布局/物化/alias/mutation、依赖/副作用/生命周期与异步释放。只调整现有树优先范围，不增加目录。",
+    "additional_requests_cst": [
+      "2026-10-20 22:56 +0800",
+      "2026-10-20 23:08 +0800"
+    ]
+  },
+  "reading_queue": [
+    "lowering/expressions/pointwise-types",
+    "lowering/expressions/views-indexing",
+    "lowering/expressions/reductions-scans",
+    "lowering/materialization/storage-realization",
+    "lowering/materialization/output-layouts",
+    "lowering/materialization/mutation-values",
+    "scheduling/dependencies/read-write-nodes",
+    "scheduling/dependencies/alias-mutation-symbols",
+    "scheduling/dependencies/order-liveness",
+    "scheduling/lifetime/last-usage",
+    "scheduling/lifetime/codegen-flush",
+    "scheduling/lifetime/release-local",
+    "codegen-runtime/kernels/backends-loops/loops",
+    "graph-preparation/rewrites/patterns/registration",
+    "graph-preparation/rewrites/patterns/matching",
+    "graph-preparation/rewrites/patterns/application",
+    "codegen-runtime/wrapper/entry-device-calls/entry-assembly",
+    "codegen-runtime/wrapper/entry-device-calls/contexts-streams",
+    "codegen-runtime/wrapper/entry-device-calls/launch-arguments",
+    "scheduling/fusion/legality-backends/constraints-deps",
+    "scheduling/fusion/legality-backends/device-predicates",
+    "scheduling/fusion/legality-backends/cycles-benchmark",
+    "codegen-runtime/kernels/expressions-code/ops-types",
+    "codegen-runtime/kernels/expressions-code/arguments-memory",
+    "codegen-runtime/kernels/expressions-code/cse-buffers",
+    "lowering/special-ops/external-fallback/registration-layout",
+    "lowering/special-ops/external-fallback/packing-outputs",
+    "lowering/special-ops/external-fallback/calls-effects",
+    "lowering/special-ops/template-integration/matrix-conv-choices",
+    "lowering/special-ops/template-integration/composite-lists",
+    "lowering/special-ops/template-integration/user-special-calls",
+    "codegen-runtime/kernels/template-selection/callers-templates",
+    "codegen-runtime/kernels/template-selection/compile-benchmark",
+    "codegen-runtime/kernels/template-selection/cache-delivery",
+    "codegen-runtime/build-load/tasks-wait/backend-tasks",
+    "codegen-runtime/build-load/tasks-wait/pools-workers",
+    "codegen-runtime/build-load/tasks-wait/future-scope",
+    "codegen-runtime/build-load/source-binary-cache/keys-files",
+    "codegen-runtime/build-load/source-binary-cache/conditions-locks",
+    "codegen-runtime/build-load/source-binary-cache/backend-artifacts",
+    "codegen-runtime/build-load/jit-aot-loading/jit-module",
+    "codegen-runtime/build-load/jit-aot-loading/aot-artifacts",
+    "codegen-runtime/build-load/jit-aot-loading/aot-container",
+    "codegen-runtime/cache-runtime/call-adaptation/policy-state",
+    "codegen-runtime/cache-runtime/call-adaptation/alignment-call",
+    "codegen-runtime/cache-runtime/call-adaptation/capture-trees",
+    "lowering/interpretation/inputs-constants",
+    "lowering/interpretation/dispatch-results",
+    "lowering/special-ops/structured-subgraphs",
+    "scheduling/fusion/candidates-priority",
+    "scheduling/fusion/merge-groups",
+    "codegen-runtime/wrapper/memory-plan",
+    "codegen-runtime/wrapper/outputs-subgraphs",
+    "codegen-runtime/cache-runtime/keys-candidates",
+    "codegen-runtime/cache-runtime/restore-persist",
+    "graph-preparation/rewrites/batch-communication/batch",
+    "graph-preparation/rewrites/batch-communication/tp",
+    "graph-preparation/rewrites/batch-communication/ddp"
+  ]
+}

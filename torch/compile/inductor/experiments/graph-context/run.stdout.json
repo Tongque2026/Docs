@@ -1,0 +1,148 @@
+{
+  "fresh": {
+    "independent_shape_env": true,
+    "runtime_asserts_frozen": true,
+    "initial_device_types": [],
+    "wrapper": null,
+    "scheduler": null,
+    "reuse_shape_env": false
+  },
+  "assert_snapshot": {
+    "same_shape_env": true,
+    "copied_dict": true,
+    "shared_value_lists": true,
+    "source_keys_survive_pop": true,
+    "new_unknown_assert_error": "AssertionError",
+    "known_true_allowed": true,
+    "key": "u1"
+  },
+  "reuse_symbols": {
+    "sizes": [
+      "s1",
+      "s2"
+    ],
+    "strides": [
+      "s2",
+      "1"
+    ],
+    "source_sizes": [
+      "s1",
+      "s2"
+    ],
+    "symbols": 3,
+    "same_expressions": true
+  },
+  "fresh_symbols": {
+    "first_sizes": [
+      "s0",
+      "s1"
+    ],
+    "second_sizes": [
+      "s0",
+      "s2"
+    ],
+    "first_strides": [
+      "s1",
+      "1"
+    ],
+    "same_size_shared_symbol": true,
+    "static_size_stride": [
+      [
+        2,
+        3
+      ],
+      [
+        1,
+        2
+      ]
+    ]
+  },
+  "device_registration": {
+    "types": [
+      "cpu",
+      "cuda",
+      "xpu"
+    ],
+    "indices": [
+      0,
+      1
+    ],
+    "first_node_by_device": {
+      "cuda:0": "x_1",
+      "cuda:1": "x_1",
+      "xpu:0": "add"
+    },
+    "cpu_without_node_recorded": true,
+    "scope": "device metadata only; no CUDA/XPU allocation or runtime operation"
+  },
+  "mixed_devices": {
+    "types": [
+      "cpu",
+      "cuda",
+      "xpu"
+    ],
+    "error": "AssertionError",
+    "message": "Does not support mixing cuda+xpu",
+    "scope": "real wrapper selection rejection; metadata devices only"
+  },
+  "constant_sharing": {
+    "same_devices": true,
+    "same_constants": true,
+    "same_constant_names": true,
+    "separate_operations": true,
+    "folded": [
+      "folded"
+    ]
+  },
+  "subgraph": {
+    "name": "outer_branch",
+    "same_shape_env": true,
+    "separate_constants": true,
+    "separate_devices": true,
+    "modes": [
+      true,
+      true,
+      true
+    ],
+    "qualified_name": "outer_branch_buf0",
+    "unnamed_qualify": "buf0"
+  },
+  "scope_restore": {
+    "nested_graph_restored": true,
+    "exception_restored": true,
+    "distinct_current_nodes": true,
+    "outer_restored": true
+  },
+  "setter_timing": {
+    "installed_before_enter": true,
+    "restored_after_exit": true,
+    "missing_default": "NullHandler"
+  },
+  "thread_local": {
+    "workers": {
+      "b": true,
+      "a": true
+    },
+    "main_kept_own_graph": true
+  },
+  "feature_cache": {
+    "provider_calls": [
+      "cpu",
+      "cpu"
+    ],
+    "invalid_feature": "AssertionError",
+    "scope": "real has_feature and constructor cache with explicit provider fixture"
+  },
+  "lowering": {
+    "inputs": [
+      "x_1",
+      "y_1"
+    ],
+    "devices": [
+      "cpu"
+    ],
+    "first_device_node": "x_1",
+    "operations": 1,
+    "scope": "real CPU IR lowering; no kernel compilation/execution"
+  }
+}

@@ -1,0 +1,601 @@
+{
+  "canonical_recompile_boundary": {
+    "error": "SyntaxError"
+  },
+  "nested": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ]
+  },
+  "shared_inner": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default",
+      "aten.select.int"
+    ]
+  },
+  "path_mismatch": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              0
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              0
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ]
+  },
+  "different_base": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "select",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      },
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "_generalized_scatter",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ]
+  },
+  "copy_back": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": false,
+        "should_reinplace": true,
+        "always_mutating": false
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_inplace_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": false,
+        "should_reinplace": false,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice.Tensor",
+      "aten.copy_.default"
+    ]
+  },
+  "internal": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "add",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": true,
+        "should_reinplace": false,
+        "always_mutating": false
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter_1",
+        "target": "_generalized_scatter",
+        "inp": "add",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.select.int",
+            "args": [
+              0,
+              1
+            ],
+            "kwargs": {}
+          },
+          {
+            "target": "aten.slice.Tensor",
+            "args": [
+              0,
+              1,
+              3
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": false,
+        "output_realized": true,
+        "should_reinplace": false,
+        "always_mutating": false
+      }
+    ],
+    "final_targets": [
+      "aten.add.Tensor",
+      "aten.select.int",
+      "aten.select.int",
+      "aten.slice_scatter.default",
+      "aten.select_scatter.default"
+    ]
+  },
+  "diagonal": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.diagonal.default",
+            "args": [],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.diagonal.default",
+            "args": [],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "final_targets": [
+      "aten.clone",
+      "aten.diagonal.default",
+      "aten.copy_.default"
+    ]
+  },
+  "as_strided": {
+    "canonical": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.as_strided.default",
+            "args": [
+              [
+                2,
+                2
+              ],
+              [
+                4,
+                1
+              ],
+              5
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "after_core": [
+      {
+        "name": "_generalized_scatter",
+        "target": "_generalized_scatter",
+        "inp": "x_1",
+        "src": "s_1",
+        "views": [
+          {
+            "target": "aten.as_strided.default",
+            "args": [
+              [
+                2,
+                2
+              ],
+              [
+                4,
+                1
+              ],
+              5
+            ],
+            "kwargs": {}
+          }
+        ],
+        "input_realized": true,
+        "output_realized": true,
+        "should_reinplace": true,
+        "always_mutating": true
+      }
+    ],
+    "final_targets": [
+      "aten.clone",
+      "aten.as_strided.default",
+      "aten.copy_.default"
+    ]
+  },
+  "direct_functional": {
+    "same_object": false,
+    "shares_input": false
+  },
+  "direct_inplace": {
+    "same_object": true,
+    "shares_input": true
+  },
+  "direct_broadcast": {},
+  "copy_error": {
+    "error": "RuntimeError"
+  },
+  "view_error": {
+    "error": "IndexError"
+  },
+  "empty_path_decomposition": {
+    "error": "IndexError"
+  }
+}

@@ -1,0 +1,8 @@
+graph():
+    %x_1 : [num_users=1] = placeholder[target=x_1]
+    %s_1 : [num_users=1] = placeholder[target=s_1]
+    %add : [num_users=2] = call_function[target=torch.ops.aten.add.Tensor](args = (%x_1, 1), kwargs = {})
+    %select : [num_users=1] = call_function[target=torch.ops.aten.select.int](args = (%add, 0, 1), kwargs = {})
+    %slice_scatter : [num_users=1] = call_function[target=torch.ops.aten.slice_scatter.default](args = (%select, %s_1, 0, 1, 3), kwargs = {})
+    %select_scatter : [num_users=1] = call_function[target=torch.ops.aten.select_scatter.default](args = (%add, %slice_scatter, 0, 1), kwargs = {})
+    return (select_scatter,)
