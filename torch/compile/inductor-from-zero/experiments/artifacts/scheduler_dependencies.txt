@@ -1,0 +1,47 @@
+
+[ordinary_reduction] before compute_dependencies
+op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg0_1, index=3*c0, ranges={c0: 2})', 'MemoryDep(name=arg0_1, index=3*c0 + 1, ranges={c0: 2})', 'MemoryDep(name=arg0_1, index=3*c0 + 2, ranges={c0: 2})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 2})']; unmet=[]
+[ordinary_reduction] after compute_dependencies
+op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg0_1, index=3*c0, ranges={c0: 2})', 'MemoryDep(name=arg0_1, index=3*c0 + 1, ranges={c0: 2})', 'MemoryDep(name=arg0_1, index=3*c0 + 2, ranges={c0: 2})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 2})']; unmet=[]
+mutation_renames={}
+mutation_real_name={}
+users[buf0]=['OUTPUT(weak=False,inplace=False)']
+
+[extern_then_pointwise] before compute_dependencies
+op0: scheduler_type=ExternKernelSchedulerNode; ir_type=ExternKernelOut; outputs=['buf0 aliases=[] mutations=[]']; reads=['StarDep(name=arg1_1)', 'StarDep(name=arg0_1)']; writes=['StarDep(name=buf0)']; unmet=[]
+op1: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf1 aliases=[] mutations=[]']; reads=['MemoryDep(name=buf0, index=c0, ranges={c0: 8})']; writes=['MemoryDep(name=buf1, index=c0, ranges={c0: 8})']; unmet=['MemoryDep(name=buf0, index=c0, ranges={c0: 8})']
+[extern_then_pointwise] after compute_dependencies
+op0: scheduler_type=ExternKernelSchedulerNode; ir_type=ExternKernelOut; outputs=['buf0 aliases=[] mutations=[]']; reads=['StarDep(name=arg1_1)', 'StarDep(name=arg0_1)']; writes=['StarDep(name=buf0)']; unmet=[]
+op1: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf1 aliases=[] mutations=[]']; reads=['MemoryDep(name=buf0, index=c0, ranges={c0: 8})']; writes=['MemoryDep(name=buf1, index=c0, ranges={c0: 8})']; unmet=['MemoryDep(name=buf0, index=c0, ranges={c0: 8})']
+mutation_renames={}
+mutation_real_name={}
+users[buf0]=['op1(weak=False,inplace=True)']
+users[buf1]=['OUTPUT(weak=False,inplace=False)']
+
+[input_mutation] before compute_dependencies
+op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg0_1, index=c0, ranges={c0: 3})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 3})']; unmet=[]
+op1: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=["buf1 aliases=[] mutations=['arg0_1']"]; reads=['MemoryDep(name=arg1_1, index=c0, ranges={c0: 3})']; writes=['MemoryDep(name=buf1, index=c0, ranges={c0: 3})']; unmet=[]
+[input_mutation] after compute_dependencies
+op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg0_1, index=c0, ranges={c0: 3})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 3})']; unmet=[]
+op1: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=["buf1 aliases=[] mutations=['arg0_1']"]; reads=['MemoryDep(name=arg1_1, index=c0, ranges={c0: 3})', 'StarDep(name=arg0_1)', 'WeakDep(name=buf0, mutating_buf=buf1)']; writes=['MemoryDep(name=buf1, index=c0, ranges={c0: 3})']; unmet=['WeakDep(name=buf0, mutating_buf=buf1)']
+mutation_renames={'arg0_1': 'buf1'}
+mutation_real_name={'buf1': 'arg0_1'}
+users[buf0]=['op1(weak=True,inplace=False)', 'OUTPUT(weak=False,inplace=False)']
+users[buf1]=['OUTPUT(weak=False,inplace=False)']
+
+[read_after_input_mutation] before compute_dependencies
+op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg1_1, index=c0, ranges={c0: 3})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 3})']; unmet=[]
+op1: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=["buf1 aliases=[] mutations=['arg0_1']"]; reads=['MemoryDep(name=arg1_1, index=c0, ranges={c0: 3})']; writes=['MemoryDep(name=buf1, index=c0, ranges={c0: 3})']; unmet=[]
+[read_after_input_mutation] after compute_dependencies
+op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg1_1, index=c0, ranges={c0: 3})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 3})']; unmet=[]
+op1: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=["buf1 aliases=[] mutations=['arg0_1']"]; reads=['MemoryDep(name=arg1_1, index=c0, ranges={c0: 3})', 'StarDep(name=arg0_1)']; writes=['MemoryDep(name=buf1, index=c0, ranges={c0: 3})']; unmet=[]
+mutation_renames={'arg0_1': 'buf1'}
+mutation_real_name={'buf1': 'arg0_1'}
+users[buf0]=['OUTPUT(weak=False,inplace=False)']
+users[buf1]=['OUTPUT(weak=False,inplace=False)']
+ordinary_result=[12.0, 30.0]
+extern_result_shape=[2, 4]
+old=[1.0, 2.0, 3.0]
+mutated_x=[9.0, 9.0, 9.0]
+post_mutation_result=[8.0, 10.0, 12.0]
+post_mutated_x=[4.0, 5.0, 6.0]

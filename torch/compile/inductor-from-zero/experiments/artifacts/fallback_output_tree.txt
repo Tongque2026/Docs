@@ -1,0 +1,5 @@
+histc:operations=['FallbackKernel', 'MultiOutput'];outputs=['buf1:indices=[]:input=buf0']
+sort:operations=['FallbackKernel', 'MultiOutput', 'MultiOutput'];outputs=["buf1:indices=[(<class 'tuple'>, 0)]:input=buf0", "buf2:indices=[(<class 'tuple'>, 1)]:input=buf0"]
+histc_result=[1.0, 2.0, 0.0, 1.0]
+sort_values=[1.0, 2.0, 3.0]
+sort_indices=[1, 2, 0]

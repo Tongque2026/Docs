@@ -3,3 +3,6 @@
 torch/compile/inductor/experiments/**/*.txt -whitespace
 torch/compile/inductor/experiments/**/*_output.py -whitespace
 torch/compile/inductor/experiments/**/*_output.cpp -whitespace
+torch/compile/inductor-from-zero/experiments/**/*.txt -whitespace
+torch/compile/inductor-from-zero/experiments/**/*_output.py -whitespace
+torch/compile/inductor-from-zero/experiments/**/*_output.cpp -whitespace

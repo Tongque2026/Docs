@@ -1,0 +1,29 @@
+broken_order=y,add,x
+lint_before_sort=Argument 'x' of Node 'add' was used before it has been defined! Please check that Nodes in the graph are topologically ordered
+fixed_order=y,x,add
+stable_independent_order=b,a,add
+deep_broken_order=output,mul,add,x,y
+deep_fixed_order=x,y,add,mul,output
+same_dependency_waiters=x,neg,relu
+last_arg_recheck=y,x,add checks=3
+nested_args=x,y,x,y
+external_dependency=AssertionError
+cycle=AssertionError
+empty_graph=ok
+before_recompile=5.0
+after_recompile=6.0
+generated_code=def forward(self, a, b): add = a * b; a = b = None return add
+meta_before_add=[2, 3]
+meta_before_relu=[2, 3]
+shape_change_ops=aten.add.Tensor,aten.relu.default
+meta_after_add=[4, 3]
+meta_after_relu=[4, 3]
+shape_second_update_ops=
+equal_meta_ops=aten.sub.Tensor
+equal_meta_second_ops=aten.sub.Tensor
+dtype_change_ops=aten.eq.Tensor before=torch.float32 after=torch.float32
+missing_fake_ops=
+python_target_meta_unchanged=torch.float32
+alias_change_ops=aten.clone.default,aten.relu.default old_shared=True new_shared=False
+dce_before=aten.sin.default,aten.copy_.default
+dce_after=aten.copy_.default

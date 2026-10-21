@@ -1,0 +1,63 @@
+[pointwise] create_backend device=cpu type=CppScheduling
+[pointwise] visit op0_op1 type=FusedSchedulerNode device=cpu current_device=None last_usage=['buf0', 'arg0_1'] available=['arg0_1'] completed=[] pending_free=[]
+[pointwise] scheduler.flush before available=['arg0_1'] completed=[] pending_free=[]
+[pointwise] cpp.flush scheduled_nodes=[] ready=False
+[pointwise] scheduler.flush after available=['arg0_1'] completed=[] pending_free=[]
+[pointwise] dispatch cpp.codegen_node op0_op1 type=FusedSchedulerNode members=['op0', 'op1'] available=['arg0_1'] completed=[] pending_free=['buf0', 'arg0_1']
+[pointwise] scheduler.flush before available=['arg0_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=['buf0', 'arg0_1']
+[pointwise] cpp.flush scheduled_nodes=['op0', 'op1'] ready=False
+[pointwise] scheduler.flush after available=['arg0_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=[]
+[mixed] create_backend device=cpu type=CppScheduling
+[mixed] visit op0_op1 type=FusedSchedulerNode device=cpu current_device=None last_usage=['buf0', 'arg0_1'] available=['arg0_1', 'arg1_1', 'arg2_1'] completed=[] pending_free=[]
+[mixed] scheduler.flush before available=['arg0_1', 'arg1_1', 'arg2_1'] completed=[] pending_free=[]
+[mixed] cpp.flush scheduled_nodes=[] ready=False
+[mixed] scheduler.flush after available=['arg0_1', 'arg1_1', 'arg2_1'] completed=[] pending_free=[]
+[mixed] dispatch cpp.codegen_node op0_op1 type=FusedSchedulerNode members=['op0', 'op1'] available=['arg0_1', 'arg1_1', 'arg2_1'] completed=[] pending_free=['buf0', 'arg0_1']
+[mixed] visit op2 type=ExternKernelSchedulerNode device=cpu current_device=cpu last_usage=['arg1_1', 'arg2_1'] available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=['buf0', 'arg0_1']
+[mixed] scheduler.flush before available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=['buf0', 'arg0_1']
+[mixed] cpp.flush scheduled_nodes=['op0', 'op1'] ready=False
+[mixed] scheduler.flush after available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=[]
+[mixed] dispatch extern op2 ir=ExternKernelOut available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=['arg1_1', 'arg2_1']
+[mixed] visit op3 type=SchedulerNode device=cpu current_device=cpu last_usage=['buf2'] available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1', 'buf2'] completed=['op0', 'op1', 'op2'] pending_free=[]
+[mixed] dispatch cpp.codegen_node op3 type=SchedulerNode members=['op3'] available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1', 'buf2'] completed=['op0', 'op1', 'op2'] pending_free=['buf2']
+[mixed] scheduler.flush before available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1', 'buf2', 'buf3'] completed=['op0', 'op1', 'op2', 'op3'] pending_free=['buf2']
+[mixed] cpp.flush scheduled_nodes=['op3'] ready=False
+[mixed] scheduler.flush after available=['arg0_1', 'arg1_1', 'arg2_1', 'buf0', 'buf1', 'buf2', 'buf3'] completed=['op0', 'op1', 'op2', 'op3'] pending_free=[]
+[fallback] visit op0 type=ExternKernelSchedulerNode device=cpu current_device=None last_usage=['arg0_1'] available=['arg0_1'] completed=[] pending_free=[]
+[fallback] scheduler.flush before available=['arg0_1'] completed=[] pending_free=[]
+[fallback] scheduler.flush after available=['arg0_1'] completed=[] pending_free=[]
+[fallback] dispatch extern op0 ir=FallbackKernel available=['arg0_1'] completed=[] pending_free=['arg0_1']
+[fallback] create_backend device=cpu type=CppScheduling
+[fallback] visit op1 type=ExternKernelSchedulerNode device=cpu current_device=cpu last_usage=['buf0'] available=['arg0_1', 'buf0'] completed=['op0'] pending_free=[]
+[fallback] scheduler.flush before available=['arg0_1', 'buf0'] completed=['op0'] pending_free=[]
+[fallback] cpp.flush scheduled_nodes=[] ready=False
+[fallback] scheduler.flush after available=['arg0_1', 'buf0'] completed=['op0'] pending_free=[]
+[fallback] dispatch extern op1 ir=MultiOutput available=['arg0_1', 'buf0'] completed=['op0'] pending_free=['buf0']
+[fallback] scheduler.flush before available=['arg0_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=[]
+[fallback] cpp.flush scheduled_nodes=[] ready=False
+[fallback] scheduler.flush after available=['arg0_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=[]
+[template_mm] create_backend device=cpu type=CppScheduling
+[template_mm] visit op0 type=ExternKernelSchedulerNode device=cpu current_device=None last_usage=['arg0_1', 'arg1_1'] available=['arg0_1', 'arg1_1'] completed=[] pending_free=[]
+[template_mm] scheduler.flush before available=['arg0_1', 'arg1_1'] completed=[] pending_free=[]
+[template_mm] cpp.flush scheduled_nodes=[] ready=False
+[template_mm] scheduler.flush after available=['arg0_1', 'arg1_1'] completed=[] pending_free=[]
+[template_mm] dispatch extern op0 ir=ExternKernelOut available=['arg0_1', 'arg1_1'] completed=[] pending_free=['arg0_1', 'arg1_1']
+[template_mm] visit op1 type=SchedulerNode device=cpu current_device=cpu last_usage=['buf0'] available=['arg0_1', 'arg1_1', 'buf0'] completed=['op0'] pending_free=[]
+[template_mm] dispatch cpp.codegen_node op1 type=SchedulerNode members=['op1'] available=['arg0_1', 'arg1_1', 'buf0'] completed=['op0'] pending_free=['buf0']
+[template_mm] scheduler.flush before available=['arg0_1', 'arg1_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=['buf0']
+[template_mm] cpp.flush scheduled_nodes=['op1'] ready=False
+[template_mm] scheduler.flush after available=['arg0_1', 'arg1_1', 'buf0', 'buf1'] completed=['op0', 'op1'] pending_free=[]
+[frozen_template_mm] create_backend device=cpu type=CppScheduling
+[frozen_template_mm] visit op0_op1 type=FusedSchedulerNode device=cpu current_device=None last_usage=['buf0', 'constant0', 'arg1_1'] available=['arg1_1', 'constant0'] completed=[] pending_free=[]
+[frozen_template_mm] scheduler.flush before available=['arg1_1', 'constant0'] completed=[] pending_free=[]
+[frozen_template_mm] cpp.flush scheduled_nodes=[] ready=False
+[frozen_template_mm] scheduler.flush after available=['arg1_1', 'constant0'] completed=[] pending_free=[]
+[frozen_template_mm] dispatch cpp.codegen_template op0 epilogues=['op1'] available=['arg1_1', 'constant0'] completed=[] pending_free=['buf0', 'constant0', 'arg1_1']
+[frozen_template_mm] scheduler.flush before available=['arg1_1', 'constant0', 'buf0'] completed=['op0'] pending_free=[]
+[frozen_template_mm] cpp.flush scheduled_nodes=[] ready=False
+[frozen_template_mm] scheduler.flush after available=['arg1_1', 'constant0', 'buf0'] completed=['op0'] pending_free=[]
+pointwise_result=[2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+mixed_shapes=[[8], [2, 4]]
+fallback_result=[1.0, 2.0, 0.0, 1.0]
+template_shape=[16, 16]
+frozen_template_shape=[64, 64]

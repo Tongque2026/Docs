@@ -1,0 +1,10 @@
+propagate_replaced_writable=target=aten.copy_.default,args_are_old_new_dst=True
+propagate_same_writable_calls=0
+run_node_events:
+node=arg0_1 op=placeholder target=arg0_1 users=[('call_function', 'aten.relu.default')] result=TensorBox->StorageBox->InputBuffer new_buffers=[] new_operations=[]
+node=arg1_1 op=placeholder target=arg1_1 users=[('call_function', 'aten.mm.default')] result=TensorBox->StorageBox->InputBuffer new_buffers=[] new_operations=[]
+node=relu op=call_function target=aten.relu.default users=[('call_function', 'aten.mm.default'), ('output', 'output')] result=TensorBox->StorageBox->ComputedBuffer new_buffers=['buf0'] new_operations=['op0']
+node=mm op=call_function target=aten.mm.default users=[('output', 'output')] result=TensorBox->StorageBox->ExternKernelOut new_buffers=['buf1'] new_operations=['op1']
+node=output op=output target=output users=[] result=NoneType new_buffers=[] new_operations=[]
+activation=[[0.0, 2.0], [3.0, 0.0]]
+product=[[6.0, 8.0], [3.0, 6.0]]

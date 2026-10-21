@@ -1,0 +1,25 @@
+pointwise: aten.add.Tensor => TensorBox->StorageBox->ComputedBuffer(size=[2, 3],stride=[3, 1])->Pointwise(ranges=[2, 3]); buffers=1,operations=1
+pointwise: output => StorageBox->ComputedBuffer(size=[2, 3],stride=[3, 1])->Pointwise(ranges=[2, 3])
+broadcast: ExpandView.create input_size=[1, 3] new_size=[2, 3] => ReinterpretView(size=[2, 3],stride=[0, 1],offset=0)->StorageBox->InputBuffer
+broadcast: aten.add.Tensor => TensorBox->StorageBox->ComputedBuffer(size=[2, 3],stride=[3, 1])->Pointwise(ranges=[2, 3]); buffers=1,operations=1
+broadcast: output => StorageBox->ComputedBuffer(size=[2, 3],stride=[3, 1])->Pointwise(ranges=[2, 3])
+reduction: aten.sum.dim_IntList => TensorBox->StorageBox->ComputedBuffer(size=[2],stride=[1])->Reduction(ranges=[2],reduction_ranges=[128],type=sum); buffers=1,operations=1
+reduction: output => StorageBox->ComputedBuffer(size=[2],stride=[1])->Reduction(ranges=[2],reduction_ranges=[128],type=sum)
+reduction_keepdim: aten.sum.dim_IntList => TensorBox->StorageBox->ComputedBuffer(size=[2, 1],stride=[1, 1])->Reduction(ranges=[2, 1],reduction_ranges=[128],type=sum); buffers=1,operations=1
+reduction_keepdim: output => StorageBox->ComputedBuffer(size=[2, 1],stride=[1, 1])->Reduction(ranges=[2, 1],reduction_ranges=[128],type=sum)
+transpose: aten.permute.default => TensorBox->ReinterpretView(size=[3, 2],stride=[1, 3],offset=0)->StorageBox->InputBuffer; buffers=0,operations=0
+transpose: output => ReinterpretView(size=[3, 2],stride=[1, 3],offset=0)->StorageBox->InputBuffer
+reshape_contiguous: View.create input=StorageBox->InputBuffer new_size=[3, 2] => ReinterpretView(size=[3, 2],stride=[2, 1],offset=0)->StorageBox->InputBuffer
+reshape_contiguous: aten.reshape.default => TensorBox->ReinterpretView(size=[3, 2],stride=[2, 1],offset=0)->StorageBox->InputBuffer; buffers=0,operations=0
+reshape_contiguous: output => ReinterpretView(size=[3, 2],stride=[2, 1],offset=0)->StorageBox->InputBuffer
+reshape_pointwise: ExpandView.create input_size=[] new_size=[2, 3] => ExpandView(size=[2, 3])->Constant
+reshape_pointwise: aten.add.Tensor => TensorBox->StorageBox->Pointwise(ranges=[2, 3]); buffers=0,operations=0
+reshape_pointwise: View.create input=StorageBox->Pointwise(ranges=[2, 3]) new_size=[3, 2] => View(size=[3, 2])->StorageBox->Pointwise(ranges=[2, 3])
+reshape_pointwise: aten.reshape.default => TensorBox->ReinterpretView(size=[3, 2],stride=[2, 1],offset=0)->StorageBox->ComputedBuffer(size=[2, 3],stride=[3, 1])->Pointwise(ranges=[2, 3]); buffers=1,operations=1
+reshape_pointwise: output => ReinterpretView(size=[3, 2],stride=[2, 1],offset=0)->StorageBox->ComputedBuffer(size=[2, 3],stride=[3, 1])->Pointwise(ranges=[2, 3])
+direct_reindex [6]<-[2,3] index=[1,2] => (5,)
+direct_reindex [2,3]<-[6] index=[5] => (1, 2)
+direct_reindex fallback [2,3]<-[3,2] index=[2,1] => (1, 2)
+direct_reduction zero-size sum => TensorBox->StorageBox->Pointwise(ranges=[2])
+direct_reduction size-one argmax => TensorBox->StorageBox->Pointwise(ranges=[2])
+direct_reduction zero-size max => AssertionError: max not supported for zero-dimension tensors!

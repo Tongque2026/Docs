@@ -1,0 +1,10 @@
+cpu_input=[-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+cpu_result=[0.0, 0.0, 0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0]
+cpu_matches_eager=True
+triton_formula=xoffset=pid*XBLOCK; xindex=xoffset+arange(0,XBLOCK); xmask=xindex<xnumel
+mapping_xnumel=19 XBLOCK=8
+pid=0 indices=[0, 1, 2, 3, 4, 5, 6, 7] mask=[1, 1, 1, 1, 1, 1, 1, 1] active=[0, 1, 2, 3, 4, 5, 6, 7]
+pid=1 indices=[8, 9, 10, 11, 12, 13, 14, 15] mask=[1, 1, 1, 1, 1, 1, 1, 1] active=[8, 9, 10, 11, 12, 13, 14, 15]
+pid=2 indices=[16, 17, 18, 19, 20, 21, 22, 23] mask=[1, 1, 1, 0, 0, 0, 0, 0] active=[16, 17, 18]
+covered=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+triton_execution=not_run_no_cuda_or_triton

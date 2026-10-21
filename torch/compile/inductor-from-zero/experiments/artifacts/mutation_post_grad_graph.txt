@@ -1,0 +1,9 @@
+class <lambda>(torch.nn.Module):
+    def forward(self, arg0_1: "f32[3][1]cpu", arg1_1: "f32[3][1]cpu"):
+         # File: /work/learning/1021/56sol/inductor/experiments/06_mutation_storage.py:64 in fn, code: old = x + 1
+        add: "f32[3][1]cpu" = torch.ops.aten.add.Tensor(arg0_1, 1)
+        
+         # File: /work/learning/1021/56sol/inductor/experiments/06_mutation_storage.py:65 in fn, code: x.copy_(y)
+        copy_: "f32[3][1]cpu" = torch.ops.aten.copy_.default(arg0_1, arg1_1);  arg0_1 = arg1_1 = copy_ = None
+        return (add,)
+        

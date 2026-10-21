@@ -1,0 +1,11 @@
+mm/root: aten.mm.default => TensorBox->StorageBox->ExternKernelOut(name=buf0); operations=['ExternKernelOut']
+fallback_histc/root: aten.histc.default => TensorBox->StorageBox->MultiOutput(name=buf1)->FallbackKernel(name=buf0); operations=['FallbackKernel', 'MultiOutput']
+cond_true/true_graph_0: aten.add.Tensor => TensorBox->StorageBox->ComputedBuffer(name=true_graph_0_buf0); operations=['ComputedBuffer']
+cond_true/false_graph_0: aten.sub.Tensor => TensorBox->StorageBox->ComputedBuffer(name=false_graph_0_buf0); operations=['ComputedBuffer']
+cond_true/root: cond => list[TensorBox->StorageBox->MultiOutput(name=buf1)->Conditional(name=buf0)]; operations=['Conditional', 'MultiOutput']
+cond_true/root: <built-in function getitem> => TensorBox->StorageBox->MultiOutput(name=buf1)->Conditional(name=buf0); operations=['Conditional', 'MultiOutput']
+results:
+mm: result=[[0.0, 1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0], [8.0, 9.0, 10.0, 11.0], [12.0, 13.0, 14.0, 15.0]]
+fallback_histc: result=[1.0, 2.0, 0.0, 1.0]
+cond_true: result=[3.0, 5.0]
+cond_false: result=[1.0, 3.0]

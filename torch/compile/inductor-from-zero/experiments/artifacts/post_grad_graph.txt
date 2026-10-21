@@ -1,0 +1,10 @@
+class <lambda>(torch.nn.Module):
+    def forward(self, arg0_1: "f32[3][1]cpu", arg1_1: "f32[3][1]cpu"):
+         # File: /work/learning/1021/56sol/inductor/experiments/01_pointwise_pipeline.py:16 in fn, code: a = x + y
+        add: "f32[3][1]cpu" = torch.ops.aten.add.Tensor(arg0_1, arg1_1);  arg0_1 = arg1_1 = None
+        
+         # File: /work/learning/1021/56sol/inductor/experiments/01_pointwise_pipeline.py:17 in fn, code: return torch.relu(a) * 2
+        relu: "f32[3][1]cpu" = torch.ops.aten.relu.default(add);  add = None
+        mul: "f32[3][1]cpu" = torch.ops.aten.mul.Tensor(relu, 2);  relu = None
+        return (mul,)
+        

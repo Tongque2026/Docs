@@ -1,0 +1,9 @@
+aten.permute.default => TensorBox(size=[3, 128])->ReinterpretView(size=[3, 128])->StorageBox(size=[128, 3])->InputBuffer(name=arg0_1)(size=[128, 3]); operations=[]
+aten.add.Tensor => TensorBox(size=[3, 128])->StorageBox(size=[3, 128])->Pointwise(size=[3, 128]); operations=[]
+aten.relu.default => TensorBox(size=[3, 128])->StorageBox(size=[3, 128])->Pointwise(size=[3, 128]); operations=[]
+aten.sum.dim_IntList => TensorBox(size=[3])->StorageBox(size=[3])->ComputedBuffer(name=buf0)(size=[3]); operations=['ComputedBuffer']
+aten.unsqueeze.default => TensorBox(size=[1, 3])->ReinterpretView(size=[1, 3])->StorageBox(size=[3])->ComputedBuffer(name=buf0)(size=[3]); operations=['ComputedBuffer']
+aten.mm.default => TensorBox(size=[1, 2])->StorageBox(size=[1, 2])->ExternKernelOut(name=buf1)(size=[1, 2]); operations=['ComputedBuffer', 'ExternKernelOut']
+output => StorageBox(size=[3])->ComputedBuffer(name=buf0)(size=[3]) | StorageBox(size=[1, 2])->ExternKernelOut(name=buf1)(size=[1, 2])
+rows=[24512.0, 24640.0, 24768.0]
+projected=[[49280.0, 49408.0]]

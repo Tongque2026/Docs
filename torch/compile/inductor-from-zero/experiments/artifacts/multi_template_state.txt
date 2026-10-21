@@ -1,0 +1,5 @@
+before=None
+first=('triton_32', 5.0)
+after_first={'extern_mm': 8.0, 'triton_32': 5.0}
+second=('triton_32', 5.0)
+timing_calls=1

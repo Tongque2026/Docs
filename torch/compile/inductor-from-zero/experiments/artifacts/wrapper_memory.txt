@@ -1,0 +1,39 @@
+result_shape=(8, 8)
+matches_eager=True
+wrapper_lines:
+assert_size_stride(arg0_1, (8, 8), (8, 1))
+assert_size_stride(arg1_1, (8, 8), (8, 1))
+assert_size_stride(arg2_1, (8, 8), (8, 1))
+buf0 = empty_strided_cpu((8, 8), (8, 1), torch.float32)
+extern_kernels.mm(arg1_1, arg0_1, out=buf0)
+del arg0_1
+del arg1_1
+buf1 = buf0; del buf0  # reuse
+cpp_fused_relu_0(buf1)
+buf2 = empty_strided_cpu((8, 8), (8, 1), torch.float32)
+extern_kernels.mm(buf1, arg2_1, out=buf2)
+del arg2_1
+del buf1
+buf3 = buf2; del buf2  # reuse
+cpp_fused_sin_1(buf3)
+return (buf3, )
+pool_wrapper_lines:
+assert_size_stride(arg0_1, (8, 8), (8, 1))
+assert_size_stride(arg1_1, (8, 8), (8, 1))
+assert_size_stride(arg2_1, (8, 8), (8, 1))
+pool1 = empty_strided_cpu((8, 8), (8, 1), torch.float32)
+buf0 = pool1  # alloc
+extern_kernels.mm(arg1_1, arg0_1, out=buf0)
+del arg0_1
+del arg1_1
+buf1 = buf0;  # reuse
+cpp_fused_relu_0(buf1)
+pool0 = empty_strided_cpu((8, 8), (8, 1), torch.float32)
+buf2 = pool0  # alloc
+extern_kernels.mm(buf1, arg2_1, out=buf2)
+del arg2_1
+del pool1, buf0, buf1
+buf3 = buf2;  # reuse
+cpp_fused_sin_1(buf3)
+return (buf3, )
+pool_matches_eager=True

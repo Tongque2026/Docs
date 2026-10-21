@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2×3 tensor 与 3×2 transpose view 的共同物理存储</title>
+  <style>
+    :root { color-scheme: light; --line:#aeb8c4; --ink:#17212b; --muted:#52606d; --a:#e8f3ff; --b:#fff2cc; --head:#f4f6f8; }
+    body { margin: 0 auto; max-width: 1120px; padding: 28px; color: var(--ink); background: white; font: 16px/1.55 system-ui, sans-serif; }
+    h1,h2 { line-height:1.25; } p { max-width: 900px; }
+    code,.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .scroll { overflow-x:auto; margin: 18px 0 28px; }
+    table { border-collapse: collapse; min-width: 900px; width:100%; }
+    th,td { border:1px solid var(--line); padding:10px 8px; text-align:center; vertical-align:middle; }
+    th { background:var(--head); }
+    td.slot { min-width:110px; }
+    .original { background:var(--a); }
+    .view { background:var(--b); }
+    .muted { color:var(--muted); }
+    .formula { border-left:4px solid #4b86b4; padding:10px 14px; background:#f7fbff; }
+    .legend span { display:inline-block; padding:3px 9px; margin-right:8px; border:1px solid var(--line); }
+  </style>
+</head>
+<body>
+  <h1>同一块存储：x[2,3] 与 v=x.permute(1,0)</h1>
+  <p>条件：CPU float32，每个元素 4 byte；x 连续，shape=(2,3)、stride=(3,1)、offset=0。v 是共享存储的 view，shape=(3,2)、stride=(1,3)、offset=0。低地址从左向右；没有 padding。</p>
+  <p class="legend"><span class="original">x 的逻辑坐标</span><span class="view">v 的逻辑坐标</span></p>
+
+  <h2>物理槽位坐标不变，逻辑名字改变</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>物理元素位置</th><td class="slot">0</td><td class="slot">1</td><td class="slot">2</td><td class="slot">3</td><td class="slot">4</td><td class="slot">5</td></tr>
+      <tr><th>起始 byte</th><td>0</td><td>4</td><td>8</td><td>12</td><td>16</td><td>20</td></tr>
+      <tr class="original"><th>x 坐标</th><td>x[0,0]</td><td>x[0,1]</td><td>x[0,2]</td><td>x[1,0]</td><td>x[1,1]</td><td>x[1,2]</td></tr>
+      <tr><th>示例值</th><td>0</td><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr>
+      <tr class="view"><th>v 坐标</th><td>v[0,0]</td><td>v[1,0]</td><td>v[2,0]</td><td>v[0,1]</td><td>v[1,1]</td><td>v[2,1]</td></tr>
+    </table>
+  </div>
+
+  <h2>按 v 的逻辑行读取时，物理位置发生跳跃</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>v 的逻辑行</th><th>逻辑元素</th><th>对应 x</th><th>物理元素位置</th><th>得到的值</th></tr>
+      <tr><td>0</td><td>v[0,0], v[0,1]</td><td>x[0,0], x[1,0]</td><td>0, 3</td><td>[0,3]</td></tr>
+      <tr><td>1</td><td>v[1,0], v[1,1]</td><td>x[0,1], x[1,1]</td><td>1, 4</td><td>[1,4]</td></tr>
+      <tr><td>2</td><td>v[2,0], v[2,1]</td><td>x[0,2], x[1,2]</td><td>2, 5</td><td>[2,5]</td></tr>
+    </table>
+  </div>
+
+  <p class="formula mono">x[r,c] 的元素位置 = 3r+c。v[p,q] 先重映射到 x[q,p]，所以元素位置 = 3q+p；byte 偏移 = 4(3q+p)。</p>
+  <p>例如 v[2,1] → x[1,2] → 元素位置 5 → byte 20。v 的第一维加 1 时只前进一个物理元素，所以 stride[0]=1；第二维加 1 时跨过 x 的一整行，所以 stride[1]=3。view 没有复制 24 byte 数据，也没有新增 Inductor operation。</p>
+</body>
+</html>

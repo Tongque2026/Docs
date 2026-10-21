@@ -1,0 +1,44 @@
+===== PRE =====
+
+
+
+def forward(self, L_x_ : torch.Tensor):
+    l_x_ = L_x_
+    old = torch.sin(l_x_)
+    add_ = l_x_.add_(1);  l_x_ = add_ = None
+    return (old,)
+    
+===== JOINT =====
+
+
+
+def forward(self, arg0_1):
+    sin = torch.ops.aten.sin.default(arg0_1)
+    add = torch.ops.aten.add.Tensor(arg0_1, 1)
+    copy_ = torch.ops.aten.copy_.default(arg0_1, add);  arg0_1 = add = copy_ = None
+    return (sin,)
+    
+===== POST =====
+
+
+
+def forward(self, arg0_1):
+    sin = torch.ops.aten.sin.default(arg0_1)
+    add = torch.ops.aten.add.Tensor(arg0_1, 1)
+    copy_ = torch.ops.aten.copy_.default(arg0_1, add);  arg0_1 = add = copy_ = None
+    return (sin,)
+    
+old=[0.0, 0.8414709568023682, 0.9092974066734314]
+caller_x=[1.0, 2.0, 3.0]
+===== RECURSIVE WRAPPERS =====
+direct_names=['while_cond', 'while_body', 'true_graph', 'false_graph']
+pre_order=wc_true -> wc_false -> while_cond -> while_body -> t_true -> t_false -> true_graph -> false_graph -> root
+pre_inputs=[None, None, None, None, None, None, None, None, 'root-inputs']
+pre_root_replaced=True
+pre_direct_children_replaced={'while_cond': True, 'while_body': True, 'true_graph': True, 'false_graph': True}
+joint_order=wc_true -> wc_false -> while_cond -> while_body -> t_true -> t_false -> true_graph -> false_graph -> root
+joint_return=None
+joint_module_ids_unchanged=True
+post_order=wc_true -> wc_false -> while_cond -> while_body -> t_true -> t_false -> true_graph -> false_graph -> root
+post_flags=[True, True, True, True, True, True, True, True, True]
+post_return=None

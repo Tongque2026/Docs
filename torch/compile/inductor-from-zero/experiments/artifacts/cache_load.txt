@@ -1,0 +1,15 @@
+run=1
+fxgraph_cache_miss=1
+fxgraph_cache_hit=0
+fxgraph_cache_bypass=0
+result_sum=272.0
+run=2
+fxgraph_cache_miss=0
+fxgraph_cache_hit=1
+fxgraph_cache_bypass=0
+result_sum=272.0
+run=bypass_cond
+fxgraph_cache_miss=0
+fxgraph_cache_hit=0
+fxgraph_cache_bypass=1
+result=[3.0, 5.0]

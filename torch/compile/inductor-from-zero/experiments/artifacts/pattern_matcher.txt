@@ -1,0 +1,154 @@
+FLOAT32 BEFORE
+class original(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        mul: "f32[3]" = torch.ops.aten.mul.Tensor(add, 2);  add = None
+        return mul
+        
+FLOAT32 AFTER
+class original(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        mul_tensor: "f32[3]" = torch.ops.aten.mul.Tensor(x_1, 2);  x_1 = None
+        mul_tensor_1: "f32[3]" = torch.ops.aten.mul.Tensor(y_1, 2);  y_1 = None
+        add_tensor: "f32[3]" = torch.ops.aten.add.Tensor(mul_tensor, mul_tensor_1);  mul_tensor = mul_tensor_1 = None
+        return add_tensor
+        
+float32 matches=1
+float32 counters={'pattern_matcher_count': 1, 'pattern_matcher_nodes': 2}
+float32 regions=[('x_1', 0), ('y_1', 0), ('mul_tensor', None), ('mul_tensor_1', None), ('add_tensor', None), ('output', 0)]
+
+INT64 BEFORE
+class original(torch.nn.Module):
+    def forward(self, x_1: "i64[3]", y_1: "i64[3]"):
+        # No stacktrace found for following nodes
+        add: "i64[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        mul: "i64[3]" = torch.ops.aten.mul.Tensor(add, 2);  add = None
+        return mul
+        
+INT64 AFTER
+class original(torch.nn.Module):
+    def forward(self, x_1: "i64[3]", y_1: "i64[3]"):
+        # No stacktrace found for following nodes
+        add: "i64[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        mul: "i64[3]" = torch.ops.aten.mul.Tensor(add, 2);  add = None
+        return mul
+        
+int64 matches=0
+int64 counters={}
+int64 regions=[('x_1', 0), ('y_1', 0), ('add', 0), ('mul', 0), ('output', 0)]
+
+WRONG CONSTANT BEFORE
+class wrong_constant(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        mul: "f32[3]" = torch.ops.aten.mul.Tensor(add, 3);  add = None
+        return mul
+        
+WRONG CONSTANT AFTER
+class wrong_constant(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        mul: "f32[3]" = torch.ops.aten.mul.Tensor(add, 3);  add = None
+        return mul
+        
+wrong_constant matches=0
+wrong_constant regions=[('x_1', 0), ('y_1', 0), ('add', 0), ('mul', 0), ('output', 0)]
+
+SHARED ADD BEFORE
+class shared_add(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        mul: "f32[3]" = torch.ops.aten.mul.Tensor(add, 2)
+        relu: "f32[3]" = torch.ops.aten.relu.default(add);  add = None
+        return (mul, relu)
+        
+SHARED ADD AFTER
+class shared_add(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1)
+        mul_tensor: "f32[3]" = torch.ops.aten.mul.Tensor(x_1, 2);  x_1 = None
+        mul_tensor_1: "f32[3]" = torch.ops.aten.mul.Tensor(y_1, 2);  y_1 = None
+        add_tensor: "f32[3]" = torch.ops.aten.add.Tensor(mul_tensor, mul_tensor_1);  mul_tensor = mul_tensor_1 = None
+        relu: "f32[3]" = torch.ops.aten.relu.default(add);  add = None
+        return (add_tensor, relu)
+        
+shared_add matches=1
+shared_add regions=[('x_1', 0), ('y_1', 0), ('add', 0), ('mul_tensor', None), ('mul_tensor_1', None), ('add_tensor', None), ('relu', 0), ('output', 0)]
+
+ACROSS MUTATION BEFORE
+class across_mutation(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1)
+        copy_: "f32[3]" = torch.ops.aten.copy_.default(x_1, y_1);  x_1 = y_1 = copy_ = None
+        mul: "f32[3]" = torch.ops.aten.mul.Tensor(add, 2);  add = None
+        return mul
+        
+ACROSS MUTATION AFTER
+class across_mutation(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1)
+        copy_: "f32[3]" = torch.ops.aten.copy_.default(x_1, y_1);  x_1 = y_1 = copy_ = None
+        mul: "f32[3]" = torch.ops.aten.mul.Tensor(add, 2);  add = None
+        return mul
+        
+across_mutation matches=0
+across_mutation regions=[('x_1', 0), ('y_1', 0), ('add', 0), ('copy_', 1), ('mul', 1), ('output', 1)]
+
+NO ANCHOR BEFORE
+class no_anchor(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        relu: "f32[3]" = torch.ops.aten.relu.default(add);  add = None
+        return relu
+        
+NO ANCHOR AFTER
+class no_anchor(torch.nn.Module):
+    def forward(self, x_1: "f32[3]", y_1: "f32[3]"):
+        # No stacktrace found for following nodes
+        add: "f32[3]" = torch.ops.aten.add.Tensor(x_1, y_1);  x_1 = y_1 = None
+        relu: "f32[3]" = torch.ops.aten.relu.default(add);  add = None
+        return relu
+        
+no_anchor matches=0
+no_anchor regions=[('x_1', 0), ('y_1', 0), ('add', 0), ('relu', 0), ('output', 0)]
+
+REPEATED PATTERN
+same_input matched=True
+different_inputs matched=False failure=repeated pattern differs
+
+APPLY CONTROL FLOW
+empty_registry_invalid_input_count=0
+invalid_input_error=The input to PatternMatcherPass must be a GraphModule or a Graph, but got <class 'object'>
+graph_input_count=1
+cpu_fallback_count=0
+reverse_count=2
+reverse_order=['neg_1', 'neg']
+reverse_counters={'pattern_matcher_count': 2, 'pattern_matcher_nodes': 2}
+erase_count=1
+erase_events=['first']
+call_module_count=1
+call_module_events=['relu']
+
+REPLACE WITH GRAPH
+multi_result=([0.0, 6.0], [2.0, 5.0])
+multi_call_order=['add_tensor', 'mul_tensor', 'add_tensor_1']
+multi_tags=[('add_tensor', 'r1', 'g1'), ('mul_tensor', 'r1', 'g1'), ('add_tensor_1', None, None)]
+multi_input_tagged=False
+multi_erase_calls=1
+packed_result=([5.0], [6.0])
+packed_targets=['aten.add.Tensor', 'aten.add.Tensor']
+packed_erase_calls=1
+packed_failure=can't handle
+old_meta_fallback={'old_only': 17, 'recompute': 'r2'}
+optional_result=([3.0], None)
+removed_result=(None, [5.0])
+raw_graph_error='Graph' object has no attribute 'named_modules'

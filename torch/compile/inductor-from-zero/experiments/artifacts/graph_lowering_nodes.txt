@@ -1,0 +1,30 @@
+placeholder   arg0_1     target=arg0_1 result=TensorBox->StorageBox->InputBuffer buffers=0 operations=0 env_inputs=['arg0_1']
+placeholder   arg1_1     target=arg1_1 result=TensorBox->StorageBox->InputBuffer buffers=0 operations=0 env_inputs=['arg0_1', 'arg1_1']
+call_function add        target=aten.add.Tensor result=TensorBox->StorageBox->Pointwise buffers=0 operations=0 env_inputs=['arg0_1', 'arg1_1']
+call_function relu       target=aten.relu.default result=TensorBox->StorageBox->Pointwise buffers=0 operations=0 env_inputs=['arg0_1', 'arg1_1']
+call_function mul        target=aten.mul.Tensor result=TensorBox->StorageBox->ComputedBuffer buffers=1 operations=1 env_inputs=['arg0_1', 'arg1_1']
+output        output     target=output result=None; graph_outputs=StorageBox->ComputedBuffer buffers=1 operations=1 env_inputs=['arg0_1', 'arg1_1']
+scalar_input value_type=int input_names=['scalar'] input_keys=['scalar'] graph_input_type=Integer graph_input=3 output_type=ShapeAsConstantBuffer error=None
+scalar_input value_type=float input_names=['scalar'] input_keys=['scalar'] graph_input_type=Float graph_input=2.50000000000000 output_type=ShapeAsConstantBuffer error=None
+scalar_input value_type=NoneType input_names=['scalar'] input_keys=[] graph_input_type=str graph_input=<not-registered> output_type=NoneAsConstantBuffer error=None
+scalar_input value_type=BackwardState input_names=['scalar'] input_keys=[] graph_input_type=str graph_input=<not-registered> output_type=NoneAsConstantBuffer error=None
+scalar_input value_type=SymInt input_names=['scalar'] input_keys=['scalar'] graph_input_type=Symbol graph_input=u0 output_type=ShapeAsConstantBuffer error=None
+scalar_input value_type=bool input_names=['scalar'] input_keys=['scalar'] graph_input_type=BooleanTrue graph_input=True output_type=ShapeAsConstantBuffer error=AssertionError:Unsupported inductor graph input type: <class 'sympy.logic.boolalg.BooleanTrue'>
+scalar_input value_type=object input_names=['scalar'] input_keys=[] graph_input_type=str graph_input=<not-registered> output_type=<none> error=AssertionError:<object object at 0x7f1bcfe33d30>
+tensor_input name=None output_input=True input_names=['x'] keys=['x'] sizes=[2, 3] strides=[3, 1] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False
+tensor_input name=None output_input=True input_names=['x'] keys=['x'] sizes=[3, 2] strides=[1, 3] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False
+tensor_input name=branch output_input=True input_names=['x'] keys=['branch_x'] sizes=[2, 3] strides=[3, 1] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False
+tensor_input name=None output_input=False input_names=['x'] keys=['x'] sizes=[2, 3] strides=[3, 1] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=[] device_map=[] aligned=False
+tensor_input name=None output_input=True input_names=['x'] keys=['x'] sizes=[u0, 3] strides=[3, 1] symbolic=True dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False
+get_attr_types=Constant,TensorBox->StorageBox->Pointwise,TensorBox->StorageBox->ConstantBuffer,Subgraph
+get_attr_constants=['table_const'] reprs=['table_const']
+forced_constant_types=TensorBox->StorageBox->ConstantBuffer,TensorBox->StorageBox->ConstantBuffer constants=['scalar_const', 'small_const']
+constant_names=first=layer_weight same=layer_weight offset=layer_weight_0 equal=layer_weight_1 numeric=constant_1_bad_name
+container_getitem=20
+passthrough=('passthrough', 7)
+missing_with_decomp=MissingOperatorWithDecomp
+missing_without_decomp=MissingOperatorWithoutDecomp
+implicit_fallback=fallback-result make_calls=['aten.linalg_eig.default']
+lowering_error=LoweringException message=ValueError: lowering boom
+call_module=AssertionError
+call_method=AssertionError

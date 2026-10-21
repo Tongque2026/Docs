@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>输入覆盖前后的存储身份与数据版本</title>
+  <style>
+    :root { color-scheme:light; --line:#aeb8c4; --ink:#17212b; --muted:#596775; --old:#e7f2ff; --new:#fff0d4; --same:#e8f6ec; }
+    body { max-width:1100px; margin:0 auto; padding:28px; background:#fff; color:var(--ink); font:16px/1.55 system-ui,sans-serif; }
+    h1,h2 { line-height:1.25; } code,.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .scroll { overflow-x:auto; margin:16px 0 30px; }
+    table { min-width:850px; width:100%; border-collapse:collapse; }
+    th,td { border:1px solid var(--line); padding:10px; text-align:center; }
+    th { background:#f4f6f8; }
+    .old { background:var(--old); } .new { background:var(--new); } .same { background:var(--same); }
+    .note { border-left:4px solid #4b86b4; background:#f7fbff; padding:10px 14px; }
+  </style>
+</head>
+<body>
+  <h1>old=x+1；x.copy_(y)：两个值版本、两份存储</h1>
+  <p>条件：x、y 均为连续 CPU float32[3]。每个元素 4 byte。地址用“x+0、x+4、x+8”和“old+0、old+4、old+8”表示两块独立存储中的 byte 偏移，不代表实验进程的绝对地址。</p>
+
+  <h2>阶段 0：调用者的 x 仍保存旧值</h2>
+  <div class="scroll"><table>
+    <tr><th>存储身份</th><th>x+0</th><th>x+4</th><th>x+8</th></tr>
+    <tr class="old"><th>输入 x（旧版本）</th><td>x[0]=0</td><td>x[1]=1</td><td>x[2]=2</td></tr>
+  </table></div>
+
+  <h2>阶段 1：先从旧 x 产生独立 old buffer</h2>
+  <div class="scroll"><table>
+    <tr><th>存储身份</th><th>槽位 0</th><th>槽位 1</th><th>槽位 2</th><th>是否与 x 同址</th></tr>
+    <tr class="old"><th>x 仍未覆盖</th><td>x+0 → 0</td><td>x+4 → 1</td><td>x+8 → 2</td><td class="same">就是调用者 x</td></tr>
+    <tr class="same"><th>buf0 / old</th><td>old+0 → 1</td><td>old+4 → 2</td><td>old+8 → 3</td><td>否，独立分配</td></tr>
+  </table></div>
+
+  <h2>阶段 2：把 y 写回同一个 x storage</h2>
+  <div class="scroll"><table>
+    <tr><th>存储身份</th><th>槽位 0</th><th>槽位 1</th><th>槽位 2</th><th>返回关系</th></tr>
+    <tr class="new"><th>输入 x（新版本）</th><td>x+0 → 9</td><td>x+4 → 9</td><td>x+8 → 9</td><td>returned_x 与调用者 x 同一 data_ptr</td></tr>
+    <tr class="same"><th>buf0 / old</th><td>old+0 → 1</td><td>old+4 → 2</td><td>old+8 → 3</td><td>仍保留覆盖前计算结果</td></tr>
+  </table></div>
+
+  <p class="note mono">正确顺序：read old x → store old buffer → write y into x。若先覆盖 x，old 将错误地变成 [10,10,10]。</p>
+  <p>当前实验生成的一个 C++ function 内有两个循环：第一个循环读取 x 并写 old；第二个循环读取 y 并写 x。kernel 融合没有取消两个数据版本，也没有让 old 与 x 共享存储。</p>
+</body>
+</html>

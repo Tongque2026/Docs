@@ -1,6 +1,6 @@
 # PyTorch 源码学习
 
-[Inductor 讲解入口](torch/compile/inductor/README.md) · [当前模块树与阅读顺序](torch/compile/inductor/INDEX.md)
+[Inductor 讲解入口](torch/compile/inductor/README.md) · [当前模块树与阅读顺序](torch/compile/inductor/INDEX.md) · [Inductor 从零教程](torch/compile/inductor-from-zero/README.md)
 
 中文讲解基于本地 PyTorch 源码，重点覆盖 Inductor 的输入输出、内部实现与新设备接入；不以 PyTorch 文档为依据。按层建立流程，再逐层完成叶子实现的完整逐行解释，每层最多四个直接子模块。
 

@@ -1,0 +1,8 @@
+inference:joint targets=['aten.sin.default', 'aten.mul.Tensor']
+inference:post targets=['aten.sin.default', 'aten.mul.Tensor']
+training:joint targets=['aten.sin.default', 'aten.mul.Tensor', 'aten.sum.default', 'aten.expand.default', 'aten.mul.Tensor', 'aten.mul.Tensor', 'aten.cos.default', 'aten.mul.Tensor', 'aten.add.Tensor']
+training:post targets=['aten.sin.default', 'aten.mul.Tensor', 'aten.sum.default']
+training:post targets=['aten.expand.default', 'aten.sin.default', 'aten.mul.Tensor', 'aten.mul.Tensor', 'aten.cos.default', 'aten.mul.Tensor', 'aten.add.Tensor']
+inference_result=[0.0, 1.6829419136047363, 1.8185948133468628]
+training_result=2.6600656509399414
+training_grad=[0.0, 1.3817732334136963, 0.07700371742248535]
