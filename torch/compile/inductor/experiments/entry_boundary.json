@@ -1,6 +1,0 @@
-{
-  "graph": "graph():\n    %x_1 : [num_users=1] = placeholder[target=x_1]\n    %t : [num_users=1] = call_function[target=torch.ops.aten.t.default](args = (%x_1,), kwargs = {})\n    return (t,)",
-  "scope": "raw make_fx single-graph entry; not complete torch.compile pipeline",
-  "error": "AssertionError",
-  "message": "both a fallback and a decomp for same op: aten.t.default"
-}

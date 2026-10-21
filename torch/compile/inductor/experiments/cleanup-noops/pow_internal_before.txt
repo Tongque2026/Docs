@@ -1,5 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %pow_1 : [num_users=1] = call_function[target=torch.ops.aten.pow.Tensor_Scalar](args = (%x_1, 1), kwargs = {})
-    %relu : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%pow_1,), kwargs = {})
-    return (relu,)

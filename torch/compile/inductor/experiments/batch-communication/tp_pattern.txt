@@ -1,7 +1,0 @@
-graph():
-    %shard : [num_users=1] = placeholder[target=shard]
-    %weight : [num_users=1] = placeholder[target=weight]
-    %all_gather_into_tensor_default : [num_users=1] = call_function[target=torch.ops._c10d_functional.all_gather_into_tensor.default](args = (%shard, 2, teaching_group), kwargs = {})
-    %wait_tensor_default : [num_users=1] = call_function[target=torch.ops._c10d_functional.wait_tensor.default](args = (%all_gather_into_tensor_default,), kwargs = {})
-    %mm_default : [num_users=1] = call_function[target=torch.ops.aten.mm.default](args = (%wait_tensor_default, %weight), kwargs = {})
-    return (mm_default,)

@@ -1,5 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %_to_copy : [num_users=1] = call_function[target=torch.ops.aten._to_copy.default](args = (%x_1,), kwargs = {dtype: torch.float64})
-    %relu : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%_to_copy,), kwargs = {})
-    return (relu,)

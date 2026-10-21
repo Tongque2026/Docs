@@ -1,5 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %cat : [num_users=1] = call_function[target=torch.ops.aten.cat.default](args = ([%x_1],), kwargs = {})
-    %relu : [num_users=1] = call_function[target=torch.ops.aten.relu.default](args = (%cat,), kwargs = {})
-    return (relu,)

@@ -1,9 +1,0 @@
-graph():
-    %i_1 : [num_users=1] = placeholder[target=i_1]
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %while_loop_cond_graph_0 : [num_users=1] = get_attr[target=while_loop_cond_graph_0]
-    %while_loop_body_graph_0 : [num_users=1] = get_attr[target=while_loop_body_graph_0]
-    %while_loop : [num_users=2] = call_function[target=torch.ops.higher_order.while_loop](args = (%while_loop_cond_graph_0, %while_loop_body_graph_0, (%i_1, %x_1), ()), kwargs = {})
-    %getitem : [num_users=1] = call_function[target=operator.getitem](args = (%while_loop, 0), kwargs = {})
-    %getitem_1 : [num_users=1] = call_function[target=operator.getitem](args = (%while_loop, 1), kwargs = {})
-    return (getitem, getitem_1)

@@ -1,133 +1,204 @@
-# Lowering：用元素表达式和布局建立计算、存储与副作用
+# Lowering：把 FX 的算子请求变成 Inductor 的执行描述
+
+[上一篇：图优化](../01-graph-optimization/README.md) · [返回总览](../README.md) · 下一篇：[Scheduler](../03-scheduler/README.md)
+
+Lowering 不是把高级算子简单换成低级算子名字。先看 `a=x+1; b=a*2`：编译器可以暂时只保存“位置 i 的 a 等于 x[i]+1”，处理 b 时继续接上乘 2，不必真的建立完整的 a。若后面改成 `mm(a,w)`，矩阵乘函数必须收到一份可以传入的张量数据，编译器才为 a 登记一个有名字的结果及其产生方法。Lowering 要做的，就是为每个 FX 节点决定采用哪一种表示：可继续组合的位置规则、需要单独保存的数据、共享原数据的视图，或已有函数调用。
+
+## GraphLowering 怎样连接一张图
+
+图里 `b=relu(a)` 只保存了“b 的输入引用 a”。Lowering 必须在读到 b 时找到先前为 a 建立的计算方法。`GraphLowering` 用一个环境保存“FX node → 当前结果描述”，按拓扑顺序逐节点完成这次连接；它不会在编译时算出 eager Tensor 数值。
 
 ```text
-Inductor  本层完成
-    └── Lowering ← 当前篇  本层完成
-        ├── 解释图与登记输入  本层完成
-        ├── 表达计算与布局  本层完成
-        ├── 物化与副作用  本层完成
-        └── 专用算子路径  本层完成
+读到输入 x      → 环境记下：x 的 shape、dtype，以及怎样读取 x
+读到 a = x + 1 → 环境记下：给定位置 i，a[i] = x[i] + 1
+读到函数返回 a  → 登记一项产生有名结果的工作，并把它列入返回值
 ```
 
-<!-- child-links:start -->
-直接子篇：[解释图与登记输入](01-interpretation/README.md)、[表达计算与布局](02-expressions/README.md)、[物化与副作用](03-materialization/README.md)、[专用算子路径](04-special-ops/README.md)。
-<!-- child-links:end -->
+因此，处理后一个节点时可以从环境取回前一个节点留下的内容。输入、普通计算、已有函数调用和返回值留下的内容不完全相同，但都要让后继节点知道“我现在引用的是什么”。下节把这项“逐节点读图并维护结果表”的职责编号为 Q21。
 
-[返回 Inductor](../README.md)。Lowering 接收经过图准备的 FX 图，逐节点构造 Inductor IR，把“调用 add、relu、mm”等关系变成输入缓冲区、元素表达式、布局、外部计算和输出需求。最重要的出口是 `GraphLowering` 对象上的状态，而不是 `run()` 的 Python 返回值。
+## 四项直接职责
 
-## 1. 内部主线和分支
-
-![Lowering 内部交接](../assets/lowering.png)
-
-普通算子沿①→②→③流动；模板、外部调用和子图算子按 target 分派到④，与其他节点通过 IR 输入输出连接。④是条件路径，不是每个普通点运算之后都必须执行的阶段。
-
-[GraphLowering.run](/work/pytorch/torch/_inductor/graph.py:778) 调用 FX Interpreter 逐节点处理。[run_node](/work/pytorch/torch/_inductor/graph.py:1268) 包围每次派发，保存当前节点和来源信息，处理特定布局或 fallback 条件。placeholder 登记输入；call_function 调用 lowering 表或模式生成的 lowering 函数；get_attr 取得常量；output 完成结果实现和输入修改处理。
-
-遍历过程中的中间值放在 Interpreter 的节点环境里。对普通张量，它可能是包着计算表达式的 `TensorBox`，并不意味着已经有一块真实 Tensor 内存。遇到必须保存、供外部算子读取或返回的值，才由③将计算登记为有名字的存储和操作；最后 Scheduler 收到 `graph.operations`，继续访问图上的布局、输入和输出。
-
-## 2. 四个模块的接口
-
-### 2.1 解释图与登记输入
-
-这个模块收到 FX 节点和示例参数，依次分派。张量输入变为 `TensorBox(StorageBox(InputBuffer(...)))`；InputBuffer 的 FixedLayout 保存 device、dtype、shape 和 stride。比如 `(2,3)`、stride `(3,1)` 的位置 `[1,2]` 对应元素偏移 5。
-
-`TensorBox` 提供张量式的句柄，`StorageBox` 持有当前计算或存储对象；内层对象可在物化时更换，而使用这个 box 的地方仍能指向更新后的对象。这是源码结构带来的效果，不要将 box 与实际 GPU/CPU 内存等同。
-
-符号数值输入则转换为 SymPy 表达式，登记到 `graph_inputs`；`None` 和某些专用状态参数有各自分支。`get_attr` 对小常量可能内联为标量或元素计算，对其他常量登记图常量。此时保留的状态包括输入顺序、原始输入缓冲区映射、符号与常量。
-
-交出的结果是后续节点可引用的 IR 值。入口职责还记录当前 FX 节点及 origins，使后续一个合成表达式仍能追溯到多个原算子。依据：[placeholder](/work/pytorch/torch/_inductor/graph.py:922)、[常量](/work/pytorch/torch/_inductor/graph.py:1035)、[TensorBox](/work/pytorch/torch/_inductor/ir.py:6330)。
-
-普通 Inductor 单图期望已降低为函数调用形式；`call_module` 与 `call_method` 在此实现中直接断言失败。不能把任意未经准备的 FX 图送进来，并期待该层自行处理整个 Python Module。
-
-### 2.2 表达计算与布局
-
-普通算子通过 [lowerings 注册](/work/pytorch/torch/_inductor/lowering.py:372) 找到对应函数。点运算常由 [make_pointwise](/work/pytorch/torch/_inductor/lowering.py:458) 创建：先取得输入的 loader，再定义“给定逻辑 index，读取这些输入并计算一个结果”的 `inner_fn`。
-
-例如 `b=x+y; c=relu(b)`：如果 b 仍是未物化的 Pointwise，读取 b 就可调用它的元素计算，而不是发出从 `buf_b` 加载的操作。于是 c 的元素表达式可以直接包含 x、y 的加载和加法。这解释了总篇案例为什么在 Scheduler 之前就只有一个 ComputedBuffer。
-
-view 用不同逻辑索引解释同一份存储；reduction 则额外描述被消去的维度与组合运算。它们和 pointwise 都需要布局和索引，但不必使用同一 IR 类。不能把“FX 中出现 sum”直接推定为出口一定是 `Reduction`：小静态归约可能在这里展开成点表达式。
-
-本模块交给③的是计算描述和逻辑布局需求；必要时也会先触发输入的物化，再生成读取缓冲区的表达式。布局可能仍有待选择的自由度，最终输出约束、外部算子要求和调度会逐步确定它。依据：[Pointwise loader](/work/pytorch/torch/_inductor/ir.py:626)、[Reduction](/work/pytorch/torch/_inductor/ir.py:769)、[FixedLayout](/work/pytorch/torch/_inductor/ir.py:3081)、[FlexibleLayout](/work/pytorch/torch/_inductor/ir.py:3117)。
-
-### 2.3 物化与副作用
-
-这个模块收到一个需要有稳定存储身份的表达式或布局视图，建立可调度的操作。在 [StorageBox.realize](/work/pytorch/torch/_inductor/ir.py:6348) 中，尚未物化的 Pointwise/Reduction 等被包为 `ComputedBuffer`，注册缓冲区名字与 operation，替换 StorageBox 内部对象。已经是 InputBuffer、ComputedBuffer、模板缓冲区等则返回已有名字。
-
-例如要把 `x+y` 交给矩阵乘，矩阵乘接口需要实际张量参数，不能接收一个任意 Python 元素回调。Lowering 先登记 `x+y` 的存储需求，再把其缓冲区引用交给外部计算。这里“物化”仍是**构造未来程序的存储和计算节点**；真正分配输出 Tensor 的代码在 wrapper 执行时运行。
-
-[output](/work/pytorch/torch/_inductor/graph.py:1075) 将所有返回值变为可交付的 IR 输出，处理输出 stride 匹配，登记 `graph_outputs`；同时检查输入的 StorageBox 是否已经指向新值，必要时建立写回原始输入缓冲区的操作。这些是可观察语义，不能只保留最终数值。
-
-如果返回 view，可能只需要布局重解释；如果返回 clone，则要保留独立存储；如果修改输入，即使新值不作为普通输出返回，也需要副作用。模块交给调度的不只是结果表达式，还包括这些存储和读写需求。
-
-### 2.4 专用算子路径
-
-矩阵乘、模板、外部算子和控制流不是都拆成通用 Pointwise。相应 lowering 接收 IR 输入和布局需求，可能建立外部调用，也可能准备模板候选；它们的输出再被普通节点引用。
-
-例如本地 CPU `x@y` 返回 `ExternKernelOut`，含输入缓冲区、输出布局和 `extern_kernels.mm` 调用身份；后接的 relu 是读取 mm 输出的 Pointwise。上层图仍是一张图，生成时却要先运行库调用，再运行自生成 kernel。
-
-缺少直接 lowering 时，[call_function](/work/pytorch/torch/_inductor/graph.py:981) 按允许列表与配置建立 fallback；若禁止或无法处理，则抛出相应异常。专用路径不是兜底保证所有算子成功。矩阵乘的典型入口见 [tuned_mm](/work/pytorch/torch/_inductor/kernel/mm.py:159)；方案构造在本模块解释其 IR 接口，具体生成和编译机制归属代码生成模块，避免重复覆盖。
-
-## 3. 主案例：mm 输出怎样成为 relu 的输入
-
-输入均为 CPU float32：
+先把四项放在同一张图里。读图职责反复处理 FX nodes；另外三项不是依次只运行一次，而是被当前节点按需调用，并把结果重新交回环境：
 
 ```text
-x shape=(2,3)，stride=(3,1)
-  [[-2,-1,0], [1,2,3]]
-y shape=(3,2)，stride=(2,1)
-  [[1,2], [3,4], [5,6]]
-return (relu(x@y),)
+合法 FX GraphModule + 输入属性
+             │
+             v
+Q21 逐节点读图：从结果表取输入，处理当前节点，再把结果放回表
+       │             │                 │
+       │             │                 └──────────────┐
+       v             v                                v
+Q22 写出位置计算    Q23 决定共享原数据还是保存结果  Q24 接入已有函数和控制流
+       │             │                                │
+       └─────────────┴────────────────────────────────┘
+                             │
+                             v
+Q21 把结果放回表中，继续下一个 FX node
+                             │
+                             v
+             整理待执行工作、数据记录和返回值
+                             │
+                             v
+                         Scheduler
 ```
 
-**① 收到图。** placeholder x_1/y_1 登记各自 FixedLayout。节点环境中有两个输入 TensorBox；真实数据仍由调用者持有。
+例如 add 先经过 Q22 得到位置规则，再由 Q21 记成 a；mm 处理器属于 Q24，但它需要 Q23 先把参数变成可传入的真实张量；copy_ 同时需要 Q23 安排覆盖前后的数据版本，并由 Q21 记录输入已被修改。四项协作的共同点是：每个 FX 结果都必须变成后继节点能引用、Scheduler 能消费的 IR 或图级状态。
 
-**④ 处理 mm。** 矩阵乘 lowering 收到这两个 IR 输入，构建形状 `(2,2)`、stride `(2,1)` 的外部输出 buf0。实际采集的 [IR](../experiments/stages/mm_lowered.txt) 包含：
+### 1. 读图并连接结果
+
+这里的“解释器”就是按 FX 节点顺序重复三个动作的 `GraphLowering`。FX 节点的 `target` 说明当前要调用谁：例如 `op="call_function", target=aten.add.Tensor, args=(x,y)` 表示用 x、y 调用 ATen 加法。解释器从环境取出 args 指向的前驱结果，调用 target 对应的处理器，再把结果放回环境。对于 `a=x+y; b=relu(a)*2`，关系可以写成：
+
+| 处理后 | FX 名字对应的内容 | 消费者 |
+| --- | --- | --- |
+| x、y | 两份输入的 shape、stride、dtype、device 与读取能力 | add |
+| add | 给定位置读取 x、y 并相加的规则 | relu |
+| relu | 在 add 规则后应用 max(value,0) | mul |
+| mul | 再乘 2 的最终位置规则 | output |
+
+### 2. 表达计算和索引
+
+先用求和例给字段赋值：输出有两行，所以 `ranges=[2]`，合法输出坐标 row 是 0、1；每行组合三个输入，所以 `reduction_ranges=[3]`，组内坐标 column 是 0、1、2；`inner_fn(row,column)` 返回当前输入值，`reduction_type="sum"` 指定把三项相加。当前 IR 把普通逐位置规则称为 `Pointwise`；把同时含输出坐标和组内坐标的规则称为 `Reduction`。
+
+例如 `x` 是 2×3，`x.sum(dim=1)` 的教学表达是：
 
 ```text
-ExternKernelOut(
-  name='buf0',
-  inputs=[InputBuffer('x_1'), InputBuffer('y_1')],
-  layout=FixedLayout(cpu, float32, size=[2,2], stride=[2,1]),
-  python_kernel_name='extern_kernels.mm',
-  cpp_kernel_name='at::mm_out'
-)
+输出范围 row = 0..1
+规约范围 column = 0..2
+inner_fn(row,column) = load x[row,column]
+reduction_type = sum
 ```
 
-上面是保留关键字段的化简，完整表示在链接文件中。这时登记的是未来的 mm 调用，没有在 Lowering 阶段算出 `[[-5,-8],[22,28]]`。
+输出 `row=1` 时依次组合 3、4、5，得到 12。它与 pointwise 的差别不是“函数名叫 sum”，而是一个输出位置还拥有独立的组内位置范围。
 
-**② 处理 relu。** relu 收到 buf0 的 IR 引用。其元素计算为读取 buf0 偏移 `2*i0+i1`，返回 relu 值。它不能把外部 mm 直接当成任意可内联的元素 loader。
-
-**③ 处理 output。** 图输出要求 relu 结果可交付，因而登记 buf1 的 ComputedBuffer。Lowering 出口可概括为：
+这个 2×3 例子只用于把两个坐标算清楚。当前实现会把某些很小的静态规约展开成普通位置计算，因此不能用它证明实际保留了 `Reduction` IR。先定义下面对象链中的三层包装：TensorBox 是 Lowering 交给后续节点的 tensor 值入口；StorageBox 让同一 tensor 值的底层表示可以从延迟计算换成有名 buffer，而持有者不必换引用；ComputedBuffer 则表示“这条计算规则已经登记成一份需要生成代码并拥有布局的结果”。独立实验另用 `x=torch.arange(256.).reshape(2,128)`，实际观察到：
 
 ```text
-graph_inputs: x_1、y_1
-operations:
-  op0: 外部 mm → buf0
-  op1: 读取 buf0，relu → buf1
-graph_outputs: buf1
+aten.sum.dim_IntList
+  → TensorBox
+  → StorageBox
+  → ComputedBuffer(size=[2])
+  → Reduction(ranges=[2], reduction_ranges=[128], type=sum)
 ```
 
-**交给 Scheduler。** 调度保留 op1 对 buf0 的依赖；最后程序分配 buf0，调用 `extern_kernels.mm`，再处理 relu。CPU 实际输出 `[[0,0],[22,28]]`，输入保持不变。生成 kernel 数为 1，仅统计自生成的 relu，不包含已存在的矩阵乘库实现。
+对输出 `row=1`，输入范围是原张量的 128 到 255，数学和为 `(128+255)×128/2=24512`。这里 `[2]` 决定有两项输出，`[128]` 决定每项组合多少个输入；`sum` 决定起始状态和组合方式。三份信息共同构成 Scheduler/Codegen 后续需要的规约工作。小例子的坐标关系与真实 IR 例相同，尺寸不同是为了避免小静态展开消除目标机制。
 
-这条链展示了图内部普通表达式和专用算子如何汇合：输入 IR → 专用输出 buffer → 普通 loader → 最终输出 operation；不存在“只要进入 Inductor 就全部改写成一个 kernel”的保证。
+把 `row=1` 真正代入这份描述：规约索引 `column` 从 0 走到 127，读取位置是 `128+column`。累计状态从 0 开始，前三步为 `0+128=128`、`128+129=257`、`257+130=387`；最后一步把 255 加入此前的 24257，得到 24512。换成 `row=0` 时，读取位置改为 `column`，范围和组合规则不变，结果为 8128。由此可以分别判断三种变化：改行号只改变读取位置；把轴 1 改成轴 0 会同时改变输出范围和规约范围；把 sum 改成 max 会改变起始状态与组合操作。
 
-## 4. 对照：小 sum 与大 sum 的出口不同
+视图则不建立累计状态。对 2×3 连续输入，原 stride 是 `[3,1]`；permute 后的 size 为 `[3,2]`、stride 为 `[1,3]`。新位置 `[2,1]` 读取的元素偏移是 `2×1+1×3=5`，所以仍读原输入 `[1,2]`。这份坐标变换直接引用输入 storage，因此实验中 buffers 和 operations 都保持 0；若后继只接受连续输入，Q23 才需要把这份视图物化成真实数据。
 
-同样计算 `(x+y).sum(1)`。当输入是 `(2,3)`，本地采集的 [IR](../experiments/stages/reduction_lowered.txt) 是一个 Pointwise，而不是 Reduction。它对每一行展开三组输入加载与加法：
+### 3. 安排存储、布局、别名与修改
+
+对 `a=x+1; b=a*2`，编译器起初可让 a 指向一条规则：“给定位置 i，读取 x[i] 再加 1”。处理 b 时把乘 2 接在这条规则后，于是同一循环可直接算 `(x[i]+1)*2`。
+
+若后面改成 `z=torch.mm(a,w)`，已有矩阵乘实现需要一份能作为参数传入的数据，不能接收一条 Python 位置规则。Lowering 此时给 a 登记有名字的结果 buffer，并保留产生它的计算：
 
 ```text
-row0 = (-2+1) + (-1+1) + (0+1) = 0
-row1 = ( 1+1) + ( 2+1) + (3+1) = 9
+a 的结果引用
+  原来指向：给定 i 计算 x[i]+1
+  物化以后：读取 buf0[i]；op0 负责按原规则产生 buf0
 ```
 
-[Reduction.create 的小归约分支](/work/pytorch/torch/_inductor/ir.py:1161) 判断静态归约元素数小于阈值时，调用展开函数并返回 Pointwise。因此“sum 是归约语义”成立，但“出口总要有归约循环”不成立。
+`StorageBox` 保存这份可改变的底层表示，使已经引用 a 的对象继续找到更新后的表示；`TensorBox` 是图环境中传递 tensor 值的外层对象。当前源码把“延迟规则变成有名结果”称为 `realize()`，由 `ComputedBuffer` 连接 buffer 身份、布局与产生它的计算。视图可以继续共享来源；mutation 还要区分覆盖前后的数据版本。
 
-改变为 CPU float32 `(2,64)` 连续输入，`x=arange(128).reshape(2,64)`、`y=ones(2,64)`，需要分别累计 64 项。其 [Lowering 产物](../experiments/stages/reduction_large_lowered.txt) 保留 `Reduction`，输出尺寸 `[2]`，归约尺寸 `[64]`，运算类型为 sum。实际结果为 `[2080,6176]`。
+独立实验把普通消费者和 mm 消费者分开观察，`operations` 的变化如下：
 
-这两个分支都先在①登记相同类型的输入，②按归约规模选择表达形式，③登记输出，最后交给同一 Scheduler；区别不需要改动图的外部接口。这里的展开是否更快没有做计时，正文只报告源码选择与真实产物。
+| 请求处理到哪里 | a 当前是什么 | operations | 为什么此时变化 |
+| --- | --- | --- | --- |
+| `(x+1)*2` 读完 add | 未物化的 Pointwise | `[]` | mul 可以继续组合位置规则 |
+| 同一请求读完 mul | `ComputedBuffer buf0` 中的最终 Pointwise | `[op0]` | mul 是图输出，需要稳定的返回结果 |
+| `(x+1)@weight` 读完 add | 未物化的 Pointwise | `[]` | 尚未遇到需要真实张量的消费者 |
+| 同一请求读完 mm | a 的生产 operation 加 mm operation | `[op0,op1]` | mm 必须接收真实张量，因此 a 被物化；mm 自身保留外部工作身份 |
 
-## 5. 状态如何保留、下一层打开什么
+因此“FX add 已经处理完”并不等于“a 已经分配 buffer”。决定发生在消费者提出要求时；若消费者仍能组合规则，就可以继续延迟。
 
-Lowering 的每次派发既产生节点环境中的值，也可能修改 `graph_inputs`、`buffers`、`operations`、`constants`、`graph_outputs` 和输入写回状态。只保存一个“最后的 TensorBox”会丢掉整张图的执行需求；只保存 operations 也缺少完整的运行接口。
+这解释了贯穿案例为什么没有 add 和 relu 的独立完整数组：最终 C++ 循环用局部变量 `tmp2`、`tmp3` 接住中间值，只分配最终 `buf0`。
 
-四个子篇将依次解释派发及符号、普通计算和布局、物化与副作用、专用算子和控制流。当前的证据覆盖 CPU 点运算、view、clone、两种归约规模、矩阵乘和多个输出；动态符号、输入写回、子图和 GPU 模板仍待进一步源码和实验展开。完整复现脚本为 [stages.py](../experiments/stages.py)。
+### 4. 接入普通循环以外的实现
+
+不是每个 FX target 都适合展开成 `Pointwise`。以 mm 为例，Lowering 可以比较“调用现成 ATen mm”和“把输入、输出 layout 及分块参数填入专用 kernel 模板”等候选，选中后留下已有调用记录或模板记录。histc 没有原生位置规则时，可保留“运行时调用 aten.histc”的 fallback 记录。`cond`、`while_loop` 则分别编译子图，并在父图保留运行时选择或循环。
+
+这些结果仍须向 Scheduler 说明输入、输出、device、布局和依赖，但内部计算不一定由同一套逐元素 ops 生成。
+
+三类实际请求经过 Q21、Q23、Q24 后留下的对象不同：
+
+| FX 请求 | Q23/Q24 做的关键工作 | 当前 CPU 实验的根图 operations | 后继怎样取得结果 |
+| --- | --- | --- | --- |
+| `torch.mm(a,b)` | 两个输入先满足可传入布局；Q24 建立候选并在本次配置选中 ATen extern | `[ExternKernelOut buf0]` | buf0 本身就是 mm 的张量结果 |
+| `torch.histc(x,...)` | 输入先实现为可调用参数；Q24 保存 operator 与常数参数 | `[FallbackKernel buf0, MultiOutput buf1]` | buf0 表示一次 packed 调用，buf1 从其返回结构取出 Tensor |
+| `torch.cond(pred,t,f,[x])` | predicate/operands 物化；两支各自 Lower，再统一接口 | `[Conditional buf0, MultiOutput buf1]` | getitem 读取 buf1，不再新增 operation |
+
+mm 的 `ExternKernelOut` 是本次 CPU 配置的实际选择，不是 mm 在所有设备上的固定表示。当前 lowering 可以比较多类实现：ATen 是现成 PyTorch operator；Triton 是为 GPU 生成的 kernel；CUTLASS 是 NVIDIA GPU 矩阵乘模板库；CK 是 AMD GPU 的 Composable Kernel 模板库；C++ packed 是 CPU 上把权重预先整理后调用的 C++ 实现。被选中的候选最终建立相应 template 或 extern IR；没有有效候选时，只有配置允许才退回 ATen，否则明确抛出 `NoValidChoicesError`。
+
+## 四条路径怎样在 Lowering 内完整交接
+
+把本层直接职责放回具体请求，可以看见它们不是四份互不相干的清单。
+
+| 请求 | 读图取得什么 | 处理职责交回什么 | output 后的本层出口 |
+| --- | --- | --- | --- |
+| `return (x+y)*2` | x、y 的输入说明；add 的结果引用 | 组合后的 Pointwise 位置规则 | 一项最终 ComputedBuffer operation；add 不必单独物化 |
+| `return x.sum(1)` | x 的 size/stride 与轴 1 | 输出范围 `[2]`、组内范围 `[128]`、sum 组合规则 | 实验实际保留 Reduction operation |
+| `return x.permute(1,0)` | x 的 storage 与原布局 | size `[3,2]`、stride `[1,3]` 的 ReinterpretView | 共享输入 storage 的 graph output；0 个新 operation |
+| `return relu(x@w)` | x、w 及 mm/relu 的结果引用 | mm 的 Extern/候选实现结果，relu 的位置规则 | 至少一个外部调用边界，后续 pointwise 可继续调度 |
+
+mutation 再增加数据版本。对 `old=x+1; x.copy_(y); return old,x`，AOT 交给本层的 post-grad 图返回 old，并用 `copy_(x,y)` 表达对输入 x 的副作用。当前实验中的状态是：
+
+| 处理阶段 | operations | mutated_buffers | 本层保存的含义 |
+| --- | --- | --- | --- |
+| add 后 | `[op0]` | `[]` | old 是图的显式输出，因此已经成为 `ComputedBuffer buf0` |
+| copy_ 后 | `[op0,op1]` | `[arg0_1]` | op1 的 mutation layout 指向原输入 x；x 是被覆盖的真实 storage |
+| output 后 | 仍为 `[op0,op1]` | 仍含 `arg0_1` | graph_outputs 只含 old；输入 x 的更新由 mutation 状态而非第二个普通返回 buffer 表达 |
+
+这里不能把 old 的物化单独归因于 copy_：它本来就是 post-grad 图的输出。源码中的通用保护发生在 `mark_buffer_mutated(x_name)`：它查找此前登记的所有旧 x reader，并对这些 reader 调用 `realize()`，然后 mutation operation 才指向 x 的 storage。这样，即使某个旧 reader 不是直接图输出，它也不会在覆盖之后重新展开并误读新 x。
+
+运行时，buf0 得到 `[1,2,3]`，copy operation 把调用者 x 改为 `[9,9,9]`；用户看到的第二项返回值仍与调用者 x 使用同一地址。当前生成的 Inductor `call` 直接返回 `(buf0,)`，原输入的可见更新由写回 x 的副作用实现；外层编译代码再按用户函数原来的返回形式补回第二项 x。Scheduler 接下来从 op0、op1 和 mutation target 建立“旧读完成后才能覆盖”的依赖。
+
+特殊路径也必须从 FX 引用走到同一个本层出口，而不是停在“有 fallback/cond”这个名称上：
+
+- `torch.histc([0.5,1.5,1.8,3.2], bins=4, min=0, max=4)` 没有变成 Pointwise。Q21 从 FX 节点取得输入和常数参数，Q24 保留 `aten.histc.default` 的 operator 身份、参数结构和 packed 返回，建立 `FallbackKernel buf0`；该 Tensor 输出再由 `MultiOutput buf1` 引用。Q21 把 buf1 交给 output，Scheduler 因而看见一次有输入、有输出的外部工作。结果为 `[1,2,0,1]`。
+- `torch.cond(pred, true_fn, false_fn, [x])` 中，Q21 取得 predicate、两个子 GraphModule 和 operands；Q24 分别建立子 GraphLowering，true 分支的 `x+1` 与 false 分支的 `x-1` 各自形成子图出口，并检查 size/stride/device/dtype/offset 能否统一。父图登记 `Conditional buf0`，用 `MultiOutput buf1` 代表统一结果，再由 Q21 连接父图后继或 output。输入 x=`[2,4]` 时，pred 真得到 `[3,5]`，假得到 `[1,3]`；Lowering 编译两支接口，不等于运行时同时执行两支。
+
+若 cond 两支的输出数量、size、stride、device、dtype 或 offset 任一不一致，Q24 就无法为父图建立一套统一的 MultiOutput，路径在 Lowering 明确失败；分支输出存在不支持的共享存储关系也会拒绝。Scheduler 不会等到运行时 predicate 已知后再猜接口。若 fallback schema 表明算子会修改输入，而且不能自动改写成函数式形式，`FallbackKernel` 会抛出 `NotImplementedError`，而不是把它当成没有副作用的外部函数。
+
+这三条路径的共同出口仍是“有名字的 operation、输入引用、输出引用和明确的接口要求”。差别在于普通 mm 保留算法选择结果，fallback 保留任意已注册 operator 的调用结构，cond 还保留两张子图及统一的多输出形式。
+
+逐元素和规约交出计算规则，视图交出共享与坐标关系，已有调用交出调用身份，mutation 交出数据版本顺序；`GraphLowering` 的环境把每种结果继续接到后继节点和 output。这才是四项职责在一张图里协作的方式。
+
+## 综合案例：六个 FX 节点为什么只交出两个 operation
+
+沿用根篇已实测的 `permute→add→relu→sum→unsqueeze→mm`，并同时返回 sum 结果与 mm 结果。Q21 的 env 每处理一步都保存当前引用，但 `operations` 的变化不是“一节点加一项”：
+
+| 处理后 | env 中当前结果 | operations | 原因 |
+| --- | --- | --- | --- |
+| permute | 引用输入 storage 的 `ReinterpretView [3,128]` | `[]` | Q22 只改坐标，Q23 保留共享 |
+| add | `Pointwise [3,128]` | `[]` | 仍是可组合的位置规则 |
+| relu | 包含 add 的 `Pointwise [3,128]` | `[]` | 继续延迟，不需独立数组 |
+| sum | `ComputedBuffer buf0 [3]` | `[buf0]` | Q22 建立规约；作为 mm 参数和最终输出，Q23 给它稳定身份 |
+| unsqueeze | buf0 上的 `ReinterpretView [1,3]` | `[buf0]` | 只改变 mm 看见的逻辑形状 |
+| mm | `ExternKernelOut buf1 [1,2]` | `[buf0,buf1]` | Q24 保留已有调用及其输出 |
+| output | graph outputs 为 buf0、buf1 | `[buf0,buf1]` | Q21 整理双输出，交 Scheduler |
+
+这个表把四项职责接在同一份状态上：Q21 负责结果引用不断档，Q22 提供 view/pointwise/reduction 的计算内容，Q23 根据后继的实际需要决定共享还是物化，Q24 建立 mm 外部工作。若删去“返回 rows”但保留 mm，buf0 仍然需要，因为 mm 必须取得真实输入；若删去 mm 但仍返回 rows，buf0 仍因图输出身份而需要；两种消费者都删去后，不能沿用这个理由断言仍有同样的 operation，必须重新看新的后继和 output。
+
+## 算子处理器怎样接回读图过程
+
+`register_lowering(aten_fn, ...)` 最终把 target 与一个“算子处理包装函数”放进 `lowerings` 字典。这个注册 wrapper 只在编译期先广播输入、做类型提升，再调用真正的 IR 构造函数；它不是前文那个在运行时检查输入、分配内存并调用 kernel 的模块 wrapper。
+
+例如当前 `aten.mul` lowering 会处理 bool 特例，否则用 `make_pointwise` 构造乘法规则；`aten.sum` 选择 `make_reduction("sum")`。注册表解决“这个 target 交给谁”，但图环境、布局、物化、mutation 和输出处理由 `GraphLowering` 与 IR 对象共同完成。
+
+## 本层出口
+
+Lowering 完成后，关键产物不是一张新的 FX 图，而是：
+
+- `operations`：已物化、需要调度的 IR 操作；
+- buffers / graph inputs / constants：计算读写的存储身份；
+- graph outputs：返回值及其布局、alias 关系；
+- 图级状态：mutation、device、symbolic sizes、外部调用等信息。
+
+下一篇的 Scheduler 不再关心 `aten.add` 这个名字本身；它主要读取这些操作的循环范围、读写集合、布局和 device，决定执行与融合。若把上表的 `permute` 后接一个只接受连续输入的 extern 调用，Lowering 必须在“安排存储/布局”这一步准备好连续数据，不能把问题留给 Scheduler 猜测。
+
+继续深入：
+
+1. [GraphLowering 怎样逐节点解释 FX 图](01-graph-interpreter/README.md)
+2. [Pointwise、Reduction 与 View 怎样表达索引计算](02-compute-ir/README.md)
+3. [realize、layout、alias 与 mutation 怎样决定存储](03-storage-layout/README.md)
+4. [模板、外部调用、fallback 与控制流](04-special-calls/README.md)

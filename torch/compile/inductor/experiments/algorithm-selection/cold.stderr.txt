@@ -1,4 +1,0 @@
-AUTOTUNE mm(16x64, 64x64)
-  cpp_packed_gemm_0 0.0014 ms 100.0% 
-  mm 0.0089 ms 15.8% 
-SingleProcess AUTOTUNE benchmarking takes 0.3735 seconds and 2.0247 seconds precompiling

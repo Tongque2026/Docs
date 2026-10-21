@@ -1,7 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %s_1 : [num_users=1] = placeholder[target=s_1]
-    %clone : [num_users=2] = call_function[target=torch.ops.aten.clone](args = (%x_1,), kwargs = {})
-    %as_strided_default : [num_users=1] = call_function[target=torch.ops.aten.as_strided.default](args = (%clone, [2, 2], [4, 1], 5), kwargs = {})
-    %copy__default : [num_users=0] = call_function[target=torch.ops.aten.copy_.default](args = (%as_strided_default, %s_1), kwargs = {})
-    return (clone,)

@@ -1,224 +1,340 @@
-# Inductor：把一张算子图编译成可调用程序
+# 从 `torch.compile` 的图到可调用函数：Inductor 总览
 
-```text
-Inductor ← 当前篇  本层完成
-    ├── 图准备  本层完成
-    ├── Lowering  本层完成
-    ├── 调度与融合  本层完成
-    └── 代码生成与运行封装  本层完成
-```
+> 源码基线：`/work/pytorch`，commit `8332c5622aabd9535969e9a8d0ed60e4a90e4402`。本文只依据该工作区当前源码、相关测试与本教程的独立实验。
 
-<!-- child-links:start -->
-直接子篇：[图准备](01-graph-preparation/README.md)、[Lowering](02-lowering/README.md)、[调度与融合](03-scheduling/README.md)、[代码生成与运行封装](04-codegen-runtime/README.md)。
-<!-- child-links:end -->
-
-[完整阅读索引与当前模块树](INDEX.md)。
-
-Inductor 接收 FX `GraphModule` 和示例输入，把“调用哪些算子”转换成“怎样访问内存、怎样组织计算、怎样启动 kernel”的程序，最后返回可调用对象。调用这个对象时，真实输入才产生输出张量。本文从这次编译请求开始，关注 Inductor 内部，不展开 Dynamo 与自动微分的实现。
-
-本篇基于本地 `/work/pytorch`，commit `8332c5622aabd9535969e9a8d0ed60e4a90e4402`。源码链接均指向本地实现；正文中的运行结果来自本目录的 CPU 实验。GPU 路径只按源码说明，没有把 CPU 结果推广为 GPU 实测结论。本地导入的 Python 来自该工作树，但现有二进制的版本标记为 `2.5.0a0+gitc77adf6`，与 checkout HEAD 不同；以下实验不代表整套二进制重新构建自该 commit。
-
-## 1. 先把入口、返回值和执行时机分开
-
-本地实现有两个层次的入口，不能把它们收到的图混为一谈。
-
-| 入口 | 收到什么 | 做到哪里 | 返回什么 |
-| --- | --- | --- | --- |
-| `torch._inductor.compile` → `compile_fx` | FX 图、示例输入、可选配置 | 整理外部输入输出接口，配置编译回调，并与 AOTAutograd 对接 | 对外可调用程序，接口由外层适配 |
-| `compile_fx_inner` | 一张已准备好的 forward、backward 或 inference 图，及对应示例输入 | 编译这张图、处理缓存和运行适配 | 常见路径返回 `CompiledFxGraph`，按一个参数列表调用 |
-
-依据：[公开入口](/work/pytorch/torch/_inductor/__init__.py:11)、[compile_fx](/work/pytorch/torch/_inductor/compile_fx.py:1242)、[单图编译入口](/work/pytorch/torch/_inductor/compile_fx.py:459)。`compile_fx` 自身也位于 Inductor 目录，但不能由此认为它收到的图已经是 post-grad 图。它会注册前向、反向、推理编译回调；后续每张图才交给 `inner_compile`。这里仅交代这个边界。
-
-下面主图从**单图编译请求**开始。以推理为例，输入图可以概括为：
+你已经知道 `torch.compile` 会捕获图，但要读懂 Inductor，先要看清“图”里究竟保存了什么。以贯穿案例为例：
 
 ```python
-# 图的参数是展平后的参数序列，不是原始模型的任意嵌套调用结构。
-def forward(x, y):
-    add = torch.ops.aten.add.Tensor(x, y)
-    relu = torch.ops.aten.relu.default(add)
-    mul = torch.ops.aten.mul.Tensor(relu, 2)
-    return (mul,)
+def fn(x, y):
+    a = x + y
+    b = torch.relu(a)
+    return b * 2
 ```
 
-`example_inputs` 与图中的输入节点按位置对应。对张量，Inductor 需要 shape、stride、dtype、device；动态维度还可能由符号尺寸表示。示例输入可能是真实 Tensor，也可能是只描述张量属性的 FakeTensor，不能把它们一律当作需要计算的实际数据。虽然部分接口的类型标注写着 `List[Tensor]`，内部还明确处理符号整数等参数。
+编译器收到的计算关系可以先记成这张表：
 
-这个边界上的输出通常是 tuple/list；单图编译器会检查这一点。外层接口可以展平输入、恢复输出结构，所以这里的 `(mul,)` 不意味着用户原模型必须返回单元素元组。
+| 名字 | 这一步做什么 | 输入引用谁的结果 |
+| --- | --- | --- |
+| `x`、`y` | 函数输入 | 调用者提供 |
+| `a` | 相加 | `x`、`y` |
+| `b` | 把负数变为 0 | `a` |
+| `c` | 乘 2 | `b`、常数 2 |
+| 返回 | 返回结果 | `c` |
+
+FX 是 PyTorch 保存这类计算关系的一种表示。每个 FX node 记录一项输入、操作或返回；边由“后一步引用前一步的结果”形成。`GraphModule` 把这张图、相关模块属性和可执行的 `forward` 组织在一起。比如把 relu 的输入从 `a` 改成 `x`，就不再计算 `relu(x+y)`，而是计算 `relu(x)`；一条边连向谁，直接决定程序算什么。
+
+现在才进入四个组件。先不记内部类名，只看同一份计算关系每一步多了什么。
+
+对上面的三个算术操作，FX 图只记录“先加、再 relu、最后乘 2”。Lowering 会把它补成一条可以代入位置的规则：
 
 ```text
-编译时：compiled = compile_fx_inner(gm, [example_x, example_y], ...)
-        compiled 是可调用对象，不是结果张量。
-执行时：outputs = compiled([real_x, real_y])
-        outputs[0] 才是本次计算结果。
+给定输出位置 i
+  读取 x[i] 和 y[i]
+  相加并把负数变成 0
+  再乘 2
+  写到输出位置 i
 ```
 
-训练时，前向图的输出还可能带有保存给反向的中间值、用于回写输入的值；反向图的输入可能包括保存值和输出梯度。Inductor 编译的是该图的完整接口，不能把“图输出”全部解释为用户看见的模型输出。外层用 `user_visible_outputs` 标识其中哪些需要遵守用户输出的布局要求，见 [前向回调](/work/pytorch/torch/_inductor/compile_fx.py:1352)。
+这份“有哪些输入、输出范围多大、每个位置怎样计算”的编译器记录，后文称为 Inductor IR。对本例，它至少让后一步知道：读取 x、y，写一份输出，位置 i 从 0 到 2。
 
-## 2. 内部整体流程
-
-![Inductor 内部流程](assets/inductor-flow.png)
-
-[查看矢量图](assets/inductor-flow.svg)。实线表示编译期间的数据交接或调用方向；左侧虚线是缓存命中旁路，底部虚线表示返回程序后、由调用者另行触发执行。图中四个编号对应四个直接子模块；缓存是跨入口和出口的共享机制，归入第 4 模块继续展开。
-
-未命中 FX 图缓存时，先整理 FX 图并传播张量属性，再让 `GraphLowering` 解释图中的节点，构建 Inductor IR。这里“解释”是在构造计算描述，不是执行完整模型来求输出。接着 Scheduler 读取 IR 中的操作，建立依赖、分组、融合和生命周期信息。它按排定的节点驱动设备后端生成代码，wrapper 再把分配、调用和返回值组织起来。生成的模块被加载，`module.call` 连同元数据封装成 `CompiledFxGraph` 返回。
-
-这条主线能在 [fx_codegen_and_compile](/work/pytorch/torch/_inductor/compile_fx.py:696) 中直接核对：post-grad passes → `GraphLowering(...)` → `graph.run(*example_inputs)` → `graph.compile_to_fn()` → `CompiledFxGraph(...)`。
-
-注意有两种不同的交接方式：
-
-- Lowering 的关键产物保存在 `GraphLowering` 对象上，包括输入、操作、缓冲区、常量和输出；上层不是接收 `run()` 返回的一份完整 IR 文件后再传给调度器。
-- `GraphLowering.codegen()` 创建 `Scheduler(self.operations)`，随后调用 `scheduler.codegen()`；调度与生成通过对象状态和后端调用配合，实际代码没有一个独立的“执行计划文件”作为必经返回值。
-
-如果 FX 图缓存命中并通过适用性检查，可以恢复已有程序，跳过本次图优化、Lowering 和 kernel 生成。恢复后仍需处理输出 stride 信息、可选 CUDA Graph 和输入对齐等运行适配；缓存返回不是直接返回上一次算出的张量。依据：[缓存入口](/work/pytorch/torch/_inductor/compile_fx.py:647)、[恢复后适配](/work/pytorch/torch/_inductor/codecache.py:1140)。
-
-## 3. 四个模块分别接收和交出什么
-
-### 3.1 图准备：在 FX 层整理算子关系
-
-这个模块收到单图 `gm` 和示例输入。它先处理 view/reshape 相关问题，传播 FakeTensor 属性，再执行 post-grad passes；输出仍是 FX 图，交给 Lowering。
-
-例如 `add → relu → mul` 的节点边表示“谁依赖谁”，还没有决定每个算子是否分别产生 kernel，也没有给 `add` 分配实际输出空间。图准备可以消除无用节点、改写匹配的算子模式、按条件调整图的顺序。它修改 `gm` 和节点元数据，最后重新生成图的 Python 入口并检查图的合法性。
-
-这些处理受配置和推理/训练条件控制，不是每张图都会触发每种优化。尤其不能看到这里有 pattern matcher，就断言本案例的三个算子已经在 FX 层合为一个节点。下一模块仍可能看到三个节点，而最终只生成一个 kernel。
-
-依据：[准备到 Lowering 的衔接](/work/pytorch/torch/_inductor/compile_fx.py:770)、[post_grad_passes](/work/pytorch/torch/_inductor/fx_passes/post_grad.py:72)。该函数末尾还可能重新引入受控的原地操作，因此“进入时已功能化”不等于后续所有 IR 都没有写入语义。
-
-### 3.2 Lowering：把算子关系写成计算与存储描述
-
-这个模块收到整理后的 FX 图。`GraphLowering` 按节点解释，将输入节点变成带布局的输入缓冲区描述，将算子交给相应 lowering 函数，将输出登记为图输出。
-
-例如 `x` 的 shape 是 `(2, 3)`、stride 是 `(3, 1)`，那么逻辑位置 `[1, 2]` 的元素偏移是 `1*3 + 2*1 = 5`。Lowering 保存这样的布局，构造“从输入哪个位置读取、做什么计算”的 IR。输入缓冲区描述引用运行时参数，并不在这里复制一份真实输入。
-
-对点运算，表达式可以组合，因此 FX 节点和最终缓冲区、kernel 都不是一一对应关系。只有需要实际存储结果时，才必须形成相应的存储实体；view 也可能只改变索引与布局。
-
-模块交给 Scheduler 的核心是 `graph.operations`；输入、输出、常量、缓冲区映射仍留在 `graph` 上，调度和生成会继续访问。`run()` 返回后这些状态已建立，不能只观察 Python 返回值来判断 Lowering 做了什么。
-
-遇到没有直接 lowering 的算子，源码会按允许列表和配置尝试外部算子 fallback；不允许 fallback 时，会抛出缺少 lowering/decomposition 的异常。这是**编译程序中保留外部调用**，不等于整个图一定退出 Inductor。依据：[输入节点](/work/pytorch/torch/_inductor/graph.py:922)、[算子分派与失败路径](/work/pytorch/torch/_inductor/graph.py:981)、[输出与输入写回](/work/pytorch/torch/_inductor/graph.py:1075)。
-
-### 3.3 调度与融合：决定依赖、组合和生命周期
-
-Scheduler 收到 Lowering 登记的操作，借助图上的输入和常量状态建立可用数据集合，再建立读写依赖、拓扑顺序和融合分组。它还计算缓冲区的最后使用位置，供生成阶段释放或复用存储。
-
-例如 `b = a + 1; c = b * 2`，如果 `b` 不需要作为独立结果保存，计算可以留在同一个 kernel 内。如果某个中间结果既被后续计算读取又要返回，调度必须保留这条需求，不能只追求少一个中间缓冲区。实际能否融合还要由设备后端、索引关系和代价判断决定。
-
-这里的输出是 Scheduler 上的节点顺序、融合节点及依赖和生命周期状态；接下来 `scheduler.codegen()` 遍历这些节点，针对普通计算、模板或外部调用选择对应生成路径。计算拓扑和合法性是硬约束，不能把融合解释成任意相邻算子拼接。
-
-依据：[Scheduler 初始化](/work/pytorch/torch/_inductor/scheduler.py:1726)、[按节点驱动代码生成](/work/pytorch/torch/_inductor/scheduler.py:3381)。本层把缓冲区管理当作一项协作职责；具体分配、复用代码仍由 wrapper 等生成逻辑落实，不全部发生在 Scheduler 构造函数里。
-
-### 3.4 代码生成与运行封装：让计算描述变成可执行入口
-
-设备后端接收调度后的节点生成 kernel；wrapper 接收输入输出关系、布局和调用顺序，生成参数拆解、尺寸检查、缓冲区分配、kernel 启动和结果返回。CPU 路径可生成 C++，GPU 路径可生成 Triton，也能使用模板和外部算子调用；不是所有节点都必须翻译成 Triton。
-
-例如本案例会生成 `cpp_fused_0` 做计算，另生成 Python `call(args)` 分配输出并调用它。两者合起来才是图的程序。只把 C++ 函数保存下来，还没有完整表达如何接收框架输入、分配 Tensor 和返回图结果。
-
-默认 JIT 路径中，生成的 Python 模块写入代码缓存并加载，模块中的 `call` 被取出，封装进 `CompiledFxGraph.current_callable`。对象还保留输出 stride、常量、修改了哪些输入等信息。随后调用 `CompiledFxGraph(inputs)` 会转发到这个 callable。异步编译任务需要完成后才能使用对应 kernel；“返回程序”和“提交一项编译工作”不是同一件事。
-
-依据：[生成入口](/work/pytorch/torch/_inductor/graph.py:1775)、[写入与加载](/work/pytorch/torch/_inductor/graph.py:1841)、[compile_to_fn](/work/pytorch/torch/_inductor/graph.py:1890)、[CompiledFxGraph](/work/pytorch/torch/_inductor/codecache.py:1408)。生成、编译、加载失败会向调用者传播，本层没有保证任何错误都会自动转成 eager 执行。
-
-AOT 编译是另一个出口：`compile_to_fn` 在 AOT 模式调用 `AotCodeCompiler.compile`，返回编译产物路径，而不是 JIT 的 `module.call`。本文的案例走 JIT，不能用“总是返回 Callable”概括所有模式。
-
-## 4. 实际走一次：三个算子怎样变成一个 CPU kernel
-
-本实验直接调用单图入口，跳过上游捕获与自动微分。输入均为 CPU、float32、shape `(2, 3)`、stride `(3, 1)`：
+Scheduler 再把这项工作包装成一条待生成记录，可以先把它想成：
 
 ```text
-x = [[-2, -1, 0],     y = [[1, 1, 1],
-     [ 1,  2, 3]]          [1, 1, 1]]
-计算：return (relu(x + y) * 2,)
+工作：计算最终输出
+读取：x、y
+写入：out
+位置范围：0、1、2
+必须排在谁后面：没有其他计算
 ```
 
-### 第一步：图准备收到三个算子节点
-
-[采集的原始 FX 图](experiments/pointwise_fx.txt) 中，两个 placeholder 分别代表 `x` 和 `y`，随后是 `aten.add.Tensor`、`aten.relu.default`、`aten.mul.Tensor`，最后返回 `(mul,)`。图准备收到的是这些节点和示例属性，不是 `[0, 0, 2, 4, 6, 8]` 这样的计算结果。
-
-准备后，算子图和属性交给 `GraphLowering`。本例 Lowering 结束时保存的 FX 图及操作表示见 [采集记录](experiments/pointwise_lowered.txt)，可与进入前的图对照。
-
-### 第二步：Lowering 保存输入布局和输出计算
-
-Lowering 将 `x_1`、`y_1` 登记为输入缓冲区。三个点运算的作用可概括为下面的元素表达式；这是对 IR 交接的简化说明，不是原始 IR 类定义：
-
-```text
-对输出元素 [i, j]：
-  从 x_1 的偏移 3*i+j 读 a
-  从 y_1 的偏移 3*i+j 读 b
-  value = max(a+b, 0) * 2
-  将 value 作为输出对应位置的计算
-```
-
-图输出迫使最终结果有可返回的存储。Lowering 保留输入和输出描述，将已登记的操作交给调度；尚未创建本次实际输出 Tensor。
-
-### 第三步：调度把实际操作交给 CPU 后端
-
-Scheduler 从这些操作中建立依赖并确定生成顺序。不能根据 FX 有三个算子就假定这里一定存在三个待融合的 Scheduler 节点：点运算的表达式组合可能已经发生在 Lowering 中。调度处理的是 Lowering 实际产生的操作。
-
-本次采集到的 Lowering 产物已经是一个 `ComputedBuffer`，内部 `Pointwise` 表达式包含 add、relu 和 mul，布局为 `(2,3)`、stride `(3,1)`。因此 Scheduler 接收的是这个已组合计算的操作，而不是等待它首次融合的三个独立点运算节点。最终生成一个计算 kernel，与这个交接一致。
-
-### 第四步：生成 kernel 和 wrapper，返回程序
-
-[完整生成代码](experiments/pointwise_output.py) 中，C++ kernel 的关键计算是：
+这样的记录后文称为 scheduler node。Scheduler 会比较多条记录之间谁读谁写、谁必须先执行，以及能否放进同一个循环。假设三项算术原本各自生成一次完整数组，就需要三个循环；把它们放进同一个循环后，每个位置依次完成 add、relu、mul，只写最终结果。后文把这种“多项工作合成一个生成单元”称为 fusion（融合）。本例的实际编译会直接保留可组合的位置规则，最终生成下面这一类循环：
 
 ```cpp
-auto tmp0 = in_ptr0[static_cast<int64_t>(x0)];
-auto tmp1 = in_ptr1[static_cast<int64_t>(x0)];
-auto tmp2 = decltype(tmp0)(tmp0 + tmp1);
-auto tmp3 = std::max(tmp2, decltype(tmp2)(0));
-auto tmp4 = static_cast<float>(2.0);
-auto tmp5 = decltype(tmp3)(tmp3 * tmp4);
-out_ptr0[static_cast<int64_t>(x0)] = tmp5;
+for (int64_t i = 0; i < 3; i++) {
+    out[i] = max(x[i] + y[i], 0.0f) * 2.0f;
+}
 ```
 
-外围循环中 `x0` 从 0 到 5；三个计算共享这次遍历，不需要为 add 和 relu 各生成一个完整的中间 Tensor。这里描述的是生成代码可见的内存行为，没有做性能计时，也不声称具体加速倍数。
+Codegen 做的就是把已经排好顺序和分组的记录变成这种目标代码，并生成负责检查输入、准备输出空间、调用代码和返回结果的外围函数。
 
-同一个文件里的运行入口实际包含：
-
-```python
-def call(args):
-    x_1, y_1 = args
-    args.clear()
-    assert_size_stride(x_1, (2, 3), (3, 1))
-    assert_size_stride(y_1, (2, 3), (3, 1))
-    buf0 = empty_strided_cpu((2, 3), (3, 1), torch.float32)
-    cpp_fused_0(x_1, y_1, buf0)
-    del x_1
-    del y_1
-    return (buf0, )
-```
-
-编译后返回的对象类型是 `CompiledFxGraph`，`_boxed_call=True`，表示按一个参数列表调用。执行时它拆出 Tensor，清空承载参数的列表，检查布局，分配 `buf0`，调用 kernel，最后返回单元素元组。清空列表是释放参数引用，不是在清空 Tensor 数据；调用者若要再次执行，应重新构造参数列表。
-
-实际结果：
+本教程把 Inductor 看成一条逐步补全执行细节的流水线：
 
 ```text
-输出 = ([[0, 0, 2], [4, 6, 8]],)
-输出 shape=(2,3)，stride=(3,1)，dtype=float32，device=cpu
-数值与 eager 一致；x 保持原值；输出不与 x 共享存储
-generated_kernel_count = 1
-传入的参数列表在 call 后长度为 0
+torch.compile 前半段交来一张 FX GraphModule
+                 │
+                 ▼
+1. 图优化：在 FX 节点层改写、删除、规范化算子
+                 │  仍是 FX 图
+                 ▼
+2. Lowering：逐个解释 FX 节点，构造上述位置规则和待执行工作
+                 │  怎样计算、读写哪份数据、是否要调用已有函数
+                 ▼
+3. Scheduler：比较各项工作的读写，安排先后并决定哪些放进同一生成单元
+                 │  已排好次序和分组的工作记录
+                 ▼
+4. Codegen：生成设备或 CPU 执行代码；外围函数准备内存、调用并返回
+                 │
+                 ▼
+一个可调用的编译结果
 ```
 
-因此执行数据的交接是：真实输入 Tensor → wrapper → C++ 指针参数 → `buf0` → 图输出；编译阶段交接的是图、IR、生成源码和可调用对象。
+`torch.compile` 的前半段先把 Python 计算捕获成 FX 图。对本例，Dynamo 交出的区域包含 add、relu、mul 和 return，不包含函数外的下一条 Python 语句。训练时，AOTAutograd 再根据这张前向计算图建立求梯度所需的反向计算，并交出可分别编译的前向图与反向图。它们为 Inductor 准备输入，但不属于下面四项 Inductor 职责。本篇追踪的是：其中每一张 FX 图怎样成为可调用函数。
 
-## 5. 改一个条件：只返回 view，还需要编译程序吗
+另一端也不能停在执行加法的 C++ 循环。调用者最终需要一个 Python 可调用对象；外围代码还要检查输入是否满足这次编译采用的 shape 和 stride。stride 表示逻辑坐标每增加 1，内存偏移增加多少；一维连续输入的 stride=`[1]`，所以位置 i 读取内存偏移 i。检查通过后，外围代码准备输出空间，调用生成代码或已有函数，再把结果交回调用者。源码把这层外围代码称为 wrapper。
 
-第二个案例沿同一入口编译 `return (x.view(6),)`，输入属性保持不变，`y` 仍是图参数但不参与计算。
+后文还会反复用到三个词，先用本例把它们落到具体内容上：
 
-图准备收到一个 view 节点；Lowering 把它表达为对原输入的布局解释，不需要为六个元素重新做算术。调度与生成路径仍会处理这张图，但最终程序没有计算 kernel，也不分配一个新的六元素结果缓冲区。生成的 wrapper 返回：
+- **layout（排布记录）**说明一个张量有多大，以及逻辑位置怎样换算成一维内存位置。例如 size=`[2,3]`、stride=`[3,1]` 时，位置 `[1,2]` 对应偏移 `1×3+2×1=5`。
+- **storage（实际数据空间）**是保存元素的那块内存。同一块 storage 可以被两个张量名字共同使用；例如 `x.view(3,2)` 没有复制六个元素，只是用另一套 size/stride 读取 x 的 storage。
+- **backend（代码生成后端）**是把排好顺序的工作翻译成某种目标代码的实现。CPU backend 可以把本例写成 C++ 循环；GPU 路径可交给 Triton backend 写成 Triton kernel。
+
+四个阶段并不保证每次都各自产生一个新节点。它们更像四次补充问题答案：
+
+| 处理到哪里 | 当前对象还缺什么 | 本阶段补上的信息 |
+| --- | --- | --- |
+| FX 图优化前 | 节点关系可能仍可整理或替换 | 不改变程序结果的节点改写，以及引用关系合法的图 |
+| Lowering 前 | FX 节点只说“调用哪个算子”，没有说明每个输出位置怎样读输入 | 位置计算规则；需要独立保存的数据；要调用的已有函数 |
+| Scheduler 前 | 各项待执行工作已经形成，但还没有比较它们的读写关系 | 谁必须先执行；哪些工作放在同一个生成单元；每份数据最后由谁读取 |
+| Codegen 前 | 工作已经排好顺序和分组，但还不是机器能执行的程序 | CPU/CUDA 等目标代码，以及检查输入、准备内存、调用和返回的外围代码 |
+
+图优化本身还会在编译流程的三个位置运行。AOTAutograd 之前称为 pre-grad；训练时前向和反向仍在一张图里时称为 joint；拆成独立的前向图或反向图以后、进入 Lowering 前称为 post-grad。FX Graph Cache 保存的正是某张单图从 post-grad 往后的编译结果；命中后可以恢复已有结果，不再重做这张图的 post-grad、Lowering、Scheduler 和 Codegen。
+
+如果某一步已经不缺对应信息，它可以不产生新工作。例如纯转置可能只保留共享视图，没有独立转置 kernel。
+
+理解上面的对象以后，源码中的主干调用可用来定位实现：
+
+下面调用树中的 `GraphLowering` 是“正在处理这一张 FX 图”的对象。它一边逐个读取 FX node，一边保存“该 node 当前对应哪条位置计算规则或哪份有名结果”，最后把需要执行的工作收集起来。先知道这个用途即可；它的字段和分支在 Lowering 篇展开。
+
+```text
+compile_fx
+  ├─ pre_grad_passes
+  ├─ AOTAutograd（把训练拆成前向、反向图；把 add_ 这类原地计算改成普通 add 加显式 copy_ 写回）
+  └─ _compile_fx_inner
+       └─ fx_codegen_and_compile
+            ├─ joint_graph_passes / post_grad_passes
+            ├─ GraphLowering(...).run(...)
+            └─ GraphLowering.compile_to_fn()
+                 └─ GraphLowering.codegen()
+                      ├─ Scheduler(self.operations)
+                      ├─ Scheduler.codegen()
+                      └─ wrapper_code.generate(...)
+```
+
+`compile_fx` 并不是只收一张最初的 Dynamo 图然后直线走到底。训练时 AOTAutograd 会准备前向与反向图；动态形状也会增加符号尺寸和输入条件。普通 `torch.compile` 在当前 Python 进程中交回可调用函数；AOT 编译则预先生成可保存、可独立部署的源码、输入输出信息和加载入口。本篇先抓住每一张交给 `_compile_fx_inner` 的单图共有的主干。
+
+## 一个逐元素案例走完四个阶段
+
+输入 `x=[-2,1,3]`、`y=[1,4,-1]`，数学过程是：
+
+```text
+x+y       = [-1, 5, 2]
+relu(...) = [ 0, 5, 2]
+乘 2      = [ 0,10, 4]
+```
+
+独立实验保存在 [`experiments/01_pointwise_pipeline.py`](experiments/01_pointwise_pipeline.py)，实际输出也为 `[0,10,4]`。
+
+### 图优化交出什么
+
+实验在 `post_grad_custom_post_pass` 保存了 post-grad 图：
+
+```text
+arg0_1, arg1_1
+   └─ aten.add.Tensor
+        └─ aten.relu.default
+             └─ aten.mul.Tensor(..., 2)
+                  └─ return
+```
+
+三项算术仍是三个 FX 节点。这说明本例的“最后融合成一个循环”不是 post-grad FX 优化已经做完的事。图优化在这一层整理或替换节点、删除无效节点，并保证节点先后和引用仍然合法；交出的仍是 FX 图。
+
+### Lowering 交出什么
+
+`GraphLowering` 按 FX 顺序解释节点：placeholder 变成输入说明；读到 `aten.add`、`aten.relu`、`aten.mul` 时，分别找到负责建立相应计算规则的处理函数。
+
+对于这个逐元素链，Lowering 的核心结果可以先理解为一条“给定输出位置，怎样取数和计算”的延迟规则：
 
 ```python
-return (reinterpret_tensor(x_1, (6, ), (1, ), 0), )
+# 教学伪代码，不是产品源码
+def value_at(i):
+    t0 = read_x(i)
+    t1 = read_y(i)
+    return relu(t0 + t1) * 2
 ```
 
-实际输出为 `[-2, -1, 0, 1, 2, 3]`，shape `(6,)`、stride `(1,)`；输出与 `x` 的底层存储指针相同，`x` 内容不变，生成 kernel 数为 0。见 [生成程序](experiments/alias_output.py) 和 [实验结果](experiments/results.json)。
+这里保存的是计算方法，不是已经算出的三元素张量。只有后继操作或函数输出需要一份有名字的数据时，Lowering 才登记一项负责产生该数据的工作。对应的内部类名和登记过程在 Lowering 篇展开。
 
-这个分支解释了为什么 Inductor 的交付物应理解为“图的可调用程序”：即使没有 kernel，仍然需要一个入口接收参数、检查布局、构造符合别名关系的返回值。若只验证数值，会漏掉“输出必须共享输入存储”这项语义。
+### Scheduler 交出什么
 
-还有一个更早的分支：单图入口发现图中没有算子调用时，会直接返回对 `gm.forward` 的列表调用适配，跳过通常的生成路径。本例有 view 调用，因此不是走这个空计算图快捷出口。依据：[早期返回](/work/pytorch/torch/_inductor/compile_fx.py:502)。
+`GraphLowering.codegen()` 用 `self.operations` 创建 `Scheduler`。例如 op0 写 buf0、op1 读 buf0 时，即使输入列表反过来，Scheduler 也会把 op0 排在 op1 前。若 op1 和 op2 都读 buf0，则最终顺序中较后的那一个是最后读取者，此后 buf0 才可释放或复用。Scheduler 还会删除结果无人使用且没有写入等副作用的节点，并尝试融合兼容的工作。
 
-## 6. 为什么保留这些中间表示
+本例最终只有一个已融合的 CPU 调度工作项。注意，Scheduler 并不是把数值算出来；它决定哪些计算应当一起交给哪个设备后端，以及它们的先后与存活关系。
 
-FX 图适合表达算子关系，但单凭 `aten.add` 不能决定元素怎样索引、结果是否必须物化。Lowering 把这些问题表达成 IR；Scheduler 再在真实读写依赖约束下组织执行；设备后端和 wrapper 把这个组织落实为某种硬件上的程序。这种职责划分可由上面的调用与状态交接直接看出。
+### Codegen 交出什么
 
-由此可以理解两个看似反常的现象：三个 FX 算子可以对应一个 kernel，一个 view 算子也可以对应零个 kernel。算子节点数、IR 操作数、调度节点数和 kernel 数描述的是不同层次，不能互换。
+实验捕获到一个 C++ kernel。关键循环等价于：
 
-缓存保存的是可复用程序及适用条件，避免每次重做这些转换；它不是按输入数值保存答案。动态尺寸、原地修改、模板选择、GPU 异步启动等会影响具体路径，本篇只建立它们所在的接口位置，没有对这些路径做运行验证。
+```cpp
+for (int64_t x0 = 0; x0 < 3; x0++) {
+    auto tmp0 = in_ptr0[x0];
+    auto tmp1 = in_ptr1[x0];
+    auto tmp2 = tmp0 + tmp1;
+    auto tmp3 = max(tmp2, 0);
+    auto tmp5 = tmp3 * 2.0f;
+    out_ptr0[x0] = tmp5;
+}
+```
 
-四个同层模块已分别建立内部流程和案例，各子篇按广度优先展开。当前四个模块都不是已逐行完成的叶子；已完成和待展开内容见阅读索引。
+wrapper 则检查输入 shape/stride，分配 `buf0`，调用 `cpp_fused_add_mul_relu_0`，释放不再需要的输入引用，再返回 `(buf0,)`。所以 Codegen 不只指 kernel 文本，也包括把 kernel 变成可调用程序所需的外围代码和加载过程。
+
+## 四个组件分别回答什么问题
+
+| 组件 | 进入时拥有 | 核心问题 | 交出给下一步 |
+| --- | --- | --- | --- |
+| 图优化 | 带元信息的 FX 图 | 能否在不改变程序结果的前提下整理、删减或替换节点？ | 改写后的 FX 图 |
+| Lowering | FX 节点、样例输入的 shape/device/dtype 信息 | 每个算子在 Inductor 中如何表示计算、布局、存储、修改或外部调用？ | Inductor IR 操作和图级状态 |
+| Scheduler | 已物化的 IR 操作及其读写 | 哪些操作有依赖，按何顺序执行，哪些能融合？ | 排序和融合后的调度节点 |
+| Codegen | 调度节点、目标 device、布局与生存期 | 如何生成目标后端 kernel，并由 wrapper 正确调用？ | 可编译、可加载、可调用的模块 |
+
+同一个词在不同层可能指不同对象。“node”可能是 FX node、IR operation 或 scheduler node；“fusion”可能是 FX 模式替换，也可能是 scheduler 将循环合成一个 kernel。阅读源码时先问当前对象属于哪一层。
+
+## 其他请求也完整经过四阶段，但交接内容不同
+
+逐元素链只能说明一条理想路径。下面用三个对照案例走到本层出口，先建立全貌；每个组件的内部算法留给对应子篇。
+
+### 按行求和：Lowering 必须增加组内位置
+
+输入 `x=[[0,1,2],[3,4,5]]`，请求 `x.sum(dim=1)`，数学结果为 `[3,12]`。
+
+| 阶段 | 本例的具体变化 |
+| --- | --- |
+| 图优化 | 交出一张包含 `aten.sum.dim_IntList` 请求的规范化 FX 图；本例没有把求和改成三个加法节点 |
+| Lowering | 建立两个坐标：`row` 选择输出 0 或 1，`column` 遍历组内 0、1、2；记录组合操作是 sum |
+| Scheduler | 看到一项读取 6 个输入位置、写 2 个输出位置的规约工作，安排依赖、融合和执行顺序 |
+| Codegen | 当前 CPU 实验生成外层两行、内层规约循环及累计值；wrapper 分配长度 2 的结果并调用 kernel |
+
+对第 1 行，累计值按 `0→3→7→12` 变化。Lowering 交出的不只是“算子叫 sum”，还必须让后续知道一个输出对应哪一组输入。
+
+### 转置视图：逻辑结果变化，可能没有新计算 operation
+
+同一输入请求 `x.t()`。输出形状为 3×2，位置 `[2,1]` 对应原输入 `[1,2]`，值为 5。
+
+| 阶段 | 本例的具体变化 |
+| --- | --- |
+| 图优化 | 保留规范化的转置/维度变换关系 |
+| Lowering | 建立 size=`[3,2]`、stride=`[1,3]` 的读取视图，保留它与输入共享 storage；实验中没有新增 operation |
+| Scheduler | 没有需要执行的转置计算时，不会为了“经过调度”虚构一个搬运节点 |
+| Codegen | wrapper 可按输出接口返回对应 view；只有消费者要求另一种物理布局时才需要额外转换或复制 |
+
+这个案例说明“阶段存在”不等于每个阶段必然产生新节点或 kernel。编译器保留共享和索引关系，同样是在完成工作。
+
+### 矩阵乘接逐元素：已有实现与生成循环在 wrapper 汇合
+
+对 `return torch.relu(x @ w)`，当前 CPU 路径把矩阵乘保留为已有 `extern_kernels.mm` 调用，relu 可成为生成的逐元素 C++ kernel：
+
+```text
+FX：mm → relu → output
+  │
+  ├─ Lowering：mm 形成外部/候选实现，relu 形成位置规则
+  ├─ Scheduler：外部调用形成边界，安排 mm 先完成，再提交 relu
+  └─ Codegen wrapper：分配 mm 输出 → 调用 mm → 调用 relu kernel → 返回
+```
+
+若实现选择或设备不同，mm 也可能进入 template：其中保存 mm 的输入、输出 layout、分块参数候选和待填的 kernel 代码；算法选择确定一组参数后，后端填入模板并生成 kernel。共同点是 Lowering 保留“调用什么、参数和输出是谁”，Scheduler 按依赖排序，Codegen 在同一 wrapper 中连接它与生成 kernel。
+
+### 输入覆盖：还要保护旧值和外部可见身份
+
+请求 `old=x+1; x.copy_(y); return old,x`，取 `x=[0,1,2]`、`y=[9,9,9]`。正确出口是 `old=[1,2,3]`，调用者的原 x storage 变成 `[9,9,9]`。
+
+Lowering 在建立覆盖写入前让仍读取旧 x 的 `old` 物化；Scheduler 由读写和 mutation 依赖把旧读排在覆盖前；Codegen 生成先读旧 x、再写原 x storage 的程序。若颠倒顺序，old 会错误变成 `[10,10,10]`。这条路径说明编译不仅保存数值公式，还必须保存存储身份和数据版本。
+
+### 运行时条件：两张分支图共享一个父图出口
+
+请求可以写成：predicate 为真时返回 `x+1`，否则返回 `x-1`。取 `x=[2,4]`，两种运行结果分别是 `[3,5]` 和 `[1,3]`。
+
+| 阶段 | 本例的具体变化 |
+| --- | --- |
+| 图优化 | 父 FX 图保留一项 `higher_order.cond`，两支计算仍以子图存在；编译期不能根据一次样例 predicate 删除另一支 |
+| Lowering | 分别解释 true/false 子图，并核对两支输出的数量、shape、stride、dtype 和 device 能否形成同一个父图接口 |
+| Scheduler | 父图看到一项带子图接口的控制流工作，按它对 predicate、operands 和输出的依赖安排位置，而不是把 add、sub 当作父图中必定连续执行的两项工作 |
+| Codegen | wrapper 保留运行时条件，只调用被 predicate 选中的分支；最终仍通过统一输出接口返回一份结果 |
+
+这里“编译两支”与“运行两支”不同。编译器必须先确认两支返回同样数量的结果，而且对应结果的 shape、stride、dtype 和 device 能组成同一个父图输出，运行时才能只选其中一支。如果 false 分支改成返回 shape `[1,2]`，而 true 分支仍返回 shape `[2]`，Lowering 无法确定父图究竟返回哪种形状，本例会在进入正常调度和生成前失败。
+
+### 无计算图与缓存命中：主干可以有快速出口
+
+若单图没有需要 Inductor 生成的计算，`_compile_fx_inner` 可以把原 `GraphModule.forward` 包成 boxed callable。普通 Python 函数接收多个位置参数；这里的 boxed callable 统一接收一个列表 `args=[x,y,...]`，取出参数后返回单图约定的结果 tuple。它不虚构 Scheduler 节点或空 kernel。
+
+另一种快速路径是 FX Graph Cache 命中。它发生在进入 `fx_codegen_and_compile` 之前：此时 pre-grad 已经在 AOTAutograd 之前运行，训练图的 joint passes 也已经在拆分前运行。当前单图的节点和常量、输入的 dtype/device/shape/stride，以及影响生成代码的配置共同参与定位缓存候选；候选自己的 shape 检查再判断它能否用于本次尺寸。合法候选保存 wrapper 源码的 cache key、代码路径、输入输出信息和 shape 检查表达式；由此加载 wrapper 并恢复 callable。因此命中时省去的是这张单图后续的 post-grad、Lowering、Scheduler 和 Codegen，不是前面的所有图处理，也不是实际运行。调用时 wrapper 和 kernel/已有函数仍会执行。
+
+例如同一张 `relu(x+1)*2` 图在两个独立进程共用一个新缓存目录：本教程实验第一次观察到一次 FX cache miss，第二次观察到一次 hit，两次都计算相同结果。正确结果只说明程序行为一致；明确的 hit/miss counter 才说明第二次走了缓存出口。
+
+这些案例合起来给出本教程的处理地图：逐元素、规约、视图、已有调用、mutation 和控制流都可能进入四项职责，但每次交接的对象不同；无计算图和缓存命中则展示了合法快速出口。后续子篇分别打开这些差异。
+
+## 综合案例：一条请求同时改变索引、合并数据并跨过已有调用
+
+最后把前面分开建立的机制放到同一个真实 CPU 案例中：
+
+```python
+def composite(x, weight):
+    view = x.permute(1, 0)
+    shifted = torch.relu(view + 1)
+    rows = shifted.sum(dim=1)
+    projected = torch.mm(rows.unsqueeze(0), weight)
+    return rows, projected
+```
+
+输入 `x=torch.arange(384.).reshape(128,3)`，所以第一行是 `[0,1,2]`，最后一行是 `[381,382,383]`。转置后有 3 行、每行 128 项；它仍读取 x 的原 storage。所有数非负，`relu(view+1)` 不改变加 1 后的值。第一条规约行依次是 `1,4,7,...,382`：
+
+```text
+项数 = 128
+首项 = 1，末项 = 382
+rows[0] = 128 × (1+382) / 2 = 24512
+
+同理 rows = [24512, 24640, 24768]
+```
+
+令 `weight=[[1,0],[0,1],[1,1]]`。矩阵乘得到：
+
+```text
+projected[0,0] = rows[0] + rows[2] = 49280
+projected[0,1] = rows[1] + rows[2] = 49408
+```
+
+独立实验 [`experiments/17_root_composite.py`](experiments/17_root_composite.py) 采集到的 Lowering 结果如下。箭头左边是 FX 操作；右边先说明它留下什么，再在括号中给出源码类名：
+
+```text
+permute      → 只换 size/stride、继续读原输入（ReinterpretView）；operations 仍为空
+add / relu   → 可继续组合的位置计算规则（Pointwise）；operations 仍为空
+sum          → 需要保存的有名结果 buf0（ComputedBuffer）；operations=[buf0]
+unsqueeze    → 对 buf0 的 view；不增加 operation
+mm           → 已有矩阵乘调用的输出 buf1（ExternKernelOut）；operations=[buf0, buf1]
+output       → 返回 buf0 和 buf1
+```
+
+为什么 sum 在这里必须成为 `buf0`？它一方面是最终第一个输出，另一方面又是 mm 的输入。mm 不能接收一条尚未执行的 Python 位置规则；它需要可传给已有实现的真实张量。于是 Lowering 在这个交接处给三项和稳定的存储身份。
+
+接下来 Scheduler 面对的不是原来的六个 FX 算子，而是两个需要执行的 IR operation：先产生 `buf0`，再由 mm 读取它和 weight、写 `buf1`。视图、加法和 relu 已经包含在产生 `buf0` 的索引与计算中。Codegen 因而生成一个完成转置读取、加一、relu 和规约的 CPU kernel，再由 wrapper 调用 mm，最后同时返回 `buf0`、`buf1`。实验数值正是 `rows=[24512,24640,24768]`、`projected=[[49280,49408]]`。
+
+这个例子展示的不是“算子越多越复杂”，而是三项要求相互作用：非连续 view 改变读取位置，规约把 128 项合成一项，已有调用和多输出共同要求规约结果物化。若删掉 mm，`rows` 仍因作为输出而需要独立保存；若不再返回 rows，mm 仍要求在调用前拿到一份可传入的 rows 数据。两项消费者需求任留其一，本例的这个物化理由仍成立。
+
+## 先用本层规则判断三个变化
+
+下面三题只需要本篇的交接关系，不要求记住内部类名。
+
+1. `a=x+y; b=relu(a); return b*2` 改成同时返回 `a` 和 `b*2`。图优化仍交出两条使用 a 的边；Lowering 不能只把 a 当成 b 内部可随意消失的临时规则，还要保留能交给输出的结果身份；Scheduler 和 Codegen 必须保证该结果在返回前有效。
+2. `x.t()` 后面接一个只接受连续输入的已有函数。视图给出的 stride 是 `[1,3]`，不满足这个函数对输入排布的要求；Lowering 需要先准备一份连续数据，Scheduler 再把准备工作排在已有函数调用之前，wrapper 按这个顺序连接两者。
+3. 上述 `cond` 的两支 shape 相同，但一支返回 float32、另一支返回 int64。数值个数相同仍不能形成统一接口；Lowering 比较两支输出时会拒绝，而不是让 Scheduler 猜测运行时会选哪种 dtype。
+
+这三题分别改变输出身份、消费者布局要求和控制流接口。能够指出“哪份对象发生什么变化、为什么由哪个阶段处理”，才算掌握本层协作；只背四个组件名称还不够。
+
+## 阅读路线
+
+现在按同一层的四项职责继续阅读：
+
+1. [图优化：为什么 Lowering 前还要反复改 FX 图](01-graph-optimization/README.md)
+2. [Lowering：怎样把 FX 节点变成可调度的计算](02-lowering/README.md)
+3. [Scheduler：怎样从读写依赖得到执行与融合计划](03-scheduler/README.md)
+4. [Codegen：怎样生成 kernel、wrapper 并加载](04-codegen/README.md)
+
+读完这四篇，你应能拿到一张简单 FX 图，指出每个节点引用谁、说明四阶段增加或改变了什么，并判断“一个 kernel”究竟在哪一层形成。更深一层的对象、分支和实现按本目录 [`_readme.md`](_readme.md) 中的“全系列广度优先讲解队列”展开；那份文件是教程编写与续写记录，不是学习正文。

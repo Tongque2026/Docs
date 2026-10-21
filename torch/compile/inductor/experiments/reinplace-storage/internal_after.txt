@@ -1,7 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %i_1 : [num_users=1] = placeholder[target=i_1]
-    %v_1 : [num_users=1] = placeholder[target=v_1]
-    %add : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%x_1, 0), kwargs = {})
-    %index_put : [num_users=1] = call_function[target=torch.ops.aten.index_put_.default](args = (%add, [%i_1], %v_1), kwargs = {})
-    return (index_put,)

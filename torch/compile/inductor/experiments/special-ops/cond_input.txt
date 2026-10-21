@@ -1,8 +1,0 @@
-graph():
-    %p_1 : [num_users=1] = placeholder[target=p_1]
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %true_graph_0 : [num_users=1] = get_attr[target=true_graph_0]
-    %false_graph_0 : [num_users=1] = get_attr[target=false_graph_0]
-    %cond : [num_users=1] = call_function[target=torch.ops.higher_order.cond](args = (%p_1, %true_graph_0, %false_graph_0, (%x_1,)), kwargs = {})
-    %getitem : [num_users=1] = call_function[target=operator.getitem](args = (%cond, 0), kwargs = {})
-    return (getitem,)

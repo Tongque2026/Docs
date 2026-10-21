@@ -1,2 +1,0 @@
-stream2 = get_raw_stream(2)
-compiled_kernel.compiled_kernel(x, out, c_void_p(stream2))

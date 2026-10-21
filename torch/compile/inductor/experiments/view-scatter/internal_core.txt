@@ -1,7 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %s_1 : [num_users=1] = placeholder[target=s_1]
-    %add : [num_users=2] = call_function[target=torch.ops.aten.add.Tensor](args = (%x_1, 1), kwargs = {})
-    %select : [num_users=0] = call_function[target=torch.ops.aten.select.int](args = (%add, 0, 1), kwargs = {})
-    %_generalized_scatter_1 : [num_users=1] = call_function[target=torch._inductor.fx_passes.reinplace._generalized_scatter](args = (%add, %s_1, [ViewOp(target=<OpOverload(op='aten.select', overload='int')>, args=(0, 1), kwargs={}), ViewOp(target=<OpOverload(op='aten.slice', overload='Tensor')>, args=(0, 1, 3), kwargs={})]), kwargs = {})
-    return (_generalized_scatter_1,)

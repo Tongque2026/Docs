@@ -1,6 +1,0 @@
-graph():
-    %p : [num_users=1] = placeholder[target=p]
-    %q : [num_users=0] = placeholder[target=q]
-    %c : [num_users=1] = call_function[target=torch.ops.aten.full.default](args = ([2], 1), kwargs = {dtype: torch.float32, device: cpu})
-    %copy_default : [num_users=1] = call_function[target=torch.ops.aten.copy.default](args = (%p, %c), kwargs = {})
-    return (copy_default,)

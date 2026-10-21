@@ -1,6 +1,0 @@
-graph():
-    %x_1 : [num_users=1] = placeholder[target=x_1]
-    %neg : [num_users=1] = call_function[target=torch.ops.aten.neg.default](args = (%x_1,), kwargs = {})
-    %neg_1 : [num_users=2] = call_function[target=torch.ops.aten.neg.default](args = (%neg,), kwargs = {})
-    %add : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%neg_1, 1), kwargs = {})
-    return (neg_1, add)
