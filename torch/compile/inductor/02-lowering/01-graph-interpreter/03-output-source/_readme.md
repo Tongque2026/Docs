@@ -1,5 +1,30 @@
 # GraphLowering 输出合同源码叶子作者记录
 
+## 第六轮：隔离冷读整改
+
+- 第一名无历史冷读者只读原 README，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/86_OUTPUT_SOURCE_COLD_REVIEW_1.md`，评级 B。
+- 读者能闭卷推演普通 tensor、无关 stride、输入修改并返回、修改不返回和 finalize 主路径，但指出完整源码先于对象模型与案例：首次读 `realize_input`、两次 `.data`、stride helper 和 `finalize` 时只能翻译语法，真正的对象链在后文才建立。
+- 本轮按执行依赖重排为“出口任务图 → 普通/非 tensor 输出 → stride → mutation 三引用 → finalize → 完整源码 → 边界迁移”。源码仍保持三个方法的产品顺序和全部语句。
+- 补齐三个时点的类型区分：env 解引用结果、`realize_input` 后对象、是否进入 tensor stride；明确 `ir.Constant` 形成 `TensorBox(StorageBox(ConstantBuffer))`，符号输入跳过 mutation 检查，未修改输入沿两次 `.data` 落到同名 InputBuffer。
+- 新增重复返回实验：`x.add_(10); return x, x` 的两个运行时结果均与调用者 x 共享 `data_ptr()`；正文明确该外部合同还包含上层输出去重与 wrapper，不能用本方法单次 `.index()` 独自解释。
+- 下一步由新的无历史冷读者只读重排稿，逐分支闭卷验收；不提供本轮问题清单或正确答案。
+
+### 第六轮第二次冷读与事实纠正
+
+- 第二名无历史读者只读重排稿，指出 mutation 返回替换仍存在对象层级断点：正文把 `graph_outputs` 项写成 TensorBox，却用内部 StorageBox 搜索，读者无法解释 `.index()` 为何命中，评级 B。
+- 回查 `ir.ExternKernel.realize_input` 后确认旧正文事实错误：普通 `TensorBox(StorageBox(Pointwise))` 会递归到 `.data`，物化后返回 `StorageBox(ComputedBuffer)`，不是重新包装后的 TensorBox；因此普通计算输出也不会进入只接收 TensorBox/BaseView 的 stride 分支。
+- 正文现逐层命名 `current_tensor`、`current_storage`、`current_ir` 和 `original_x`：返回表与输入检查持有同一个 StorageBox，`.index()` 直接匹配该对象；`realize_into` 接收的是 StorageBox.data 的底层 IRNode。
+- `ir.Constant` 分支由 `add_tensor_constant` 直接返回 TensorBox，不再递归解包，所以它仍进入 stride helper。BaseView 路径按 `realize_input` 的实际返回类型判断。
+- 原实验 04 已观察普通 graph output 为 `StorageBox->ComputedBuffer`；本轮修订与该 artifact 及当前 `ir.py` 源码一致。下一轮必须由全新读者重新验收，不能沿用第二名读者已获得的纠正信息。
+
+### 第六轮第三次冷读：通过
+
+- 第三名无历史读者只读事实修正版，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/88_OUTPUT_SOURCE_COLD_REVIEW_3.md`，评级 A。
+- 读者能闭卷区分普通 TensorBox 输出、`ir.Constant`、标量/None 的 `realize_input` 层级，完整推演 stride 三出口、mutation 四层对象、写回/返回替换、未修改/符号/异名输入和 finalize。
+- 最后收紧两处轻微问题：把“非 tensor”改成“不同类型的返回值”；按当前 `copy_input` 源码写明 `EffectfulKernel` 形成已物化 Pointwise 的 TensorBox并进入 stride helper。
+- `experiments/06_mutation_storage.py` 增加 `x.add_(10); return x, x` 完整编译检查；两个返回值与调用者 x 均共享 `data_ptr()`。artifact 已重新生成。本篇仅用它验证外部合同，不把上层输出去重和 wrapper 行为归因给本方法的一次 `.index()`。
+- Q213 隔离冷读闭环；下一篇按 BFS 顺序为 Q214（`GraphLowering.run_node` 外围收尾源码）。
+
 > 第五轮状态：叶子完成。第五轮修正了 wrapper 消费者的队列归属，并重新按完整源码、输出类型、stride、mutation 与 finalize 状态验收。
 
 ## 本篇定位与读者

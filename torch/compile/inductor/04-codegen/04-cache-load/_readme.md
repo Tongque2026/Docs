@@ -100,6 +100,35 @@
 
 Q44 第五轮回修完成，深度 2 全部结束。根队列转深度 3 的首项 Q111；之后按 BFS 逐篇复核叶子的完整源码、代码内教学注释和具体状态推演。
 
+## 第一次隔离冷读整改
+
+- 报告：`../../inductor-fresh-reader-review/49_CACHE_LOAD_COLD_REVIEW_1.md`，评级 B。
+- 读者能复述 miss、跨进程 hit、callable 恢复、bypass 和动态候选，但开篇对象定义、不同 key 的边界和 guard 术语顺序仍有断点。
+- 本轮重排：先写本篇输入、三项动作与 `CompiledFxGraph` 出口；用表格分开 graph、wrapper、kernel 三类 key/artifact；在首次出现前定义 boxed call；把符号、hint、guard、ShapeEnv 的最小解释移到候选流程之前；把跨进程案例对齐三类 artifact；统一 PyCodeCache 一类职责、两种存放位置的口径；删除总结中的悬空 `LoopBody`。
+- 下一步：用全新隔离读者只读整改后的 Q44，继续检查正文自身能否闭合。
+
+## 第二次隔离冷读整改
+
+- 评级仍为 B；首次、miss/save、跨进程 hit/load、bypass 已闭合，动态 guard 缺少编译时产生条件的动作。
+- 本轮固定使用 graph key 与 wrapper source key 两个名称；补出 `fx_codegen_and_compile()` 构造交接对象、kernel 子缓存 hit/miss、guard 由代码生成依赖产生；把 32/30 例子前移到首次 guard 流程；删除空图岔路、悬空字段名和结尾新增的四组件解释；把“第三个进程”改为“另一个独立进程”。
+
+## 第三次隔离冷读整改
+
+- 评级 B；五条路径均已闭合，剩余问题来自首次路径被拆散和未定义的上层阶段名。
+- 本轮把首次主线画到 `CompiledFxGraph` 构造、可调用原对象返回与无 callable 副本保存；统一使用 FX Graph candidate；明确 `attrs` 携带的就是恢复字段中的 constants；缓存边界改用实际动作描述；删除悬空 bypass 模式；结尾从本文已经建立的单图入口开始收束。
+
+## 第四次隔离冷读整改
+
+- 评级 B；只剩 bypass 收束、三类 key 的关系、首次路径裸 `key`、职责表重新使用未定义阶段名四项。
+- 本轮说明两个传播 key 与独立 kernel 后端 key 的关系；首次路径显式写 wrapper source key；职责表改用正文已建立的动作；bypass 收束改为“资格检查后不查存 candidate”。
+
+## 第五次隔离冷读验收
+
+- 报告：`../../inductor-fresh-reader-review/53_CACHE_LOAD_COLD_REVIEW_5.md`，评级 A。
+- 读者可仅凭正文区分三类 artifact 和三个 key，并完整复述首次编译、miss/save、跨进程 hit/load、bypass、动态 guard 五条路径。
+- 必须修改项：无。
+- 当前状态：Q44 通过隔离冷读验收，下一篇按广度优先顺序进入 Q111。
+
 ## 完成审计中的事实修正
 
 - 完成审计重新沿 `compile_fx.py` 核对调用位置后，发现旧正文把 FX Graph Cache 命中概括为跳过“图优化、Lowering、Scheduler、Codegen”，范围过大。

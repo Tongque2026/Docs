@@ -1,5 +1,13 @@
 # Inductor 教程备课与续写记录
 
+## 2026-10-22 单篇独立读者审阅
+
+- 根篇审阅：`/work/learning/1021/56sol/inductor-fresh-reader-review/05_ROOT_REVIEW.md`，137/137 个语义单元。
+- 修正主调用树：joint passes 位于 partition 前；单图 cache lookup 命中时绕过 `fx_codegen_and_compile`，miss/bypass 才进入 post-grad、Lowering、Scheduler、Codegen。
+- 逐元素案例明确 custom-post 只是中间快照，并补到编译/加载后的 boxed callable 与一次实际调用。
+- Scheduler 段不再中途切换 op0/op1/op2 假例；综合案例改为四阶段同粒度交接，Lowering 内部类名下沉子篇。
+- 正文删除作者队列入口；案例数量、template 分支和验证措辞改为直接描述实际对象。
+
 ## 2026-10-21 目标读者逐句审阅回修
 
 - 用户要求先提交基线，再由独立 AI 严格扮演最初读者画像逐篇复制正文、逐句批注，随后按反馈回修。
@@ -118,7 +126,7 @@ Q00 Inductor 单图编译主干
 | 24b·Q212 | 3/Q21 | GraphLowering 算子与常量分派完整源码 | Q211 | `02-lowering/01-graph-interpreter/02-dispatch-source/` | 叶子完成（第五轮复核） |
 | 24c·Q213 | 3/Q21 | GraphLowering 输出与输入 mutation 合同完整源码 | Q212 | `02-lowering/01-graph-interpreter/03-output-source/` | 叶子完成（第五轮补缺后复核） |
 | 24d·Q214 | 3/Q21 | GraphLowering `run_node` 外围收尾完整源码 | Q213 | `02-lowering/01-graph-interpreter/04-run-node-source/` | 叶子完成（第五轮复核） |
-| 25·Q221 | 3/Q22 | Pointwise/Reduction/View 构造核心源码 | Q22 | `02-lowering/02-compute-ir/01-ir-construction-source/` | 叶子完成（第五轮补缺后复核） |
+| 25·Q221 | 3/Q22 | Pointwise/Reduction/View 构造核心源码 | Q22 | `02-lowering/02-compute-ir/01-ir-construction-source/` | 叶子完成（第六轮隔离冷读 A） |
 | 26·Q231 | 3/Q23 | realize 与布局决定完整源码 | Q23 | `02-lowering/03-storage-layout/01-storage-source/` | 叶子完成（第五轮补缺后复核） |
 | 27·Q241 | 3/Q24 | 特殊调用分派核心源码 | Q24 | `02-lowering/04-special-calls/01-special-source/` | 叶子完成（第五轮复核） |
 | 28·Q311 | 3/Q31 | 依赖构造核心源码 | Q31 | `03-scheduler/01-dependencies/01-dependency-source/` | 叶子完成（第五轮补缺后复核） |
@@ -133,6 +141,8 @@ Q00 Inductor 单图编译主干
 第二轮整改前位置：原队列继续到了 Q221/K03c2，但“完成”主要依赖源码覆盖、实验和作者结论，未逐篇核对当前层完整案例、迁移推演及作者记录是否具备模块级计划。因此暂停 Q221，新反馈触发全系列回修。
 
 当前项：全系列完成审计；正式 BFS 队列已无待讲项。
+
+隔离冷读整改进度：深度 2 已完成到 Q44；深度 3 的 Q111、Q121、Q122、Q131、Q132、Q211、Q212、Q213、Q214、Q221 已于 2026-10-22 通过全新读者 A 级验收。下一篇按 BFS 顺序为 Q231（realize 与布局决定完整源码）。这里记录的是既有正文的逐篇读者验收，不改变正式讲解队列的模块层次。
 
 ## 2026-10-21 第五轮全系列完成审计
 

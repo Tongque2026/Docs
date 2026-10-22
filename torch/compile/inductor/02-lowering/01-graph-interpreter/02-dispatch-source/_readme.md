@@ -1,5 +1,29 @@
 # Q212 作者记录：GraphLowering 算子与常量分派
 
+## 2026-10-22 隔离冷读回修
+
+- 第一位无历史读者只读正文，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/78_DISPATCH_SOURCE_COLD_REVIEW_1.md`，评级 B。
+- 主分派成立；剩余缺口集中于常量三表的提前返回状态、TorchBind 表差异、异常包裹边界和 forced keep 实验范围。
+- 本轮补齐 qualify 规则、调用点异常表、get_attr 失败出口、alias 表状态、wrapper/cache consumer，以及空向量/跨设备冲突/runtime-folding 组合。
+- 下一轮由新的无历史读者只读当前 README 验收。
+
+### 第二次冷读
+
+- 第二位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/79_DISPATCH_SOURCE_COLD_REVIEW_2.md`，评级 B。
+- 修正统一 try 块的真实范围；补 getitem 空参、marker packet、空 name 和 fallback 漏登记出口。
+- 删除“重复目标设备请求会复用副本”的过强推断，明确每次重新 `.to()`，是否去重只取决于实际 storage 条件。
+
+### 第三次冷读
+
+- 第三位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/80_DISPATCH_SOURCE_COLD_REVIEW_3.md`，评级 B。
+- 异常边界统一为“最终 try 之前原样外抛”；补齐 tensor/TorchBind 不跨表查重但共享 constant_reprs 的碰撞状态。
+
+### 第四次冷读：通过
+
+- 第四位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/81_DISPATCH_SOURCE_COLD_REVIEW_4.md`，评级 A。
+- 读者准确复述八方法、分派/异常边界和所有主要常量组合；补充 except 仅捕获 Exception 与 missing constant name 的 KeyError。
+- Q212 隔离冷读验收完成；下一篇为 Q213 GraphLowering output 与输入 mutation 合同源码。
+
 > 第五轮状态：叶子完成。重新以八个完整方法、选择顺序、常量状态、missing/fallback 出口和证据分层验收。
 
 ## 读者、层次与目标

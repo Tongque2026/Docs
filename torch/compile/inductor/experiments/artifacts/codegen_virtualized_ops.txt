@@ -19,6 +19,7 @@ def op0(self, ops):
 [pointwise] replay=1 node=op0 ops.constant args=(2.0, torch.float32) kwargs={} -> tmp4
 [pointwise] replay=1 node=op0 ops.mul args=(CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x0}), CppCSEVariable(name: tmp4, bounds: VR[2.00000000000000, 2.000000... kwargs={} -> tmp5
 [pointwise] replay=1 node=op0 ops.store args=('buf0', x0, CppCSEVariable(name: tmp5, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x0}), None) kwargs={} -> None
+[pointwise] module_load cache_key=cmgfc6idbvodqyt6tyqtb7mdapvf3tnxumsdpusch65wqzr4agmi cache_path=/tmp/torchinductor_root/tmp3d99y5br/mg/cmgfc6idbvodqyt6tyqtb7mdapvf3tnxumsdpusch65wqzr4agmi.py module_file=/tmp/torchinductor_root/tmp3d99y5br/mg/cmgfc6idbvodqyt6tyqtb7mdapvf3tnxumsdpusch65wqzr4agmi.py callable=call
 [reduction] scheduler_node.codegen node=op0 index_vars=([x0], [x1])
 [reduction] loop_body_graph node=op0:
 def op0(self, ops):
@@ -32,8 +33,8 @@ def op0(self, ops):
     return store_reduction
 [reduction] replay=2 node=op0 ops.load args=('arg0_1', 128*x0 + x1) kwargs={} -> tmp0
 [reduction] replay=2 node=op0 ops.constant args=(1.0, torch.float32) kwargs={} -> tmp1
-[reduction] replay=2 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x1, x0}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.00... kwargs={} -> tmp2
-[reduction] replay=2 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp2, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x1, x0})) kwargs={} -> tmp_acc0
+[reduction] replay=2 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x0, x1}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.00... kwargs={} -> tmp2
+[reduction] replay=2 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp2, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x0, x1})) kwargs={} -> tmp_acc0
 [reduction] replay=2 node=op0 ops.store_reduction args=('buf0', x0, CppCSEVariable(name: tmp_acc0, bounds: VR[-oo, oo], is_vec: False, dtype: None, dependent_itervars: set())) kwargs={} -> None
 [reduction] scheduler_node.codegen node=op0 index_vars=([x0], [x1])
 [reduction] loop_body_graph node=op0:
@@ -48,8 +49,8 @@ def op0(self, ops):
     return store_reduction
 [reduction] replay=3 node=op0 ops.load args=('arg0_1', 128*x0 + x1) kwargs={} -> tmp0
 [reduction] replay=3 node=op0 ops.constant args=(1.0, torch.float32) kwargs={} -> tmp1
-[reduction] replay=3 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x1, x0}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.000... kwargs={} -> tmp3
-[reduction] replay=3 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x1, x0})) kwargs={} -> tmp_acc0
+[reduction] replay=3 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x0, x1}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.000... kwargs={} -> tmp3
+[reduction] replay=3 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x0, x1})) kwargs={} -> tmp_acc0
 [reduction] replay=3 node=op0 ops.store_reduction args=('buf0', x0, CppCSEVariable(name: tmp_acc0, bounds: VR[-oo, oo], is_vec: False, dtype: None, dependent_itervars: set())) kwargs={} -> None
 [reduction] scheduler_node.codegen node=op0 index_vars=([x0], [x1])
 [reduction] loop_body_graph node=op0:
@@ -64,8 +65,9 @@ def op0(self, ops):
     return store_reduction
 [reduction] replay=4 node=op0 ops.load args=('arg0_1', 128*x0 + x1) kwargs={} -> tmp0
 [reduction] replay=4 node=op0 ops.constant args=(1.0, torch.float32) kwargs={} -> tmp1
-[reduction] replay=4 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x1, x0}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.000... kwargs={} -> tmp3
-[reduction] replay=4 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x1, x0})) kwargs={} -> tmp_acc0
+[reduction] replay=4 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x0, x1}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.000... kwargs={} -> tmp3
+[reduction] replay=4 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x0, x1})) kwargs={} -> tmp_acc0
 [reduction] replay=4 node=op0 ops.store_reduction args=('buf0', x0, CppCSEVariable(name: tmp_acc0, bounds: VR[-oo, oo], is_vec: False, dtype: None, dependent_itervars: set())) kwargs={} -> None
+[reduction] module_load cache_key=c45gy4wpf7lm44f6m7uoeyqppc3llmjftq74cegqrn42oijul63p cache_path=/tmp/torchinductor_root/tmpwo1_w7mu/45/c45gy4wpf7lm44f6m7uoeyqppc3llmjftq74cegqrn42oijul63p.py module_file=/tmp/torchinductor_root/tmpwo1_w7mu/45/c45gy4wpf7lm44f6m7uoeyqppc3llmjftq74cegqrn42oijul63p.py callable=call
 pointwise_result=[0.0, 10.0, 4.0]
 reduction_result=[8256.0, 24640.0]

@@ -43,9 +43,8 @@ def observed_run_node(self, node):
             f"mutated_buffers={list(self.mutated_buffers)}"
         )
     elif node.op == "output":
-        events.append(
-            "output: " + " | ".join(unwrap(v) for v in self.graph_outputs)
-        )
+        output_desc = " | ".join(unwrap(v) for v in self.graph_outputs)
+        events.append("output:" + (f" {output_desc}" if output_desc else ""))
     return result
 
 
@@ -69,6 +68,11 @@ def fn(x, y):
 def mutate_without_returning_x(x, y):
     x.copy_(y)
     return y + 1
+
+
+def mutate_and_return_twice(x):
+    x.add_(10)
+    return x, x
 
 
 x = torch.tensor([0.0, 1.0, 2.0])
@@ -98,6 +102,19 @@ with config.patch({"force_disable_caches": True}), mock.patch.object(
 torch.testing.assert_close(x_not_returned, y_not_returned)
 torch.testing.assert_close(other_output, y_not_returned + 1)
 assert other_output.data_ptr() != x_not_returned.data_ptr()
+
+events.append("--- mutate_and_return_twice ---")
+x_returned_twice = torch.tensor([1.0, 2.0])
+with config.patch({"force_disable_caches": True}), mock.patch.object(
+    GraphLowering, "run_node", observed_run_node
+):
+    returned_first, returned_second = torch.compile(
+        mutate_and_return_twice, backend="inductor", fullgraph=True
+    )(x_returned_twice)
+
+torch.testing.assert_close(x_returned_twice, torch.tensor([11.0, 12.0]))
+assert returned_first.data_ptr() == x_returned_twice.data_ptr()
+assert returned_second.data_ptr() == x_returned_twice.data_ptr()
 
 
 def empty_graph_module():
@@ -170,6 +187,9 @@ summary = (
     + f"not_returned_caller_x_after={x_not_returned.tolist()}\n"
     + f"not_returned_other_output={other_output.tolist()}\n"
     + f"not_returned_output_aliases_x={other_output.data_ptr() == x_not_returned.data_ptr()}\n"
+    + f"returned_twice_caller_x={x_returned_twice.tolist()}\n"
+    + f"returned_twice_first_aliases_x={returned_first.data_ptr() == x_returned_twice.data_ptr()}\n"
+    + f"returned_twice_second_aliases_x={returned_second.data_ptr() == x_returned_twice.data_ptr()}\n"
     + "insignificant_stride="
     + f"type={type(insignificant_result.data).__name__},storage={insignificant_storage.get_name()},"
     + f"size={list(insignificant_layout.size)},stride={list(insignificant_layout.stride)},"

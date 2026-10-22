@@ -1,5 +1,13 @@
 # GraphLowering 解释器篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/07_GRAPH_INTERPRETER_REVIEW.md`，72/72 个语义单元。
+- 开头先建立真实生命周期：`run()` 取节点，`run_node` 包住 opcode 分派，处理结果再写 env。
+- placeholder、call_function、output 是分派分支；run_node 是横切外围职责，正文不再把四者画成顺序阶段。
+- 父篇只保留四块输入—动作—出口和同一逐元素案例；字段清单、完整错误分支、符号断言和阈值下放四个实现叶子。
+- 删除实验取证过程、Q23 编号和内部维护类名说明；output 正向描述输入写回合同。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q21，第 2 层，父项 Q20；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q211–Q214 四个叶子的源码回修。

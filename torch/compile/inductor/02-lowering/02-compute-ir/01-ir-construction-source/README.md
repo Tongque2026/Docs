@@ -4,7 +4,97 @@
 
 父篇已经用位置表说明三类 IR 的含义。本叶子进一步对应当前实现：lowering 怎样把 TensorBox、Python 常量和符号常量整理成 loader；怎样建立普通输出范围与规约范围；view 怎样在固定存储布局和延迟 reindex 之间选择。
 
-完整源码较长，按同一职责中的四个连续知识点组织：Pointwise 构造；Reduction 参数准备；Reduction.create 的退化/拆分决定；View 的固定布局与 reindex 路径。全部知识点完成后才把 Q221 标为叶子完成。
+完整源码较长，先把本篇始终追踪的对象固定下来。lowering 传递张量结果时，外层是 `TensorBox`；它里面的 `StorageBox` 保存“这份结果当前由哪种 IR 表示”，因此后续物化可以更新底层表示，而持有同一结果的代码仍能找到更新后的 IR。`Pointwise.create(...)` 和 `Reduction.create(...)` 的正常出口都是这种包装：
+
+```text
+TensorBox                         lowering 传递的张量结果
+└─ StorageBox                    可更新的结果引用
+   └─ Pointwise / Reduction      当前的计算规则
+```
+
+这不是示意性的猜测；包装入口本身只有一行：
+
+```python
+class TensorBox(MutableBox):
+    @staticmethod
+    def create(data):
+        return TensorBox(StorageBox(data))
+```
+
+所以由 `Pointwise.create` / `Reduction.create` 走 `TensorBox.create` 得到的 `result.data` 是 StorageBox，`result.data.data` 才是当前 Pointwise/Reduction。后文用双层 `.data` 判断这类结果，正是在拆两层包装。`TensorBox` 也可以在其他位置被直接构造成 `TensorBox(ReinterpretView(...))` 或 `TensorBox(ComputedBuffer(...))`；“双层 data”不是所有 TensorBox 的永久结构。
+
+TensorBox 和 StorageBox 都继承 `MutableBox`。TensorBox 上调用 `realize()` 时，第一层方法把调用转给 `self.data.realize()`；未显式定义的 `make_loader()` 等可调用属性由 `__getattr__` 同样转发。因此 `result.realize()` 的实际链条是 `TensorBox.realize → StorageBox.realize`，`intermediate.make_loader()` 则转发到当前 StorageBox/ComputedBuffer 的 loader：
+
+```python
+class MutableBox(IRNode):
+    data: IRNode
+
+    def __getattr__(self, name):
+        fn = getattr(self.data, name)
+        if callable(fn):
+            return fn
+        raise AttributeError(f"{type(self.data).__name__}.{name} not callable")
+
+    def realize(self):
+        return self.data.realize()
+```
+
+正文按实际阅读顺序完成四件事：构造 Pointwise；准备 Reduction 的两组坐标；读懂 Reduction 对象、拆分决策和 `create` 的所有出口；构造 View。Reduction 部分较长，下面这张账本给出各节接力的对象：
+
+| 顺序 | 本节回答的问题 | 接给下一节的状态 |
+| --- | --- | --- |
+| K03-1 | 一项值怎样被组合成一个输出 | `ranges`、`reduction_ranges`、`inner_fn`、dtype、type、hint |
+| K03-2 | 大规约是否拆分，若拆分采用哪种方向 | `(split, hint)` |
+| K03-3 | 0、1、小静态、单层和多层分别返回什么 | Pointwise、Reduction 或两层构造请求 |
+| K03-4 | 第一层怎样把长规约切成带遮罩的小块 | 新 ranges、block size、mask、局部结果规则 |
+| K03-5 | 局部结果怎样物化并被第二层读取 | 中间 buffer 与最终 Reduction |
+
+这里的“物化”只表示：把延迟计算规则登记成一个有名字、可被别的 IR 读取的中间结果；布局怎样选由下一篇讲。本篇负责构造 IR，不负责列出节点退出时所有可能触发物化的消费者条件。K03-5 会完整展示本篇自身主动调用 `realize()` 的一处：两层规约必须先保存第一层结果，第二层才能读取。
+
+对 StorageBox 调用 `realize()` 时，当前实现完成下面的原地替换：
+
+```text
+调用前：同一个 StorageBox → Pointwise / Reduction
+                             |
+                             └─ device、dtype、size、计算规则
+
+realize：用这些字段建立 ComputedBuffer(FlexibleLayout, data=旧规则)
+         向 graph 注册 buffer 和 operation，并取得名字 bufN
+
+调用后：同一个 StorageBox → ComputedBuffer(name=bufN)
+                             └─ data → 原 Pointwise / Reduction
+```
+
+StorageBox 对象没有换掉，所以已有 TensorBox 仍指向它；变化的是 `StorageBox.data`。此后 `make_loader()` 生成的是读取具名 ComputedBuffer 的规则。若 data 原本已经是 ComputedBuffer、输入 buffer 或 ReinterpretView，`realize()` 直接返回现有名字，不再包一层。
+
+对应方法的关键顺序完整列在下面：先判断是否已经有存储，再保存旧规则的来源信息，随后替换 `self.data`，最后注册并返回名字。
+
+```python
+def realize(self):
+    if isinstance(
+        self.data,
+        (ComputedBuffer, InputsKernel, InputBuffer, ReinterpretView, TemplateBuffer),
+    ):
+        return self.data.get_name()
+    assert isinstance(self.data, (Pointwise, Reduction, Scan, Sort)), type(self.data)
+    origin_node = self.data.get_origin_node()
+    traceback = self.data.get_traceback()
+    self.data = ComputedBuffer(
+        name=None,
+        layout=FlexibleLayout(
+            device=self.data.get_device(),
+            dtype=self.data.get_dtype(),
+            size=self.data.get_size(),
+        ),
+        data=self.data,
+    )
+    self.data.name = V.graph.register_buffer(self.data)
+    V.graph.register_operation(self.data)
+    self.data.origins = self.origins
+    self.data.origin_node = origin_node
+    self.data.traceback = traceback
+    return self.data.name
+```
 
 ## K01：Pointwise 捕获同一输出位置的全部输入
 
@@ -14,6 +104,8 @@
 ranges = x.size
 inner_fn(index) = add(x_loader(index), constant_loader(index))
 ```
+
+若输入全是 Python 或 SymPy 常量，`promote_constants` 会把它们变成标量 `Constant`/`IndexingConstant`。二者继承的 `BaseConstant.get_size()` 返回空 tuple，因此继续进入 `make_pointwise` 时可取到 `ranges=()`，构造零维标量 Pointwise；它们不会凭空得到非空 tensor shape。下文的 `x+2` 则展示至少一个 tensor 提供 `[2,3]` ranges 时，常量怎样被广播到同一位置空间。
 
 ### 完整源码：常量提升
 
@@ -272,7 +364,9 @@ store indexer([1,2]) ← 7
 | fp16/bf16 barrier | 每个输入及输出插入 downcast/upcast | 模拟 eager 精度截断 |
 | 任一 Triton 输入且有 fallback | 在常量提升前直接返回 fallback | 不构造本 Pointwise |
 
-这些分支改变“当前位置怎样算”，但普通路径的出口仍是 `TensorBox(StorageBox(Pointwise))`。Pointwise 尚未注册 buffer；Q214 已解释，只有输出、外部消费者、多用户或复杂度等条件才促使它物化。
+这些分支改变“当前位置怎样算”，但普通路径的构造出口仍是 `TensorBox(StorageBox(Pointwise))`。此时 `StorageBox.data` 仍指向 Pointwise 规则，还没有被本函数改成具名 buffer；以后哪个消费者要求保存它，属于这项构造完成后的处理。
+
+`make_pointwise` 在这里显式检查的是输入 rank，不逐维比较 shape。逐维广播关系应已经由各输入的 view/loader 表达；因此两个同 rank、不同 shape 的输入能否安全组合，不能只凭这段 rank 断言判断，要看 lowering 在调用前交入了什么 view。
 
 ## size=1 与 size=0 的边界
 
@@ -280,7 +374,7 @@ shape `[2,1,3]` 的 `_index` 得到 `[i0,0,i2]`。中间维永远只有合法位
 
 若 ranges 含 0，`Pointwise.make_loader()` 返回 `nop_loader_fn`。循环没有合法输出位置，因此占位 nan/0 不会作为用户 tensor 元素被写出；它让 IR 分析仍有一个可调用 loader，而不去执行原 inner_fn 的潜在非法读取。
 
-## 用新情况检验理解
+## Pointwise 边界对照
 
 1. 输入 `(3,4)` 全是 Python 整数：`promote_constants` 计算共同 dtype，返回两个标量 Constant；没有 tensor shape 可广播。
 2. x 为 CPU、y 为 GPU，未 override device：扫描输入后选择首个 GPU device。
@@ -481,7 +575,7 @@ dst_dtype = override = int64
 
 这解释了为何父篇用 2×128 实验确认 Reduction IR，而 2×3 只作为坐标和数值教学例。K03 将完整展开 create 的实际分支条件。
 
-## 用新情况检验理解
+## Reduction 参数边界对照
 
 1. shape `[2,3,4]`，axis `[0,2]`：`kept_idx=[1]`、`ranges=[3]`、`reduction_ranges=[2,4]`；loader 将 index 放槽 1，将两个 reduction index 放槽 0、2。
 2. axis=None：falsy 分支选择所有维，`ranges=[]`，结果是标量接口。
@@ -489,7 +583,9 @@ dst_dtype = override = int64
 4. 标量输入 axis=-1：验证后交回空 axis；输入和输出坐标均没有实际维。
 5. keepdims=True 规约 `[0,2]`：输出 ranges 为 `[1,3,1]`，loader 只从外层 index 取维 1。
 
-## K03a：Reduction 保存两套范围，并把单项值交给组合操作
+这里列的是 lowering 内部 helper 收到 `axis` 后的行为。用户层 API 是否接受空列表、是否在进入该 helper 前改写参数，由更早的 schema 和图处理决定；本文据此判断的是已经到达 `_validate_reduction_axis` 的值。
+
+## K03-1：Reduction 保存两套范围，并把单项值交给组合操作
 
 进入 `Reduction.create` 分支前，先看真正 Reduction 对象怎样参与生成。它在 Pointwise 的 `ranges` 之外增加 `reduction_ranges`、`reduction_type`、输入值 dtype 和 hint。codegen 提供两组循环变量，`inner_fn(vars,reduction_vars)` 产生本次组内位置的单项值，`ops.reduction` 才负责把许多单项组合起来。
 
@@ -693,11 +789,11 @@ new_m2=2+0+3²×2×1/3=8
 
 ## dtype 与 hint 的位置
 
-`self.dtype` 是目标输出 dtype，`src_dtype` 是传给 `ops.reduction` 的输入值 dtype。两者可能不同；例如某些低精度输入使用更高精度累加或最后转换。`reduction_hint` 不改变数学定义，它给后端提供 inner/outer 等实现倾向；K03c 才解释 hint 怎样从读索引和设备规模产生。
+`self.dtype` 是目标输出 dtype。`src_dtype` 是传给 `ops.reduction` 的“源值语义 dtype”：后端用它选择单位元、累加器和组合规则。普通单层规约中，它通常也等于 `inner_fn` 产生的值 dtype；分层规约会出现例外——第二层读取 fp32 中间 buffer，但仍携带原始低精度 `src_dtype`，让后端沿用原规约的语义设置。`reduction_hint` 不改变数学定义，它给后端提供 inner/outer 等实现倾向；K03-2 接着解释 hint 怎样从读索引和设备规模产生。
 
 `constant_to_device` 只允许所有读取均来自常量的前提下改写 ConstantBuffer device，并将 hint 重置为 DEFAULT；新的设备需要重新选择合适策略。
 
-## 用新情况检验理解
+## Reduction 对象边界对照
 
 1. ranges `[2,1]`、reduction_ranges `[3,1]`：`inner_fn_args` 为 `[i0,0]` 与 `[r0,0]`，`index_length=4`。
 2. reduction_type 未出现在简单表、argmin/max 或 welford_combine：`get_reduction_combine_fn` 抛 NotImplementedError。
@@ -705,7 +801,7 @@ new_m2=2+0+3²×2×1/3=8
 4. reduction_ranges 含 unbacked s0：`get_unbacked_symbol_uses` 会在父类结果上并入 s0。
 5. store_reduction 的 output index 只由 vars 构成，reduction_vars 只进入 inner_fn。
 
-## K03c1：num_splits 先决定是否拆，再判断 inner 或 outer
+## K03-2：num_splits 先决定是否拆，再判断 inner 或 outer
 
 `num_splits` 的返回是 `(ReductionHint, split)`。它先用后端能力、规约类型、配置和静态性决定是否允许拆分；再用设备规模估算 split 数；若不是单输出，还从实际读索引判断 reduction 维在内层还是外层。
 
@@ -978,7 +1074,74 @@ num_threads=8×32=256
 split=ceil(16384 / (32×256))=ceil(2)=2
 ```
 
-若 input_node 中能提取一组 ranges/reduction_ranges，且总项数同为 16384，函数返回 `(INNER,-1)`，让 K03b 走“复用已有 ranges”的 multilayer 路径；否则返回 `(INNER,2)`。
+若 input_node 中能提取一组 ranges/reduction_ranges，且总项数同为 16384，函数返回 `(INNER,-1)`，让 K03-3 走“复用已有 ranges”的 multilayer 路径；否则返回 `(INNER,2)`。
+
+这里的“能提取”由 `extract_input_node_reduction_ranges(input_node)` 按下面的对象链判断。`num_splits` 的调用点要求 `input_node` 是 TensorBox，但它的 data 不一定是 StorageBox：由 `TensorBox.create` 产生的 Loops 通常有 StorageBox 包装，其他路径也可能直接构造 `TensorBox(ComputedBuffer)`。首分支检查后一种直接包装；普通 Loops 结果则走 `input_node.data.data`：
+
+```text
+input_node.data 直接是 ComputedBuffer
+  ├─ 它带非空 reduction_size → 直接返回它的 size 与 reduction_size
+  └─ reduction_size 为空      → 提取失败
+
+input_node 仍包着 Loops
+  └─ 从 input_node.get_reads() 沿每个 MemoryDep 查 defining op
+       ├─ 遇到带 reduction_size 的 ComputedBuffer
+       │    ├─ 首个：记下 size 与 reduction_size
+       │    ├─ 后续与它相同：继续
+       │    └─ 后续不同：提取失败
+       └─ 遇到其他 defining op：继续沿它的 reads 向前找
+```
+
+搜索按 frontier 一层层向前推进。某一轮第一次发现 Reduction 后，会继续扫描这一轮剩余 reads，要求同一轮直接发现的 Reduction 形状一致；循环条件 `while reduction_size is None` 随后使搜索停止，不再深入本轮收集到的更早 `new_reads`。因此它检查的是“最近一层被发现的 Reduction”，不是整个依赖闭包。
+
+`num_splits` 随后比较提取范围的元素总数与当前 `reduction_numel_hint`，只有相等才返回 `split=-1`。例如同一轮发现一个 `ComputedBuffer(size=[2], reduction_size=[8192])`，总项数为 16384，可复用；若同一轮另一条 read 直接发现 `size=[1], reduction_size=[16384]`，两组形状不同，提取失败。若冲突 Reduction 藏在还需继续展开的更深支路，而本轮另一支路已经找到了 Reduction，当前函数会在本轮结束后停止，并不会继续检查那个更深冲突。
+
+完整搜索循环如下。`seen` 只在当前一层读取中去重；`reads == new_reads` 只处理“下一层没有变化”的停滞情况。这里没有跨层 visited 集合。编译图的 defining-op 依赖按已经产生的结果指向更早的结果，因此正常输入是一张无环图；若脱离这个前提人为构造 A→B→A，这段函数自身不能阻止两组 reads 交替。
+
+```python
+def extract_input_node_reduction_ranges(input_node):
+    if isinstance(input_node.data, ComputedBuffer):
+        size = input_node.get_size()
+        reduction_size = input_node.get_reduction_size()
+        if len(reduction_size) > 0:
+            return (size, reduction_size)
+        return (None, None)
+
+    if not isinstance(input_node.data.data, Loops):
+        return (None, None)
+
+    reads = input_node.get_reads()
+    reduction_size = None
+    size = None
+    while reduction_size is None and len(reads) > 0:
+        seen = OrderedSet()
+        new_reads = []
+        for read in reads:
+            if not isinstance(read, MemoryDep):
+                continue
+            if read.name in seen:
+                continue
+            seen.add(read.name)
+            buffer = V.graph.try_get_buffer(read.name)
+            if buffer is None:
+                continue
+            op = buffer.get_defining_op()
+            if op is None:
+                continue
+
+            if isinstance(op, ComputedBuffer) and len(op.get_reduction_size()) > 0:
+                if reduction_size is None:
+                    reduction_size = op.get_reduction_size()
+                    size = op.get_size()
+                elif reduction_size != op.get_reduction_size() or size != op.get_size():
+                    return (None, None)
+            else:
+                new_reads.extend(op.get_reads())
+        if reads == new_reads:
+            return (size, reduction_size)
+        reads = new_reads
+    return (size, reduction_size)
+```
 
 若 reduction_numel 只有 8192，inner helper 的第二个 easy condition直接返回 1。
 
@@ -1000,6 +1163,8 @@ split=ceil(16384 / (32×256))=ceil(2)=2
 
 例如二维连续 `[M,N]` 沿 N 规约，r 每加 1 物理位置通常加 1，投 inner。转置排列中同一逻辑规约维可能跨较大 stride，投 outer。这里最终采用实际索引表达式，而不是仅凭 dim 编号猜测。
 
+代入 `out[row] = x[row,r] + y[row,0]`，`get_read_writes()` 在符号执行 inner_fn 时记录两项 MemoryDep：连续 x 的 index 可写成 `row*N+r`，广播 y 的 index 是 `row`。本次循环变量为 `{row,r}`；x 的表达式含两者，进入投票，且 r 的 stride 是 1，所以投 INNER。y 的表达式缺 r，被“必须包含全部 range_vars”的条件过滤。若另一项读取是转置 storage 上的 `r*M+row`，r stride 为 M；它投 OUTER。一个 inner、一个 outer 时平票，最终选择 OUTER。
+
 若所有输入都是广播访问，没有一项读取包含全部循环变量，indices 为空，当前实现返回 `(DEFAULT,1)`；产品 TODO 明确这类 split 尚未决定。
 
 ## outer 公式示例
@@ -1010,7 +1175,7 @@ split=ceil(16384 / (32×256))=ceil(2)=2
 split=ceil(4096 / (4×32))=32
 ```
 
-create 随后把 split=32 交给 K03c2 的 `create_multilayer`。这只是源码公式示例；真实设备属性、layout 投票和配置会改变结果。
+create 随后把 split=32 交给 K03-4、K03-5 展开的 `create_multilayer`。这里的 32 是把上述假定代入公式得到的结果；换设备属性、layout 投票或配置，split 会随之改变。
 
 ## 中等与超大工作量怎样偏向整除
 
@@ -1018,7 +1183,7 @@ inner/outer 两个 helper 在中等规模区间都先算临时 split_size，再�
 
 这解释了 split_size 不总是固定 32 或 512；它受总工作量、设备规模、输出数量和规约项数的因数共同影响。
 
-## 用新情况检验理解
+## split 决策边界对照
 
 1. argmax 有 1,000,000 项：`should_split` 因类型失败，仍返回 DEFAULT,1。
 2. reduction_numel 是 unbacked SymInt：静态检查失败，不 split。
@@ -1027,9 +1192,9 @@ inner/outer 两个 helper 在中等规模区间都先算临时 split_size，再�
 5. 决定输入 layout 后索引改变：必须重新调用 get_read_indices，再投票。
 6. 所有读取均广播、indices 为空：返回 DEFAULT,1，不调用 inner/outer 公式。
 
-## K03b：Reduction.create 先消除退化规约，再选择单层或多层
+## K03-3：Reduction.create 先消除退化规约，再选择单层或多层
 
-`Reduction.create` 先计算 `reduction_numel=product(reduction_ranges)`。0 项规约有数学单位元；1 项规约无需组合；很小的静态规约可把所有组内位置展开进 Pointwise。只有这些条件都不成立，才调用刚读过的 K03c1 `num_splits` 决定单层或多层 Reduction。
+`Reduction.create` 先计算 `reduction_numel=product(reduction_ranges)`。0 项规约有数学单位元；1 项规约无需组合；很小的静态规约可把所有组内位置展开进 Pointwise。只有这些条件都不成立，才调用刚读过的 K03-2 `num_splits` 决定单层或多层 Reduction。
 
 ### 完整源码：把小静态规约展开成 Pointwise
 
@@ -1045,7 +1210,7 @@ def _unroll_reduction_fn(inner_fn, reduction_ranges, reduction_type, src_dtype):
     combine_fn = get_reduction_combine_fn(reduction_type, src_dtype)
 
     def fn(index):
-        # 教学：笛卡尔积枚举每一组 rindex，再用 K03a 的组合函数折叠。
+        # 教学：笛卡尔积枚举每一组 rindex，再用 K03-1 的组合函数折叠。
         return functools.reduce(
             combine_fn,
             (
@@ -1170,7 +1335,7 @@ def create(  # type: ignore[override]
         )
 
     # triton doesn't support reduce to single element well, so break it up
-    # 教学：其余情况由 K03c 根据设备、范围与读索引选择 hint 和 split。
+        # 教学：其余情况由 num_splits 根据设备、范围与读索引选择 hint 和 split。
     hint, split = cls.num_splits(
         device,
         dst_dtype,
@@ -1246,6 +1411,10 @@ def create(  # type: ignore[override]
 
 prod 的单位元为 1，any 为 false，xor_sum 为 0。若这里请求 max，字典没有条目，断言失败；当前代码不在此分支自行定义空 max 的结果。
 
+这里有一个容易忽略的当前源码细节：`const_fn` 用 `dst_dtype` 生成常量，但包装这个 Pointwise 时传入的字段是 `dtype=src_dtype`。因此本节只能准确地说“常量表达式按目标 dtype 产生，而 Pointwise 的 dtype 字段取输入值 dtype”；不能把两者概括成同一个“目标 dtype”。当 `src_dtype == dst_dtype` 时二者没有可见差异，二者不同时要按这两个字段分别追踪。
+
+当前 lowering 支持走到这个空规约分支的 sum/prod/any 等调用，会在构造前先完成所需 dtype 转换：例如 int32 的 sum 默认先把输入转成 int64，于是传入这里的 `src_dtype` 与 `dst_dtype` 都是 int64；any 的两者都是 bool。因此这些可达路径中，Pointwise 字段、常量表达式和最终 buffer dtype 一致。上面的两种参数写法仍是 `Reduction.create` 泛化接口的源码事实，但不能据此虚构一个当前 lowering 会产生的 dtype 冲突案例。
+
 ### 1 项：把唯一 rindex 固定为 0
 
 输入 shape `[2,1]`、dim=1 sum：numel=1。普通 sum 的 Pointwise fn 对 row=1 调用 `inner_fn([1],[0])`，直接读 x[1,0]；没有 combine 步骤。
@@ -1277,7 +1446,7 @@ argmax 对多维 reduction_ranges `[2,3]` 会用连续 stride `[3,1]` 把 rindex
 | `>1` | 走 `create_multilayer`，建立中间规约与第二层规约 |
 | `1` | 直接 `TensorBox(Reduction(...))` |
 
-父篇当前 CPU 实验的 2×128 最终观测为真正 Reduction；这能证明该环境下没有退化成 Pointwise，但仅凭该观测不能推断所有设备/config 的 split 数。split 的实际启发式条件已在前一节 K03c1 按源码展开，不能从本实验反推。
+在当前 CPU 实验中，2×128 最终是单层 Reduction。换到另一后端或配置后，仍需把 K03-2 中的后端能力、静态规模、输出数量和读取 stride 代入，才能判断它是单层还是多层；“128 项”本身没有唯一出口。
 
 ## hint 的覆盖规则
 
@@ -1285,7 +1454,7 @@ argmax 对多维 reduction_ranges `[2,3]` 会用连续 stride `[3,1]` 把 rindex
 
 hint 与 split 是不同决定：hint 描述后端倾向怎样组织规约；split 决定是否创建多层 IR。
 
-## 用新情况检验理解
+## create 出口边界对照
 
 1. reduction_numel=0、type=prod、ranges=[3]：返回三个单位元 1 的 Pointwise。
 2. reduction_numel=1、type=argmin：每个外层输出均为索引 0。
@@ -1294,7 +1463,7 @@ hint 与 split 是不同决定：hint 描述后端倾向怎样组织规约；spl
 5. num_splits 返回 -1 但 input_node=None：在提取范围前断言失败。
 6. 调用方传 OUTER、num_splits 建议 INNER：create 保留 OUTER。
 
-## K03c2a：第一层把一条长规约切成 split 个带遮罩的小块
+## K03-4：第一层分块，并在尾块越界时加入遮罩
 
 `num_splits` 只交回拆分方向和 `split` 数。真正建立第一层坐标前还要解决三个问题：空位置用什么单位元；第二层是否改用更小的 outer hint；原 loader 怎样从“块编号 + 块内编号”还原成原规约坐标。
 
@@ -1426,18 +1595,18 @@ loader([row], reindex([69]))
 
 `_multilayer_second_step_hint(32, 128, OUTER)` 返回 `OUTER_TINY`；同样规模但 hint 为 INNER 时原样返回 INNER。这个 helper 改的是第二层实现提示，不改变上述坐标、mask 或数学组合。
 
-### 用新情况检验理解
+### 第一层分块边界对照
 
 1. 1001 项、split=32 时 block_size 仍为 32；最后一块只有线性 992..1000 共 9 项有效，其余 23 项取单位元。
 2. reduction_type 为 prod 时，越界位置必须取 1；若错误取 0，任何不满尾块都会把局部积变成 0。
 3. 原规约范围 `[4,5]` 的线性 13 会还原为 `[2,3]`，所以原 loader 不需要知道 split。
 4. split=-1 时第二层 hint 不改写，这是 existing-ranges 路径的约定，不表示创建负数个块。
 
-下一子点 K03c2b 将完整保留 `create_multilayer_helper`、`create_multilayer` 和 existing-ranges 变体，把本节 wrapper 产生的第一层 Reduction 物化，再连接成第二层 Reduction。
+下一子点 K03-5 展开 `create_multilayer_helper`、`create_multilayer` 和 existing-ranges 变体，把本节 wrapper 产生的第一层 Reduction 物化，再连接成第二层 Reduction。
 
-## K03c2b：物化第一层结果，再让第二层规约读取它
+## K03-5：物化第一层结果，再让第二层规约读取它
 
-K03c2a 已把原来的长规约改写成“split 个块，每块内部规约 block_size 项”。这还只是第一层 loader。接下来必须真的登记并实现第一层 buffer，第二层才能把这 split 个局部结果当作输入，再组合成原输出。
+K03-4 已把原来的长规约改写成“split 个块，每块内部规约 block_size 项”。这还只是第一层 loader。接下来必须把第一层 Reduction 登记成中间 buffer，并让它的 loader 读取该 buffer；第二层才能把这 split 个局部结果当作输入，再组合成原输出。
 
 ### 完整源码：已有 ranges 的坐标包装
 
@@ -1635,7 +1804,7 @@ def create_multilayer_existing_ranges(
 
 ### 1000 项案例怎样穿过两层
 
-沿用 K03c2a 的 `ranges=[4]`、`reduction_ranges=[1000]`、`split=32`：
+沿用 K03-4 的 `ranges=[4]`、`reduction_ranges=[1000]`、`split=32`：
 
 | 阶段 | 外层 ranges | reduction ranges | 一个位置表达什么 |
 | --- | --- | --- | --- |
@@ -1643,25 +1812,76 @@ def create_multilayer_existing_ranges(
 | 第一层 | `[4,32]` | `[32]` | 每个 `(row,block)` 组合最多 32 项 |
 | 中间 buffer | `[4,32]` | 无 | 保存 4×32 个局部结果 |
 | 第二层 | `[4]` | `[32]` | 每个 row 组合 32 个局部结果 |
+| 最终 buffer | `[4]` | 无 | K03-5 返回最终 Reduction 后，K02 的 `make_reduction` 识别它并调用 `result.realize()` |
 
 以 row=2 为例，第一层产生 `intermediate[2,0]` 到 `intermediate[2,31]`。第二层的 `index=[2]`、`reduction_index=[7]` 被 `intermediate_fn` 拼成 `[2,7]`，读取第 7 个局部结果。组合完 32 项后，第二层只输出 row=2 的最终值。
 
-若 `dst_dtype=float16`，第一层 buffer dtype 是 float32，第二层最终 Reduction 的目标 dtype 仍是 float16，`src_dtype` 保留原输入类型。这个转换保护的是分层累计精度，并没有把原输入或最终接口永久改成 float32。
+若 `dst_dtype=float16`，三个 dtype 在源码对象中的位置如下：
 
-existing-ranges 路径假设 `original_ranges` 各项均为 1。例如原规约 `[2,3,4]` 共 24 项，启发式已经选出 `new_ranges=[2]`、`new_reduction_ranges=[3,4]`：第一层外层为 `[1,2]`，规约 `[3,4]`；第二层恢复外层 `[1]`，再规约新增的 `[2]`。wrapper 把新坐标 `(block=1,r0=2,r1=3)` 合并后 reindex 回原三维规约坐标。这里 `split=-1` 只让第二层保留原 hint。
+| 对象 | `dtype` 字段 | `src_dtype` 字段或 loader 实际值 |
+| --- | --- | --- |
+| 第一层 Reduction | `intermediate_dtype=float32` | 原 `src_dtype` |
+| 中间 buffer loader | buffer 为 float32 | 读出第一层的 float32 局部结果 |
+| 第二层 Reduction | 最终 `dst_dtype=float16` | 构造器仍保存原 `src_dtype` |
 
-### 用新情况检验理解
+也就是说，第一层局部累计被保存在 float32 buffer 中，第二层 loader 读取的是该 buffer 的值；最终 Reduction 的目标字段回到 float16。源码传给第二层 `Reduction` 的 `src_dtype` 参数仍是原值，不能把这个字段改称为 `intermediate_dtype`。这套安排避免在两层之间先把局部结果截回低精度。
+
+以 Triton 后端为例，reduction codegen 用 `src_dtype` 调 `triton_acc_type(src_dtype)` 选择累加器。当前函数对有符号整数选 int32/int64，其余类型转给 `triton_compute_type`；后者只在 `config.triton.codegen_upcast_to_fp32` 开启时把 float16/bfloat16 映射为 float32：
+
+```python
+def triton_acc_type(dtype):
+    if is_integer_dtype(dtype) and dtype.is_signed:
+        nbits = 64 if dtype == torch.int64 else 32
+        return f"tl.int{nbits}"
+    return triton_compute_type(dtype)
+
+# triton_compute_type 的相关分支
+elif (
+    triton_type_name in ("float16", "bfloat16")
+    and config.triton.codegen_upcast_to_fp32
+):
+    triton_type_name = "float32"
+```
+
+所以在该配置开启的 Triton 路径，第二层的旧低精度 `src_dtype` 会选择 fp32 累加器，与 fp32 中间值相配；不能把这个结论无条件推广到所有配置和后端。本篇构造出口能确定的是：`ops.reduction` 收到最终 dtype、原 `src_dtype`、type，以及来自 fp32 中间 loader 的 value；具体后端按自己的 handler 解释这组参数。
+
+existing-ranges 路径假设 `original_ranges` 各项均为 1。例如原规约 `[2,3,4]` 共 24 项，启发式已经选出 `new_ranges=[2]`、`new_reduction_ranges=[3,4]`：第一层外层为 `[1,2]`，规约 `[3,4]`；第二层恢复外层 `[1]`，再规约新增的 `[2]`。
+
+代入一个位置：第一层收到 `merged_index=[0,1]` 与 `new_reduction_index=[2,3]`。wrapper 先切出原输出坐标 `[0]` 和新增外层坐标 `[1]`，再把 `(1,2,3)` 交给 reshape indexer。因为新旧规约 shape 都是 `[2,3,4]`，它还原出的原规约坐标仍是 `[1,2,3]`，最终调用 `loader([0],[1,2,3])`。于是 block=1 这项局部结果覆盖原规约第一维坐标 1。这里 `split=-1` 只让第二层保留原 hint，不表示负数个块。
+
+### 两层连接边界对照
 
 1. `ranges=[2,3]`、split=8 时，第一层 `new_ranges=[2,3,8]`；第二层必须恢复外层 `[2,3]`，只规约尾部 `[8]`。
 2. 若误删 `intermediate.realize()`，第二层 loader 就没有稳定的中间存储边界，违背“两层 reduction”需要先保存局部结果的合同。
 3. float32 输出不会提升 intermediate dtype，因为它已经不是 float16/bfloat16；float16 输出会提升到 float32。
 4. existing-ranges 的 `original_ranges=[2]` 会立即触发断言，因为这条优化只为原输出 numel 为 1 的情形设计。
 
-K03c 至此把 split 决策、第一层坐标/mask 和两层连接完整闭合。下一知识点 K04 转向 View：先走固定 layout 可直接重解释的快速路径，再走需要 reindex 的延迟路径。
+K03 至此把 split 决策、第一层坐标/mask 和两层连接完整闭合。下一知识点 K04 转向 View：先走固定 layout 可直接重解释的快速路径，再走需要 reindex 的延迟路径。
 
-## K04a：能从现有 storage 算出新 layout 时，只建立 ReinterpretView
+## K04a：先选固定 layout 出口或延迟坐标出口
 
-View 不负责搬动数据，而是回答“新逻辑位置应读取旧 storage 的哪里”。最直接的情况是 permute：只需按维度顺序重排 size 与 stride。reshape 则先处理 `-1` 和元素总数，再判断现有 storage 是否能直接配一份连续新 layout；不能时才保留一条延迟坐标函数，留给 K04b。
+View 对象本身不执行元素搬运；它回答“新逻辑位置应读取旧 storage 的哪里”。最直接的情况是 permute：只需按维度顺序重排 size 与 stride。reshape 先处理 `-1` 和元素总数：已有连续 storage 时直接建立新连续 layout；含 unbacked size 而输入尚未连续时，先通过 View 之外的物化/必要复制路径取得可冻结的 storage，再建立 ReinterpretView；其余静态延迟对象保存坐标函数，留给 K04b。
+
+本节会出现两种出口。`ReinterpretView` 持有 storage 和新的固定 layout，新位置可直接用新 stride 算地址。普通 `View`（它继承 `GenericView`）则持有旧数据、new size 和一条 reindex 函数；它的 loader 收到新坐标后，先算出旧坐标，再调用旧对象的 loader。两者都共享原结果，不复制元素。
+
+这条“先换坐标，再读旧对象”的连接在 `BaseView.make_loader` 中完成；`GenericView.make_reindexer` 只需交回构造时保存的函数：
+
+```python
+def make_loader(self):
+    inner = self.data.make_loader()
+    reindex = self.make_reindexer()
+
+    def loader(idx):
+        return inner(reindex(idx))
+
+    return loader
+
+
+def make_reindexer(self):
+    return self.reindex
+```
+
+例如 `View(data=x, size=[3,2], reindex=f)` 的 loader 收到新坐标 `[2,1]`，先算 `f([2,1])=[1,2]`，再执行 `x.make_loader()([1,2])`。K04b 的全部公式最终都接到这里，而不是孤立地保存一条无人调用的算式。
 
 ### 完整源码：PermuteView 的 layout 与坐标两条路径
 
@@ -1798,11 +2018,66 @@ class View(GenericView):
 
 对连续 `[2,3]` reshape 为 `[3,2]`，元素总数都为 6，新连续 stride 是 `[2,1]`；实验 05 实际观察到 `ReinterpretView` 继续引用原 `InputBuffer`，buffer/operation 仍为 0。
 
-对延迟 `(x+1)` 做同一 reshape，调用 `View.create` 时输入仍是 `StorageBox→Pointwise`，所以先返回 `View(size=[3,2])→Pointwise`。随后该 view 作为函数输出，Q214 的 output-view 合同将它物化；`run_node` 退出时观测为 `ReinterpretView→ComputedBuffer→Pointwise`，并新增 buf0/op0。这里“View.create 的出口”和“整个节点退出时的出口”不同，不能用后一种类型反推 create 直接返回了 ReinterpretView。
+对延迟 `(x+1)` 做同一 reshape，调用 `View.create` 时输入仍是 `StorageBox→Pointwise`，所以本函数返回 `View(size=[3,2])→Pointwise`。它的 loader 用上面的 `inner(reindex(idx))` 继续读取 Pointwise。若之后有消费者要求把这项延迟结果保存下来，物化会发生在 `View.create` 已经返回之后；因此本节的构造出口仍是 View，而不是 ReinterpretView。
 
 `new_size=[3,-1]` 时，先临时把 -1 换成 1，得到其余维乘积 3，再计算 `6/3=2`，最终 `[3,2]`。若新 size 含 0，返回的 Generic View 没有合法输出位置；fake reindex 不代表所有位置都读取旧 `[0,...]`，因为没有任何位置会执行读取。
 
-### 用新情况检验理解
+循环只替换遇到的第一个 `-1`。这个 helper 本身没有“第二个 `-1`”计数检查；若非法输入已经走到这里，第二个 `-1` 仍留在 `new_size` 中，元素数乘积甚至可能在两个负号相乘后通过相等 guard。合法性应由更早的算子校验保证，不能把这里的 `break` 解释成它会自行拒绝多个 `-1`。
+
+动态尺寸走的是另一条具体路径。设旧 size 是 `[u0,4]`、新 size 是 `[2,u1]`，其中 `u0/u1` 是运行时才有数值的 unbacked SymInt。源码先发现 size 中有 unbacked symbol；如果 x 还只是延迟 Pointwise，就先把它物化成具有连续 layout 的中间结果。随后新建连续 stride `[u1,1]` 的 `ReinterpretView`，并保留元素数相等的约束 `u0×4 = 2×u1`。它不会把 `u0` 或 `u1` 交给后面的静态 `size_hint` reshape 算法。
+
+这里“物化”与“连续”是相邻两步，不是同一保证。`ExternKernel.realize_input(x)` 先让 StorageBox 指向带 `FlexibleLayout` 的 ComputedBuffer；紧接着的 `as_contiguous_storage_and_layout(x)` 以 `want_contiguous=True` 冻结这份 FlexibleLayout，使旧 buffer 采用连续 stride，然后才返回 `(storage, old_layout)`。最后 `View.create` 为相同 storage 建立新 shape 的连续 stride。因而调用顺序是：
+
+```text
+延迟规则 → ComputedBuffer(FlexibleLayout)
+         → 冻结旧 layout 为 contiguous
+         → ReinterpretView(storage, 新连续 layout)
+```
+
+两个 helper 的相关分支如下。`realize_input` 会递归剥 TensorBox；ReinterpretView 保留自己的 layout 并处理底层 data；普通 BaseView 先物化，能换成 ReinterpretView 时换，不能时最终落入 `copy_input`；StorageBox 原地 realize。随后第二个 helper 把 `want_contiguous=True` 传入通用 layout helper。通用 helper 读到 `StorageBox(ComputedBuffer)` 后调用 `freeze_layout()`，并断言冻结结果连续：
+
+```python
+# ExternKernel.realize_input
+if isinstance(x, TensorBox):
+    return cls.realize_input(x.data)
+if isinstance(x, ReinterpretView):
+    return ReinterpretView(cls.realize_input(x.data), x.get_layout())
+if isinstance(x, BaseView):
+    x.realize()
+    if is_storage_and_layout(x.unwrap_view()):
+        try:
+            return cls.convert_to_reinterpret_view(x)
+        except NotImplementedError:
+            pass
+if isinstance(x, StorageBox):
+    x.realize()
+    return x
+return cls.copy_input(x)
+
+
+as_contiguous_storage_and_layout = functools.partial(
+    as_storage_and_layout, want_contiguous=True
+)
+
+
+# as_storage_and_layout 中的 StorageBox 分支
+if isinstance(x, StorageBox) and isinstance(x.data, Buffer):
+    if freeze:
+        if want_contiguous:
+            x.data.freeze_layout()
+            assert x.data.layout.is_contiguous()
+        else:
+            x.data.decide_layout()
+    return x, x.data.layout
+if isinstance(x, ReinterpretView):
+    # 只把连续要求传到底层 storage；view 自己保留原 layout。
+    buffer, _ = as_storage_and_layout(x.data, freeze=freeze)
+    return buffer, x.layout
+```
+
+因此动态案例要按输入种类区分：延迟 Loops/普通 BaseView 可以物化为 FlexibleLayout 后冻结连续；无法转成 storage/layout 的其他对象会先 `copy_input`。已有 ReinterpretView 则走一个特殊分支：通用 helper 明确不把 `want_contiguous` 继续传给底层，并直接交回该 view 的 layout；这段 helper 自身没有再次断言 view layout 连续。正文的 `[u0,4]` 延迟 Pointwise 案例走第一种，能够推出连续出口；不能把该结论无条件推广到一个任意的非连续 ReinterpretView。
+
+### View 出口边界对照
 
 1. `[2,3,4]` 以 dims `[-1,0,1]` permute：负维变成 2，新 size `[4,2,3]`、stride `[1,12,4]`。
 2. 连续 `[2,3,4]` reshape `[6,-1]`：缺失维为 4，新连续 stride `[4,1]`。
@@ -1950,7 +2225,7 @@ old_col = (a*2+b) % 3
 
 size-1 分支也维持同一原则。旧 `[2,1,3]` reshape 为 `[2,3]` 时，旧中间维只能取 0，最终 reindex 为 `(new0,0,new1)`。反过来新增一个 size-1 新维时，该新坐标不会消耗旧维。
 
-### 用新情况检验理解
+### reindex 边界对照
 
 1. `[12]→[2,2,3]` 的旧线性坐标是 `i0*6+i1*3+i2`。
 2. `[2,2,3]→[12]` 对新线性 11 拆出旧坐标 `[1,1,2]`。

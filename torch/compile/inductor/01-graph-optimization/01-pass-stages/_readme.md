@@ -1,5 +1,102 @@
 # 三个 pass 处理阶段作者记录
 
+## 第九轮：真实读者再次判定未讲透
+
+- 用户指出：即使 fable5 已改写，未经真实读者反馈迭代的正文仍可能让人看不懂；审读必须只评价教材逻辑，不能把作者与读者智能体之间交流传递的知识算作教材效果。
+- 新建无历史冷读者，只允许阅读本篇 README；提示仅规定基础 torch/torch.compile 的认知边界和逐段审查方法，不提供三个入口的正确答案。报告保存为 `/work/learning/1021/56sol/inductor-fresh-reader-review/82_PASS_STAGES_COLD_REVIEW_10.md`，评级 C。
+- 它确认 pre-grad 的入口、batch ReLU 改写、未命中出口已经能从正文复述；剩余结构缺口是：functionalization 在 mutation/alias 之前出现，解释迟到；joint/post 案例只证明会改图，没有证明阶段位置；最终两条件不足以判断新规则。
+- 本轮重排为“pre-grad 实际改写 → pre-grad 输入图的安全难点 → AOTAutograd 表示变化 → joint → post-grad → 入口选择”。补足 batch ReLU 的 shape 变化、逐元素等价性、matcher/replacement 分工和入口收尾。
+- 对 joint 不编造当前不存在的跨前反向默认案例。正文明确区分“入口提供 partition 前完整图范围”和“当前局部规则实际使用的信息”。对 joint/post 都不再声称局部规则理论上只能在该处运行。
+- 入口选择改成五步判断：原始调用表示、functionalization 前提、partition 前全图、partition 后单图边界，以及多个入口均可时的注册/覆盖/顺序问题。
+- 下一步由另一名无历史冷读者只读修订稿；不得把本轮批注、作者记录或正确答案交给它。
+
+### 第九轮第二次冷读
+
+- 第二名无历史读者只读重排后的 README，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/83_PASS_STAGES_COLD_REVIEW_11.md`，评级 B。
+- 它已能闭卷回答 pre-grad 的完整入口职责、batch ReLU 等价性和改写、mutation/alias 的作用、functionalization 前后变化，以及 joint/post 的图范围与入口筛选。
+- 剩余理解负担来自不服务本篇主线的实现名词，以及几个需要后文倒推或只能背结论的位置。本轮在 AOTAutograd 首次出现处直接交代其用途；解释修改图后为何必须重生成 `forward`；区分五项收益门槛与语义条件；给出参数写法例子；明确函数化图仍可为边界写回保留 `copy_`。
+- 删除 joint/post 的目录式实现清单和未定义的 fake tensor；只保留当前案例所需的常量折叠、局部清理、pattern replacement 与 reinplace 因果。
+- 下一步仍由新的无历史读者仅凭当前 README 复验。
+
+### 第九轮第三次冷读
+
+- 第三名无历史读者报告为 B。主线和三个入口均可闭卷复述；剩余缺口是 joint 的跨前反向能力与 post-grad 的最终单图边界仍只有判据，没有具体对象，读者必须自行发明案例才能迁移。
+- 核对当前源码后，没有把内置的局部 joint 清理伪装成跨前反向规则。正文增加当前 `joint_custom_pre_pass`/`joint_custom_post_pass` 接口能够承载的成对规则示例：前向 `exp` 结果 y 同时被反向 `grad_y * y` 使用，只有 joint 保留这对关系。该例用于入口选择，不声称当前内置 pass 已注册这种替换。
+- post-grad 使用当前 `remove_noop_ops` 的真实输入/输出存储检查：`input → clone → output` 不能删除 clone，否则新增输入输出 alias；clone 仅作图内中间值时才可在其余条件成立后绕过。这样“最终单图边界”有了实际读取对象、条件与两种出口。
+- 将“边界上显式写回”改为“保留调用者能够观察到的写回”，避免把边界误解成图末端。
+
+### 第九轮第四次冷读：通过
+
+- 第四名无历史读者只读当前 README，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/85_PASS_STAGES_COLD_REVIEW_13.md`，评级 A。
+- 读者能闭卷复述三个入口的输入、动作与出口，完整推演 batch ReLU，解释 mutation/alias 与 functionalization，并分别用 F.relu、joint custom pair 和 clone 输入输出 alias 三个案例判断入口。
+- 读者准确区分当前内置规则、custom pass 放置示例和当前源码真实条件，没有从示例误推出不存在的内置优化。
+- 本篇回修闭环。后续逐篇审读继续使用全新无历史读者；提示只规定认知背景和审查方法，不提供教材应教出的答案。
+
+## 第八轮：fable5 版本仍未被真实读者理解
+
+- 真实读者明确反馈：即使第七轮由 fable5 改写，仍未理解 pre-grad 到底做什么。最终标准是教材文字本身；审阅提示或作者交流传递的知识不能算教材教会读者。
+- 新建无会话历史的冷读者，只允许阅读本篇 README。报告保存为 `/work/learning/1021/56sol/inductor-fresh-reader-review/63_PASS_STAGES_COLD_REVIEW_3.md`，评级 C。
+- 这次确认的结构问题：正文虽把 `batch_relu` 动作写完整，却没有先说明 pre-grad 是 pass 运行位置；把当前 matcher 的放置理由写成优化本身的唯一时机；把 mutation/alias 约束写得像统一处理动作；又用不具阶段独占性的 joint/post 示例暗示阶段职责。
+- 本轮正文先回答 `pre_grad_passes` 实际做什么，再完整运行 `batch_relu`；明确 ATen 目标的 post-grad 对应实现存在，因此只说明当前规则实现的放置，不声称优化思想只能在 pre-grad。mutation/alias 明确改为规则限制，`sin + add_` 明确是未改图反例。
+- 下一步必须由另一名无历史冷读者只读修订后的 README；不得把本轮报告或正确答案交给它。
+
+### 第八轮第二次冷读
+
+- 第二位无历史读者只读修订稿，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/64_PASS_STAGES_COLD_REVIEW_4.md`，评级 B。
+- 读者已能准确复述 pre-grad 主线和 batch ReLU 全过程；剩余问题集中在首次出现的基础名词、joint 推理出口、alias 具体关系、post-grad 案例安全条件和总结后突然展开的控制流层级。
+- 本轮按首次阅读顺序补齐最低定义，正面陈述阶段职责，删除大部分回应旧误解的否定句；控制流只保留下一篇导航，不在当前篇展开半套流程。
+- 下一步仍须换一名无历史读者，只以当前 README 验收。
+
+### 第八轮第三次冷读
+
+- 第三位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/65_PASS_STAGES_COLD_REVIEW_5.md`，仍为 B；主线已经成立，剩余问题是四个首次出现或旁枝术语。
+- AOTAutograd 的首次介绍改为本文实际展示的 `add_ → add + copy_` 与训练合图再拆分；删除“规范化”和量化调整清单；正面说明训练与推理复用 `joint_graph_passes`，但输入图范围和出口不同。
+
+### 第八轮第四次冷读
+
+- 第四位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/66_PASS_STAGES_COLD_REVIEW_6.md`，评级 B。
+- 修正开头把 partition 画成推理必经步骤的实质错误；训练与推理从 joint 出口分叉，只有训练进入 partition。
+- 收窄三个案例的教学任务：batch ReLU 固定 `inplace=False` 并说明收益阈值；joint 不再暗示当前局部清理体现 joint 独有能力；post-grad 用同 dtype 空转换替换需要额外 stride/alias 论证的 view。
+
+### 第八轮第五次冷读
+
+- 第五位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/67_PASS_STAGES_COLD_REVIEW_7.md`，评级 B。
+- 剩余核心歧义是 functionalization 后为何仍出现 `copy_`。正文现区分普通新值计算与外部可观察输入写回，不把函数化解释成删除全部副作用。
+- functionalization、joint graph、partition 均移到总图之前定义；推理复用 joint 函数名的事实也与训练合图语义分开。
+
+### 第八轮第六次冷读
+
+- 第六位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/68_PASS_STAGES_COLD_REVIEW_8.md`，评级 B。
+- 总图现于 joint 函数调用前分开训练 joint graph 与推理单图；训练与推理只复用函数，不再共享错误的图种类标签。
+- mutation 与 alias 合入同一个 `view/sin/add_/cos` 案例，并画出函数化后的完整读写顺序。
+
+### 第八轮第七次冷读：通过
+
+- 第七位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/69_PASS_STAGES_COLD_REVIEW_9.md`，评级 A。
+- 读者仅凭正文准确复述三个入口、训练/推理分流、batch ReLU、mutation/alias 在 functionalization 前后的具体关系和规则放置依据。
+- 本轮真实读者反馈已在当前篇闭环。后续逐篇冷读仍沿用相同隔离规则：提示只规定认知背景和审查方法，不传递教材应当教出的答案；每轮换无历史读者。
+
+## 第七轮：真实读者仍未理解后的重构
+
+- 实际读者反馈：fable5 改写后仍无法说明 pre-grad 到底执行什么；hook no-op 案例和“必须考虑 mutation/alias”只解释约束，没有展示合法改图动作。
+- 独立逐句审阅报告：`/work/learning/1021/56sol/inductor-fresh-reader-review/15_PASS_STAGES_DEEP_REVIEW.md`。该报告只部分关闭原反馈，并指出三条新增“典型规则”无当前 pre-grad 源码支撑。
+- 本轮删除自定义 LSTM、连续原地操作合并成 kernel、删除同存储冗余操作三条无落点陈述。pre-grad 主案例改用当前默认注册的 `BatchReLuPreGradFusion`：默认至少五个同组节点，完整展示 stack→relu→unbind/getitem、重接 users、删除旧节点。
+- `sin + add_` 降为 no-op 与 mutation 顺序约束对照；明确 functionalization 是 AOTAutograd 的动作，不冒充 pre-grad pass。
+- joint 使用当前 `constant_fold_uniform_value` 后的 `remove_no_ops` 展示 `add(x, zero)` 的引用替换和节点删除；post-grad 使用当前 `remove_noop_ops` 展示同 shape view 删除。
+- 验收隔离：原审阅智能体已接触作者讨论，不承担最终理解验收。下一步创建不继承会话历史的冷启动读者，只提供读者知识边界和当前教材；禁止给它正确答案或旧反馈。
+- 首次冷启动报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/16_PASS_STAGES_COLD_REVIEW.md`。读者能闭卷复述 pre-grad 的输入、完整 batch ReLU 改写、出口及 functionalization 归属；仍指出 FX/Dynamo/ATen/alias 未定义、mutation 图省略外部写入、joint 案例未声明其不使用合并图特性、推理 joint 出口含糊、post-grad reinplace 无案例。
+- 第二次修订补齐上述定义和边，明确 joint 的具体清理动作并非依赖全部 joint 信息，写清推理直接进入 post-grad；删除无案例的 reinplace 提前介绍。下一步由另一名不继承历史的冷启动读者重新验收。
+- 第二名冷启动读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/17_PASS_STAGES_COLD_REVIEW_2.md`。它能闭卷复原 pre-grad 的输入、五 ReLU 前后图、六项节点动作、no-op 对照、functionalization 归属和出口，判定阶段概念主线已可仅凭教材理解。
+- 仍有意保留的边界：本篇教“判断阶段需要哪些资料”，不承诺仅凭任意 Python 源码确定注册位置；匹配算法、shape 来源和复杂 alias 分析分别属于后续实现篇。joint 当前案例只证明 joint 会真实改节点，正文明确声明它没有利用前反向共同关系，不把 partition 的保存/重算冒充 joint pass。
+
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/02_PASS_STAGES_REVIEW.md`，75/75 个语义单元。
+- 正文统一用“输入图—独有信息—代表规则—出口”比较 pre、joint、post。
+- 删除 joint/post 的内部 pass 清单、FSDP replacement 和图不变量算法；这些材料分别属于 matcher、具体规则或图状态篇。
+- mutation 的 post custom hook 明确为中间快照；本篇只用最终运行结果验证旧值读取与写回语义持续成立，不把 hook 冒充最终 FX 出口。
+- 作者验证方式、旧稿防误读句和课程推进说明只保存在本记录。
+
 ## 所在层、输入与出口
 
 - 队列项：Q11，第 2 层，父项 Q10；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q111 递归入口的叶子源码回修。

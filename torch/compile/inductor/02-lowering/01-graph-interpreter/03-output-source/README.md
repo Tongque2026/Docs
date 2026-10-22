@@ -1,39 +1,191 @@
-# GraphLowering 输出处理：固定返回存储、stride 与输入修改
+# GraphLowering 怎样形成返回值并写回修改过的输入
 
 [返回 GraphLowering](../README.md) · [上一篇：算子与常量分派](../02-dispatch-source/README.md) · [返回 Lowering](../../README.md)
 
-最后一个 FX `output` 节点不再构造一项数学运算。它要把 env 中的结果整理成调用者可观察的接口：tensor 必须有实际存储，返回 stride 要与 FX 元数据兼容，被原地修改的输入必须写回调用者传入的那块存储，所有 buffer 的布局也要在离开 Lowering 前定下来。
-
-本叶子完整保留当前 `torch/_inductor/graph.py` 中 `output`、`finalize`、`try_match_insignificant_strides` 三个方法，按产品文件顺序排列，方法内部无省略。教学注释统一以 `# 教学：` 开头。
-
-## 返回前同时处理三种引用
-
-对 `x.add_(1); return x`，Lowering 内部当前值、调用者原输入和函数返回其实指向同一个语义对象，却可能暂时由不同 IR 表示：
+前两篇已经把 placeholder、算子和常量的 Lowering 结果放进 `env`。读到最后一个 FX `output` 节点时，`GraphLowering` 不再创建新的数学计算，而要把这些内部结果变成函数接口：
 
 ```text
-graph_inputs["x"]       → 修改后的当前值
-graph_inputs_original   → 调用者传入的原 InputBuffer
-graph_outputs           → 函数要返回的值
+env 中的返回结果
+    │
+    ├─ 需要存储的 tensor：物化成可由生成程序引用的 buffer
+    ├─ 标量和 None：包装成生成程序能够返回的对象
+    ├─ 仍是 TensorBox/BaseView 的结果：与 FX output 保存的 stride 核对
+    └─ 被修改的输入：把新值写回调用者原来的存储
+              │
+              ▼
+       self.graph_outputs
+              │
+              ▼
+        决定现有 buffer 布局
 ```
 
-出口必须把修改后的当前值写进原 InputBuffer；若返回项正是这份修改后的值，还要把返回引用换回原 InputBuffer。这样调用后既能看到 `x` 已更新，返回 tensor 也保持输入别名身份。
+本篇先让三组具体数据走到出口，再回到 `output`、`finalize` 和 `try_match_insignificant_strides` 的完整源码。这样读源码时，每个分支都有已经见过的对象。
 
-## 完整源码
+## 普通返回值怎样进入 graph_outputs
 
-进入 `output` 时，`target="output"`；`args` 是已经由 Interpreter 从 env 换成 IR 结果的 tuple，本例可记作 `(modified_x,)`；`kwargs={}`。`graph_inputs_original["x"]` 仍是调用者的 InputBuffer，而 `graph_inputs["x"]` 已指向修改后的值。返回类型 `None` 表示这个方法不把结果交回下一 FX node，而是把整理后的项目写入 `self.graph_outputs`。函数逐项判断返回值类型，必要时物化 TensorBox、核对 stride，并把修改后的输入引用换回原 InputBuffer。末尾日志中的 `num_channels_last_conv` 只是本图有多少 convolution 促使输入采用 channels-last 的计数，`graph_id` 是当前编译图编号；它们只用于 debug 输出，不参与 normalize、mutation 写回或 layout 决策。
+先看：
+
+```python
+def f(x, y):
+    return (x + y) * 2
+```
+
+处理 output 之前，最后的乘法结果可能仍是延迟的逐元素计算：
+
+```text
+env 中的结果
+TensorBox(StorageBox(Pointwise))
+```
+
+函数已经要返回，生成程序必须有一份可以引用的结果存储。`ir.ExternKernel.realize_input` 沿 `TensorBox.data` 进入内部的 `StorageBox`，物化其中的计算，得到：
+
+```text
+StorageBox(ComputedBuffer buf0)
+```
+
+这里的“物化”是登记一份有名字的结果 buffer 及其产生方式，不是此刻执行用户计算。普通 `TensorBox(StorageBox(...))` 在 `realize_input` 中被解开一层，返回内部 `StorageBox`；它不属于随后检查的 `TensorBox/BaseView`，直接进入：
+
+```text
+self.graph_outputs = [StorageBox(ComputedBuffer buf0)]
+```
+
+`output()` 自身返回 `None`；后续 wrapper/codegen 读取 `self.graph_outputs`，生成运行时返回值。
+
+不同类型的返回值都要先变成统一的出口对象。下面的表区分了三个时点：`super().output` 已从 env 取出的值、`realize_input` 的结果，以及它是否进入 tensor stride 检查。
+
+| 从 env 取得的值 | `realize_input` 之后 | 是否检查 tensor stride |
+| --- | --- | --- |
+| `TensorBox(StorageBox(Pointwise))` | 物化后的 `StorageBox(ComputedBuffer)` | 否 |
+| `int`、SymPy 表达式或布尔表达式 | `ShapeAsConstantBuffer` | 否 |
+| `None` | `NoneAsConstantBuffer` | 否 |
+| `ir.Constant` | `add_tensor_constant` 登记的 `TensorBox(StorageBox(ConstantBuffer))` | 是；该分支直接返回 TensorBox，不再递归解包 |
+| 已有 `ConstantBuffer` | 原 `ConstantBuffer` | 否 |
+| `EffectfulKernel` | `copy_input` 建立并物化一份 Pointwise，返回它的 `TensorBox` | 是 |
+
+若传入的结果不属于 `output` 允许的类型，类型断言立即失败；若返回项数量与原 FX output 参数数量不同，长度断言失败。正常路径中，两边仍逐项配对；只有 `realize_input` 后仍是 `TensorBox` 或 `BaseView` 的项目才读取原 FX 节点 `meta["val"]` 中记录的接口 stride。普通计算输出已经是 `StorageBox`，在这一循环中直接保留。
+
+## 只有 size 0/1 维的 stride 可以改写
+
+这个 helper 不会接收已经解包成 `StorageBox` 的普通计算输出；调用它的条件是 `realize_input` 后的对象仍为 `TensorBox` 或 `BaseView`，例如 `ir.Constant` 形成的 TensorBox，或仍保留 view 身份的结果。下面直接给 helper 一份已有 storage/layout 的 tensor，观察它怎样处理接口 stride。
+
+设返回 tensor 的 shape 是 `[2,1,3]`：
+
+```text
+实际 IR stride = [3,3,1]
+FX meta stride = [3,99,1]
+```
+
+逻辑索引 `(i0,i1,i2)` 对应的存储位置为：
+
+```text
+offset + i0×stride0 + i1×stride1 + i2×stride2
+```
+
+第二维 size 为 1，所以该维唯一合法索引是 `i1=0`。这一维对地址的贡献始终是 `0×3=0` 或 `0×99=0`；把 stride 从 3 写成 99 不会改变任何元素的位置。`try_match_insignificant_strides` 因而建立一份新 view：
+
+```text
+底层 storage：同一份
+device/dtype：不变
+size：         [2,1,3]，不变
+offset：       不变
+stride：       [3,3,1] → [3,99,1]
+外层对象：     ReinterpretView
+```
+
+这不是数据复制，也不是 NCHW/NHWC 转换。它只是让没有地址意义的 stride 与 FX 接口记录一致。
+
+如果 shape 改成 `[2,2,3]`，第二维允许 `i1=1`。此时地址贡献会从 `1×3` 变成 `1×99`，已经指向不同位置。方法返回传入的原 tensor，storage、size、offset 和 stride 全都不改。
+
+size 为 0 的维也没有任何合法元素，因此同样可以采用 meta stride。方法使用静态符号判断；如果编译期不能证明某维 size≤1，也不会把那一维当作无关维。
+
+## 修改输入时要同时维护当前值、原存储和返回引用
+
+再看：
+
+```python
+def f(x):
+    x.add_(10)
+    return x
+```
+
+placeholder 建立了两份用途不同的记录：
+
+```text
+graph_inputs_original["x"] = InputBuffer x
+    调用者传入的原存储；函数结束时必须让调用者继续持有它
+
+graph_inputs["x"] = TensorBox(StorageBox(InputBuffer x))
+    当前计算应该读取的 x；发生 mutation 后可以改指新值
+```
+
+Lowering 处理完 mutation 后，`graph_inputs["x"]` 仍是外层 `TensorBox`，但它的 `.data` 已是表示 `[11,12]` 的当前 `StorageBox`；`graph_inputs_original["x"]` 仍是调用者传入的 `InputBuffer x`。output 处理返回值时，`realize_input` 解开外层 TensorBox，所以 `graph_outputs` 保存的恰是同一个当前 StorageBox。
+
+输入检查把三个层次分别保存下来：
+
+```text
+current_tensor  = graph_inputs["x"]       # TensorBox
+current_storage = current_tensor.data       # StorageBox；也在 graph_outputs 中
+current_ir      = current_storage.data      # 当前值的底层 IRNode
+original_x      = graph_inputs_original["x"]  # 原 InputBuffer
+```
+
+然后它做两件不同的事：
+
+```text
+当前值 [11,12]
+    │
+    ├─ realize_into(current_ir, original_x)
+    │      登记：运行时把 [11,12] 写进调用者的原存储
+    │
+    └─ graph_outputs.index(current_storage) → original_x
+           返回值继续代表调用者持有的那块存储
+```
+
+只有第一步，调用者的 x 会更新，但返回表仍代表临时的当前值；只有第二步，返回别名看似正确，却没有把新内容写回调用者存储。两步分别保证“内容已更新”和“返回身份仍是原输入”。
+
+若函数修改 x，却返回另一个值：
+
+```python
+def g(x, y):
+    x.copy_(y)
+    return y + 1
+```
+
+输入检查仍发现 x 的当前表示不再是同名原 `InputBuffer`，所以 `realize_into` 仍登记写回。随后在 `graph_outputs` 中找不到 x 的当前 `StorageBox`，`.index()` 抛出并由本方法捕获 `ValueError`。这里的 `ValueError` 只表示“没有返回引用需要替换”，不会撤销前面已经登记的写回。
+
+`.index(current_storage)` 能命中不是因为 TensorBox 与 StorageBox 存在特殊相等规则，而是因为 `realize_input` 已经剥掉 TensorBox，返回表中保存的就是这一个 StorageBox 对象。
+
+未修改的 tensor 输入会沿 `TensorBox → StorageBox → InputBuffer` 检查到底层：对象仍是 `InputBuffer` 且名称等于输入 key，便不写回。符号输入在 `graph_inputs` 中是 `sympy.Expr`，没有 tensor 存储，直接跳过这项检查。底层是 `InputBuffer` 但名称不等于输入 key 时，也按已修改处理并写回原输入。
+
+## 为什么最后才 finalize
+
+普通输出的物化可能新增 buffer；输入写回也可能登记 mutation operation 或增加布局约束。它们完成之前就决定 layout，会漏掉刚刚出现的生产者、消费者或写回要求。
+
+因此 output 最后才调用 `finalize()`：按 `self.buffers` 当前顺序，对每个已登记 buffer 调用 `decide_layout()`。离开 output 时形成三份稳定状态：
+
+```text
+graph_outputs：函数正式返回哪些 IR 对象
+输入写回：     哪些当前值要实现进原 InputBuffer
+buffers：      当前所有已登记 buffer 都完成 decide_layout
+```
+
+布局究竟如何选择属于存储与布局篇；这里需要掌握的是决定发生时已经收齐哪些信息。
+
+## 完整源码：把四条路径映射回实现
+
+进入 `output` 时，`args` 已由父 `Interpreter` 用 env 中的 IR 结果替换；`V.graph.current_node.args[0]` 仍能取得原 FX output 引用。下面保留当前 `torch/_inductor/graph.py` 中三个方法的全部语句和产品注释，只增加 `# 教学：` 注释，并去掉类级缩进。
 
 ```python
 def output(
     self, target: str, args: Tuple[object], kwargs: Dict[str, object]  # type: ignore[override]
 ) -> None:
-    # 教学：父 Interpreter 从 env 解引用 output 的参数。
+    # 教学：取得 env 已解引用的 IR 结果；单项输出也统一成序列。
     result = super().output(target, args, kwargs)  # type: ignore[arg-type]
     if not isinstance(result, (tuple, list)):
         # nested subgraphs can have singleton outputs
-        # 教学：统一成序列，后面逐项与 FX output 参数配对。
         result = (result,)
     assert isinstance(result, (tuple, list)), type(result)
-    # 教学：只允许这里列出的 Lowering 结果跨过图出口。
+    # 教学：不在列表中的对象不能跨过 GraphLowering 出口。
     assert all(
         isinstance(
             x,
@@ -51,64 +203,65 @@ def output(
         for x in result
     ), result
 
-    # 教学：保留原 FX node，以便读取每个返回项的 fake stride。
+    # 教学：原 FX 引用保留 meta stride；同样把单项输出统一成序列。
     fx_node_args = V.graph.current_node.args[0]  # type: ignore[arg-type]
     if not isinstance(fx_node_args, (tuple, list)):
         # nested subgraphs can have singleton outputs
         fx_node_args = (fx_node_args,)
-    # 教学：输出 tensor 不能只是一条延迟规则；先把它变成可供外部引用的存储输入。
+    # 教学：把延迟 tensor、标量、None 和常量变成生成程序可引用的 IR 对象。
     result = [ir.ExternKernel.realize_input(x) for x in result]
     result_correct_strides = []
 
+    # 教学：每份实际 IR 结果必须与一份原 FX output 接口信息对应。
     assert len(fx_node_args) == len(result)
     for r, fx_node in zip(result, fx_node_args):
         if not isinstance(r, (ir.TensorBox, ir.BaseView)):
-            # 教学：标量、None 已在上一步变成专用 buffer；它们不做 tensor stride 修正。
+            # 教学：普通输出已是 StorageBox；标量/None 也无此类 layout，均直接保留。
             result_correct_strides.append(r)
         else:
             # AOT Autograd tries to detect stride divergence of inductor from output metadata.
             # Here, we try to avoid spurious divergence by matching insignificant strides such as
-            # 教学：只修正 size 0/1 维度中不改变元素位置的 stride 差异。
+            # 教学：tensor 用实际 IR layout 与原 FX meta stride 进入下方 helper。
             result_correct_strides.append(
                 self.try_match_insignificant_strides(
                     r, fx_node.meta["val"].stride()
                 )
             )
 
-    # 教学：这里建立函数正式返回表，后续 wrapper/codegen 读取它。
+    # 教学：物化和 stride 修正后的对象先形成正式返回表。
     self.graph_outputs = result_correct_strides
     value: ir.IRNode
-    # 教学：逐个检查 tensor 输入的当前表示是否仍是原 InputBuffer。
     for name, value in self.graph_inputs.items():
         assert isinstance(
             value, (TensorBox, sympy.Expr)
         ), f"Unsupported inductor graph input type: {type(value)}"
         if not isinstance(value, TensorBox):
+            # 教学：sympy.Expr 没有 tensor 存储，不参与 mutation 写回。
             continue
-        # 教学：先物化当前值，才能判断实际底层对象并安排写回。
+        # 教学：沿 TensorBox → StorageBox → 当前底层 IRNode 逐层检查。
         value.realize()
         assert isinstance(value, TensorBox)
         value = value.data
         assert isinstance(value, ir.StorageBox)
-        # 教学：保留 StorageBox，因为 graph_outputs 中可能正引用它。
+        # 教学：realize_input 剥掉 TensorBox，因此返回当前值时 graph_outputs 保存同一 StorageBox。
         value_storage_box = value
         value = value.data
         if not isinstance(value, InputBuffer) or value.get_name() != name:
             # one of our inputs was mutated, need to turn that into a copy
-            # 教学：当前值不再是同名原输入，便把它实现进原 InputBuffer。
+            # 教学：value 此时是 StorageBox.data，即当前底层 IRNode；先登记其写回。
             ir.MutationLayoutSHOULDREMOVE.realize_into(
                 value, self.graph_inputs_original[name]
             )
             # replace output with mutated input
             try:
-                # 教学：若返回项就是当前 StorageBox，改为返回原输入对象以保持别名身份。
+                # 教学：若当前值也被返回，再把该返回引用换成原 InputBuffer。
                 ind = self.graph_outputs.index(value_storage_box)
                 self.graph_outputs[ind] = self.graph_inputs_original[name]
             except ValueError:
-                # 教学：输入可以被修改但不返回，此时只需写回，无返回项可替换。
+                # 教学：未返回该输入只跳过引用替换，不撤销写回。
                 pass
 
-    # 教学：所有输出与 mutation 安排完成后，冻结每个已登记 buffer 的布局。
+    # 教学：输出和输入写回已经登记齐全，现在才决定现有 buffer 的布局。
     self.finalize()
     log.debug(
         "Force channels last inputs for %d conv for the current graph with id %d",
@@ -117,7 +270,7 @@ def output(
     )
 
 def finalize(self) -> None:
-    # 教学：每个 buffer 根据前面收集的读写和布局要求作最终决定。
+    # 教学：遍历此时已经收齐的 buffer；具体布局算法由各 buffer 实现。
     for buf in self.buffers:
         buf.decide_layout()
 
@@ -134,15 +287,15 @@ def try_match_insignificant_strides(
         """
 
     # should have already been realized
-    # 教学：只有已有 storage/layout 的结果才能安全建立另一份布局视图。
+    # 教学：只有已经拥有 storage 和 layout 的结果才能建立另一份布局 view。
     assert torch._inductor.ir.is_storage_and_layout(tensor)
 
-    # 教学：把 torch.SymInt 解包成与 IR 比较使用的 SymPy 表达式。
+    # 教学：torch.SymInt 解包成 sizevars 能比较的 SymPy 表达式。
     meta_strides = [
         s.node.expr if isinstance(s, torch.SymInt) else s for s in meta_strides_inp
     ]
 
-    # 教学：所有 stride 已可静态证明相同，直接复用原对象。
+    # 教学：全部 stride 已相同，不需要建立新 view。
     if all(
         self.sizevars.statically_known_equals(s1, s2)
         for s1, s2 in zip(meta_strides, tensor.get_stride())
@@ -155,30 +308,30 @@ def try_match_insignificant_strides(
         tensor_strides: Sequence[Union[Expr, int]],
     ) -> bool:
         for dim, s1, s2 in zip(shape, meta_strides, tensor_strides):
-            # 教学：size 0/1 的维度没有两项不同元素可由 stride 区分，跳过。
+            # 教学：size 0/1 的维没有可由 stride 区分的两个元素。
             if self.sizevars.statically_known_leq(dim, 1):  # type: ignore[arg-type]
                 continue
 
-            # 教学：任何有效维度 stride 不同都是真实布局差异。
+            # 教学：任一 size>1 的维不同，便属于真实地址差异。
             if not self.sizevars.statically_known_equals(s1, s2):
                 return False
 
         return True
 
-    # 教学：真实维度存在差异时不伪装成 meta layout，原 tensor 原样返回。
+    # 教学：存在真实地址差异时，保留原 tensor 的完整 layout。
     if not significant_strides_equal(
         tensor.get_size(), meta_strides, tensor.get_stride()
     ):
         return tensor
 
-    # 教学：只剩无关维差异；取得同一 storage 和旧布局，复制 stride 列表。
+    # 教学：只剩无关维差异；复用同一 storage 和旧 layout 的其余字段。
     storage, old_layout = torch._inductor.ir.as_storage_and_layout(tensor)
     new_stride = list(old_layout.stride)
     for i, s in enumerate(tensor.get_size()):
         if self.sizevars.statically_known_leq(s, 1):  # type: ignore[arg-type]
             new_stride[i] = meta_strides[i]
 
-    # 教学：device、dtype、size、offset 和 storage 不变，只替换无关维 stride。
+    # 教学：新 view 只换 stride；device、dtype、size、offset 和 storage 不变。
     new_layout = torch._inductor.ir.FixedLayout(
         old_layout.device,
         old_layout.dtype,
@@ -189,92 +342,22 @@ def try_match_insignificant_strides(
     return ir.TensorBox(torch._inductor.ir.ReinterpretView(storage, new_layout))
 ```
 
-源码副本去掉类级四空格缩进；三个方法内部的产品代码、注释和顺序完整保留。
+源码按四段执行：先统一并物化输出，再修正无关 stride，然后检查输入写回，最后 finalize。`num_channels_last_conv` 和 `graph_id` 只进入末尾 debug 日志，不改变上述状态。
 
-## 案例一：普通计算结果成为 graph_outputs
+## 沿源码再走四个边界
 
-对 `return (x+y)*2`，最后的 mul 在进入 output 前可能还是延迟 Pointwise。`ExternKernel.realize_input` 使它成为具名 `ComputedBuffer`。假设其 stride 与 FX meta 都是 `[1]`：
+1. 单项返回时，`result` 和 `fx_node_args` 分别包装成一项 tuple；这样后续仍能一一配对。tuple/list 返回不再包装。
+2. `meta_strides_inp` 中若有 `torch.SymInt`，先取出其 SymPy 表达式；后面的“相同”与“size≤1”都必须由 `sizevars` 静态证明。
+3. 输入未修改时，两次 `.data` 得到 `StorageBox` 和同名 `InputBuffer`，条件为假，不调用 `realize_into`，也不搜索返回表。
+4. 输入已修改但没有返回时，写回先登记，返回表查找后失败；捕获 `ValueError` 后仍继续处理其他输入并最终 finalize。
 
-| 步骤 | result / 图级状态 |
-| --- | --- |
-| 父类解引用 | `TensorBox(StorageBox(Pointwise))` |
-| `realize_input` | `TensorBox(StorageBox(ComputedBuffer buf0))` |
-| stride 比较 | 完全相同，返回同一对象 |
-| 赋值 | `graph_outputs=[buf0 对应对象]` |
-| 输入检查 | x、y 仍是各自同名 InputBuffer，无写回 |
-| finalize | buf0 执行 `decide_layout()` |
+一次调用若有多个输入，循环按 `graph_inputs` 的顺序逐个完成上述检查。`graph_outputs.index` 负责源码当前这一次返回引用替换；完整编译 `x.add_(10); return x, x` 的两个运行时返回值仍都与调用者 x 共享同一 `data_ptr()`，但这个外部结果还包含上层图输出去重和 wrapper 处理，不能仅由本方法的一次 `.index()` 推出。
 
-`output()` 返回 `None`，因为结果已经写入 `self.graph_outputs`。后续生成 wrapper 时读取这张图级返回表。
+## 用新输入检查是否掌握出口合同
 
-这里还有一处容易漏掉的表示变化。`realize_input` 不只处理 tensor；图若返回 Python/SymPy 值，它会先把这些值变成有统一 IR 接口的对象：
+1. `return (tensor, 3, None)`：普通 TensorBox 物化并解包成 StorageBox，所以与另外两项一样跳过 stride helper；`3` 和 `None` 分别成为 `ShapeAsConstantBuffer` 与 `NoneAsConstantBuffer`，三项按原顺序进入 `graph_outputs`。若第一项是物化后仍为 TensorBox/BaseView 的常量或 view，才进入 helper。
+2. shape `[0,5]`、实际 stride `[5,1]`、meta stride `[99,1]`：第 0 维没有合法元素，可以把 stride 改为 99；第 1 维 size=5，若两边不同就必须保留原 tensor。
+3. 当前输入底层仍是 `InputBuffer`，但名称不是 `graph_inputs` 中的 key：条件仍为真，需要把当前值写回该 key 对应的原 InputBuffer。
+4. `x.copy_(y); return y+1`：x 的写回发生；返回表查找 x 失败，只跳过别名替换；最后仍执行 finalize。
 
-| output 进入前 | `realize_input` 之后 | 为什么不进入 stride 分支 |
-| --- | --- | --- |
-| `3`、SymPy 表达式或布尔表达式 | `ShapeAsConstantBuffer` | 它表达形状/标量值，不是有多维布局的 tensor |
-| `None` | `NoneAsConstantBuffer` | 它表达“没有 tensor”，没有 size 和 stride |
-| `ir.Constant` | 由 `add_tensor_constant` 登记的 tensor 常量 | 它按 tensor 常量路径形成可引用存储 |
-| 已有 `ConstantBuffer` | 原对象 | 已经满足外部输入形式 |
-
-实验 04 直接运行 `GraphLowering`，实际观察到整数、浮点、SymInt 输出成为 `ShapeAsConstantBuffer`，`None` 与 `BackwardState` 占位输出成为 `NoneAsConstantBuffer`。所以上面循环里的“直接保留”是指保留**已包装后的对象**，不是把原始 `3` 或 `None` 原样放进 `graph_outputs`。
-
-## 案例二：只修正 size-1 维度的 stride
-
-设返回 tensor shape 为 `[2,1,3]`：
-
-```text
-实际 IR stride = [3,3,1]
-FX meta stride = [3,99,1]
-```
-
-维度 0 的 size=2，stride 都为 3；维度 2 的 size=3，stride 都为 1。唯一差异在维度 1，而它的 size=1。无论 stride 是 3 还是 99，合法索引都只能取 0，对元素位置贡献都是 `0×stride=0`。
-
-因此 `significant_strides_equal` 返回真，新布局只把第二项改成 99：
-
-```text
-同一 storage、同一 offset、同一 size
-旧 layout stride [3,3,1]
-新 view stride   [3,99,1]
-```
-
-若 shape 改为 `[2,2,3]`，第二维已有索引 0 和 1，stride 3 与 99 会读取不同位置；函数返回原 tensor，不建立这份 ReinterpretView。这里的“匹配”只消除无实际地址意义的差异，不转换真实 NCHW/NHWC 排列。
-
-对这两个输入调用当前方法时，`[2,1,3]` 得到 `ReinterpretView`，底层名称仍是 `stride_src`，size、offset 不变而 stride 成为 `[3,99,1]`；`[2,2,3]` 则返回传入的同一个对象。
-
-## 案例三：修改输入并返回它
-
-设 x 初始 `[1,2]`，图语义为 `x.add_(10); return x`。placeholder 时：
-
-```text
-graph_inputs_original["x"] = InputBuffer x
-graph_inputs["x"]          = TensorBox(StorageBox(InputBuffer x))
-```
-
-mutation lowering 后，`graph_inputs["x"]` 指向表示 `[11,12]` 的当前 StorageBox。output 先把它放进 `graph_outputs`，随后遍历输入：底层已不再是名为 x 的原 InputBuffer，于是 `realize_into(current_value, original_x)` 安排把 `[11,12]` 写回调用者存储。
-
-返回表原本引用当前 StorageBox，查找成功后替换成 `graph_inputs_original["x"]`：
-
-```text
-执行副作用：原输入存储 x ← [11,12]
-函数返回：  同一个原输入存储 x
-```
-
-若函数修改 x 但只返回另一个 y，`graph_outputs.index(value_storage_box)` 找不到 x，进入 `ValueError` 分支：写回仍保留，只是不改返回表。
-
-实验 06 分别完整编译了这两种函数。第一种返回的 x 与调用者 x 的 `data_ptr()` 相同；第二种执行 `x.copy_(y); return y+1`，调用后 x 变成 `[7,8,9]`，返回 `[8,9,10]` 且不与 x 别名。运行结果证明了“写回不依赖 x 是否在返回值中”；具体由 `index` 找不到后吞掉 `ValueError` 完成，则由上面的当前源码分支支持。
-
-## finalize 为什么放在最后
-
-输出物化可能新增 buffer；输入写回也可能建立 mutation operation 或给布局增加约束。若在它们之前就决定布局，最后产生的消费者要求无法参与选择。当前源码因此先完成输出与 mutation 交接，再对 `self.buffers` 中每个 buffer 调用 `decide_layout()`。
-
-布局选择算法属于 Q23；本叶子需要掌握的状态边界是：离开 output 后，`graph_outputs` 已稳定、输入写回已登记、现有 buffers 已决定布局。
-
-实验 06 还给 `buffers` 放入两个只实现 `decide_layout()` 的接口探针，观察到调用顺序为 `buf_first`、`buf_second`。这个 mock 只能证明 `finalize` 会按列表顺序调用所有现有 buffer；“为何必须在输出和写回之后”来自 `output` 的调用顺序及这些步骤可能登记 buffer/约束的源码关系。
-
-## 用新情况检验理解
-
-1. 返回 `(tensor, 3, None)` 时，只有 tensor 进入 stride 修正；`3` 和 `None` 先分别包装成 `ShapeAsConstantBuffer` 与 `NoneAsConstantBuffer`，然后在 stride 循环中原样加入返回表。
-2. shape `[0,5]` 的第 0 维 stride 可按 meta 修正，因为 size 0 没有任何合法元素；第 1 维 size 5 的差异不能忽略。
-3. 当前输入底层仍是 `InputBuffer`，但名字不是 graph_inputs 中的 key，也会被判为修改，需要写回原输入。
-4. 输入被修改但没有作为返回项时，`ValueError` 不取消 mutation，只表示没有返回引用需要替换。
-
-Q213 已把 GraphLowering 的最终接口收口讲完整。Q214 将回到每个节点外围，解释 `run_node` 如何在调用这些入口前后处理 origin、布局约束、物化、users 和符号断言。
+Q213 至此把 GraphLowering 的出口收口：`graph_outputs` 已形成，输入 mutation 已映射回调用者存储，现有 buffer 布局已决定。下一篇[每个节点执行后的统一收尾](../04-run-node-source/README.md)解释 `run_node` 如何在各节点入口和出口维护 origin、布局约束、物化、users 与符号断言。

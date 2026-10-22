@@ -4,7 +4,7 @@
 
 Q12 已经展示一条模式如何从 `(x+y)*2` 识别出 add 与 mul。本叶子打开它的调度入口：一张图可能有很多节点、同一末端也可能注册多条规则，`PatternMatcherPass.apply` 怎样只取可能的锚点，按什么顺序尝试，以及在哪些门前退出？
 
-本篇完整讲解当前 `/work/pytorch/torch/_inductor/pattern_matcher.py` 中 `PatternMatcherPass` 从 `__init__` 到 `apply` 返回的连续范围。规则内部怎样匹配由 Q12 建立；replacement graph 怎样嵌入原图留给下一叶子 Q122。本篇最终会为每个成功匹配调用 `entry.apply(m, graph, node)`，并返回成功应用的次数。
+本篇完整讲解当前 `/work/pytorch/torch/_inductor/pattern_matcher.py` 中 `PatternMatcherPass` 从 `__init__` 到 `apply` 返回的连续范围。规则内部怎样匹配由 Q12 建立；replacement graph 怎样嵌入原图留给下一叶子 Q122。正常返回时，本篇为每个通过全部门禁且 `entry.apply(...)` 正常结束的 entry 返回一次计数；异常边界在后文单独说明。
 
 ## 先建立注册表与锚点
 
@@ -17,9 +17,26 @@ pattern: mul(add(x, y), 2)
 
 注册表把这个键映射到一个 entry 列表。应用 pass 时无须拿每条规则与所有 FX 节点比较；先用 FX graph 的索引找到所有 mul 候选，再由 pattern 从锚点向输入追踪 add、x、y 和常数 2。
 
+entry 不是由 `apply` 创建的。注册时，`PatternEntry.register` 从 pattern 取得外层节点的 `op` 和可接受的 target，然后操作 `PatternMatcherPass.__getitem__` 返回的列表。主例可简化为：
+
+```python
+key = (entry.pattern.op, aten.mul.Tensor)
+matcher[key].append(entry)
+```
+
+`matcher.patterns` 初始是 `defaultdict(list)`：第一次读取尚不存在的 key 时，它创建空列表并保存；`append` 后状态从 `{}` 变为：
+
+```text
+{
+  ("call_function", aten.mul.Tensor): [entry]
+}
+```
+
+同一 key 后注册的 entry 继续追加到该列表末尾；设置 `prepend=True` 的注册入口则插到开头。于是 `apply` 看到的 entry 顺序已经由注册过程确定。
+
 ## 声明范围的完整源码
 
-先给类型标注和主案例具体值：`Optional[str]` 表示 pass_name 可以是字符串或 `None`，本例取 `"tutorial"`；`DefaultDict[(op,target), List[PatternEntry]]` 是注册表，本例只有键 `("call_function", aten.mul.Tensor)`，值为一条规则；`gm` 是含 x、y、add、mul、output 的 `GraphModule`。`apply` 用键找到 mul 节点，再把该节点交给列表中的 entry；成功时 `count` 从 0 变 1，最终返回 1。中间的 `GraphTransformObserver` 只是观察这个 pass 前后哪些节点被增加或删除，并把记录交给图变换日志；它不替 matcher 改图，也不改变 `count`。
+先给类型标注和主案例具体值：`Optional[str]` 表示 pass_name 可以是字符串或 `None`，本例取 `"tutorial"`；`DefaultDict[(op,target), List[PatternEntry]]` 是注册表，本例只有键 `("call_function", aten.mul.Tensor)`，值为一条规则；`gm` 是含 x、y、add、mul、output 的 `GraphModule`。`apply` 用键找到 mul 节点，再把该节点交给列表中的 entry；正常完成时 `count` 从 0 变 1，最终返回 1。中间的 `GraphTransformObserver` 只是观察这个 pass 前后哪些节点被增加或删除，并把记录交给图变换日志；它不替 matcher 改图，也不改变 `count`。
 
 下面保留 `__init__`、`__getitem__`、`apply` 的全部产品语句和原顺序。仅 `# 教学：` 注释由本教程加入；产品注释原样保留。
 
@@ -127,6 +144,22 @@ class PatternMatcherPass:
 
 因此“apply 只接受 GraphModule 或 Graph”要带上条件：非空 matcher 才会走到类型检查。空 matcher 是更早的快速出口。
 
+Graph 输入路径还依赖 `graph.owning_module`：本例的 Graph 来自一个 GraphModule，所以可以反取所属模块。一个没有 owning module 的裸 Graph 没有在这里被显式拒绝，但后面的观察器，以及 call_module 的类提取，都可能需要所属模块；正文不把裸 Graph 推广为已验证入口。
+
+## mutation region 怎样写入节点
+
+`should_compute_mutation_region_ids(graph)` 检查图中第一个节点的 `node.meta` 是否已有 `"mutation_region_id"`。没有时，`compute_mutation_region_ids` 按图顺序从 0 开始扫描：遇到 `copy_` 等 mutation 节点先把编号加一，再把当前编号写入每个节点的 `node.meta["mutation_region_id"]`。
+
+例如：
+
+```text
+add.meta["mutation_region_id"]   = 0
+copy_.meta["mutation_region_id"] = 1
+mul.meta["mutation_region_id"]   = 1
+```
+
+以后匹配到 add 与 mul 时，`get_mutation_region_id(graph, node)` 从这些 meta 读取 0 和 1，集合得到 `{0,1}`。若某个后来新建的节点还没有 id，该 helper 会沿图向前找到最近的已编号位置，再按途中 mutation 补算并写回；因此门禁查询的不只是一个临时局部表。
+
 ## 候选收集：普通 target 与 call_module 不同
 
 对 `call_function/aten.mul.Tensor`，`graph.find_nodes` 可以按 op 和 target 精确取节点。`call_module` 节点的 FX target 却是模块属性名，例如 `"relu"`、`"sigmoid"`；注册表使用的是 `nn.ReLU` 这样的模块类。实现因而先收集所有 `call_module`，循环里再用 `extract_target(node)` 从 owning module 取实例并得到类。
@@ -138,6 +171,33 @@ x → call_module("relu") → call_module("sigmoid") → output
 ```
 
 注册表只有 `(call_module, nn.ReLU)`。逆序扫描先看到 sigmoid，提取出 `nn.Sigmoid`，注册表没有该键，执行 `continue`；随后 ReLU 命中并应用一次。实际事件只有 `['relu']`。
+
+`extract_target(node)` 对普通 `call_function`、`call_method` 等直接返回 `node.target`；只有 `call_module` 才从 `node.graph.owning_module` 取属性实例并返回它的类。因此普通 mul 仍以 `aten.mul.Tensor` 查表，而模块调用以 `nn.ReLU` 查表。
+
+`nodes` 不是一个节点列表，而是“候选集合的列表”。若注册表有 mul 与 neg 两个普通 key，图索引分别交回：
+
+```text
+nodes = [
+  {mul_0, mul_1},
+  {neg_0},
+]
+```
+
+这里花括号只表示 `find_nodes(..., sort=False)` 返回的索引集合，不承诺集合内部已有图顺序。`chain.from_iterable(nodes)` 摊平成 `mul_0, mul_1, neg_0` 这样的节点流；最后一次 `sorted(..., reverse=True)` 使用每个 FX Node 随图中位置维护的排序键，统一得到从图尾到图头的顺序。不同普通 key 精确限制了不同的 `(op,target)`，而所有 call_module key 只追加一份“全部 call_module”集合，所以本构造不会因为多个注册 key 重复加入同一个候选节点。
+
+例如整张图的确定顺序是：
+
+```text
+... → mul_0 → neg_0 → mul_1 → output
+```
+
+即使外层注册表先枚举 mul key，flatten 暂时得到 `[mul_0, mul_1, neg_0]`，最后的全图排序仍把执行顺序定为：
+
+```text
+mul_1 → neg_0 → mul_0
+```
+
+因此最终顺序不由 key 注册先后或索引集合的迭代次序决定。
 
 ## 一次成功匹配经过哪些门
 
@@ -153,6 +213,21 @@ x → call_module("relu") → call_module("sigmoid") → output
 | 6 | `extra_check` | x 的 fake dtype 为 float32，返回 true |
 | 7 | 应用与计数 | replacement entry 执行，`count=1` |
 
+把所有短路放到一条线上：
+
+```text
+候选 node
+  ├─ call_module 类未注册 → 下一个 node
+  ├─ unsupported          → 下一个 node
+  └─ 对当前 key 的每个 entry
+       ├─ node 已 erased   → 结束该 node 的 entry 循环
+       ├─ match 失败       → 下一个 entry
+       ├─ 跨 region        → 下一个 entry
+       ├─ debug 命中       → 只记日志，继续
+       ├─ extra_check 失败 → 下一个 entry
+       └─ local count +1 → entry.apply → 两个 global counter → 下一个 entry
+```
+
 实际 counters 是：
 
 ```text
@@ -160,7 +235,19 @@ pattern_matcher_count = 1
 pattern_matcher_nodes = 2
 ```
 
-第一个数按成功 entry 次数加一；第二个数按该 Match 中节点数增加，本例是 add 与 mul 两个。replacement 产生的新三个节点不计入这次 `pattern_matcher_nodes`。
+第一个数按正常完成的 entry 次数加一；第二个数按该 Match 中节点数增加，本例是 add 与 mul 两个。replacement 产生的新三个节点不计入这次 `pattern_matcher_nodes`。
+
+`entry.apply` 正常返回后，主例的可观察图已经从左边变成右边：
+
+```text
+应用前：x,y → add(old_add) → mul(old_mul, 2) → output
+
+应用后：x → mul_tensor(x,2) ─────┐
+                                  ├→ add_tensor → output
+        y → mul_tensor_1(y,2) ────┘
+```
+
+`output` 原来读取 `old_mul`，现在读取 `add_tensor`；旧 `old_mul` 和已无其他使用者的 `old_add` 被擦除。本篇只把这项前后变化当作 `entry.apply` 的接口结果，用它闭合“匹配成功后图发生了什么”；三个新节点怎样复制进原图、怎样重接 users 并删除旧节点，由下一叶子 Q122 展开。
 
 ## 六种不应用路径分别在哪里退出
 
@@ -198,7 +285,7 @@ int64 的 `(x+y)*2` 结构与 region 均通过；`extra_check` 读取 x 的 fake
 
 调试环境变量分支不是拒绝门：名字相等时记录当前 node、参数、匹配结果和 pattern，之后仍照常检查成功条件。
 
-## 为什么从图尾向前，以及 `_erased` 怎样保护循环
+## 从图尾向前的实际顺序，以及 `_erased` 保护哪一步
 
 两项互不相关的请求：
 
@@ -214,7 +301,7 @@ return neg, neg_1
 neg_1 → neg
 ```
 
-两项均匹配时，返回 `count=2`，两个 counter 也都是 2。逆序使靠后的消费者先被处理，减少一次替换擦除或改写较早结构后，循环又拿旧的靠后候选继续工作的风险；具体 entry 仍必须正确维护图。
+两项均匹配时，返回 `count=2`，两个 counter 也都是 2。这里能够直接确认的是实现采用图尾到图头的顺序；不能仅由这个案例推出任意 replacement 都不会影响尚未扫描的旧候选。`sorted` 已经建立了一份节点句柄列表，entry 仍必须正确维护图。
 
 另一个实验在同一个 neg 锚点下注册两条 entry。第一条把 neg 的所有使用改接到 x，再擦除 neg：
 
@@ -225,6 +312,8 @@ entry 2：循环顶部看到 _erased，break，不做 match
 
 实际事件是 `['first']`，返回 1。若第一条只是结构失败或 `extra_check` 返回 false，它没有擦除节点，第二条仍会获得尝试机会。
 
+这个 `_erased` 判断证明的是“当前锚点被前一条 entry 擦除”时，后续 entry 不再 match 它。若某条 replacement 擦除了另一个尚未轮到的候选，旧列表仍可能保留那个节点句柄；当前函数在 `_erased` 判断前还会执行 `extract_target` 和 unsupported-type 检查，因此本篇不把当前案例扩张成对任意跨候选擦除都安全的保证。
+
 ## 多消费者与重复参数不是 apply 自己决定的
 
 主规则把内部 add 声明为 `_users=MULTIPLE`，所以 add 同时供 mul 与 relu 使用时，规则仍能替换 mul 路径，并保留 relu 所需的原 add。相反，重复参数 pattern `add(same,same)` 只匹配 `x+x`，不匹配 `x+y`。
@@ -233,8 +322,19 @@ entry 2：循环顶部看到 _erased，break，不做 match
 
 ## 改一个条件，推算计数
 
-若图有两个互不相干的 float32 `(a+b)*2` 与 `(c+d)*2`：逆序先处理后一个，再处理前一个。两次都成功时 local `count=2`，`pattern_matcher_count` 增加 2，`pattern_matcher_nodes` 增加 4。
+若图有两个互不相干的 float32 `(a+b)*2` 与 `(c+d)*2`：逆序先处理后一个，再处理前一个。两次都成功时三个数依次为 local `count=2`、全局 `pattern_matcher_count=2`、全局 `pattern_matcher_nodes=4`；最后一项来自两个 Match 各含 add、mul 两个旧节点。
 
 若后一个是 int64、前一个是 float32，后一个通过结构与 region 后被 `extra_check` 拒绝；前一个成功。因此三个最终增量分别是 1、1、2。这个结果来自“每个成功 entry 加一次”和“只累加成功 Match 的节点数”，而不是来自候选节点总数。
+
+最后看异常边界。源码顺序是：
+
+```text
+count += 1
+entry.apply(...)
+global pattern_matcher_count += 1
+global pattern_matcher_nodes += len(m.nodes)
+```
+
+若 `entry.apply` 抛异常，本函数直接异常退出，不会正常返回 local count；那次 local 加一已经发生，但两个 global counter 尚未增加。entry 在抛出前是否已部分改图取决于 entry 实现，本篇不能保证回滚。因此“返回成功应用次数”只描述函数正常返回时的结果，不表示这四行具有事务原子性。
 
 至此，声明范围内的快速出口、输入类型、region 初始化、两类候选收集、逆序循环、所有拒绝门、擦除保护、调试分支、entry 调用和 counters 都已落到具体状态。下一叶子将继续进入 replacement graph 的真正嵌入过程。

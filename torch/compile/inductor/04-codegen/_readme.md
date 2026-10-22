@@ -1,5 +1,45 @@
 # Codegen 篇作者记录
 
+## 第六轮：无上下文读者结构回修
+
+- 冷启动报告：`/work/learning/1021/56sol/inductor-fresh-reader-review/29_CODEGEN_PARENT_COLD_REVIEW_1.md`，评级 B。读者能拼出四项职责，但原正文的 3 元素 `relu(x+y)*2` 只连续走到 Q43；Q44 依赖其他实验和通用流程人工接回。reduction 三次 replay、19 元素 tail/mask、memory planner 反例和 FX cache 边界提前占据父篇，形成越层与篇幅失衡。
+- 本轮重写父篇而非局部补句。唯一主案例现在从 op0 LoopBody、handler 局部值、C++ kernel、wrapper source 连续走到 PyCodeCache 内容 key/path、loaded `module.call` 和运行结果 `[0,10,4]`。
+- 独立实验 `experiments/12_codegen_virtualized_ops.py` 新增 `GraphLowering.compile_to_module` 观察，实际记录本例的 `cache_key`、`cache_path`、`module.__file__` 与 callable 名 `call`；脚本重新运行通过，产物同步到 `experiments/artifacts/codegen_virtualized_ops.txt`。
+- 父篇明确 Q41/Q42 是 replay 期间逐项协作，不是假想的两个完全分离批处理阶段；五种对象分别为 LoopBody、handler 局部值、kernel 定义、wrapper source、loaded callable。
+- 新增三条分类轴：pointwise/reduction 是计算形态，CPU/Triton 是目标 backend，普通 LoopBody/template/extern 是生成路径，避免把它们写成同层互斥选项。
+- reduction、混合 extern/reuse 和 FX Graph Cache 降为主线后的职责变化；移除三次 replay、CPU tail 具体 load 数、Triton pid 表、两张重复 storage 表、counter、cond/AOT/零计算等子篇内部展开和实验报告口吻。
+- 待办：启用一名不继承上下文的新读者只读重写正文，验证同案 Q41→Q44 是否自然闭合，并检查删减后是否遗漏父篇必须交代的主要路径。
+
+## 第七轮：kernel 绑定进入 wrapper 模块
+
+- 第二份冷启动报告：`/work/learning/1021/56sol/inductor-fresh-reader-review/30_CODEGEN_PARENT_COLD_REVIEW_2.md`，评级 B。主案例、分类轴和扩展案例均可推演；唯一主要断点是 C++ kernel 源码如何成为 `call(args)` 中的 `cpp_fused_*` Python 可调用名。
+- 对照本例实际生成源码补入模块顶层最小交接：`AsyncCompile()`、`async_compile.cpp_pybinding(参数类型, C++ 源码)`、赋值给 `cpp_fused_add_mul_relu_0`、`async_compile.wait(globals())`。模块加载时等待编译并更新全局命名空间，随后 `call` 才能调用该名字。
+- 对象表从五项改为六项：增加 loaded module，并把 kernel 定义改准为 kernel 源码；wrapper source 明确包含 kernel 编译绑定和 `def call`。
+- source line map 在首次出现时定义；删除“独立实验记录到”的作者核对句，正文直接讲对象过程。FX cache 候选条件与 wrapper 运行时 shape/stride 检查分名；template renderer 明确属于生成路径轴，不是新的设备 backend 轴。
+- 待办：第三名无上下文读者复读完整 kernel source→binding→module→callable 交接，并继续寻找其他局部断点。
+
+## 第八轮：Q42/Q43 接口与定义顺序
+
+- 第三份冷启动报告：`/work/learning/1021/56sol/inductor-fresh-reader-review/31_CODEGEN_PARENT_COLD_REVIEW_3.md`，评级 B。所有主链与变化均可推演；剩余主要问题是正文一处称 Q42“登记进完整模块”，与 Q43 生成模块源码的职责冲突。
+- 统一接口：Q42 只交出 kernel 源码、参数类型和调用要求；Q43 写模块顶层 `cpp_pybinding`、`wait(globals())` 和 `def call`，形成完整源码。
+- `boxed` 定义前移到总图之前，首次出现即说明接收单个参数列表；对象计数统一为六种；`last_usage` 首次出现直接解释成“某值在哪个节点最后一次被读”，并说明 backend/wrapper 据此形成分配和复用安排。
+- kernel 代码块改称“省略函数签名后的计算体”，不再让参数类型与片段展示产生矛盾。
+- 待办：第四名无上下文读者验收职责边界和定义顺序。
+
+## 第九轮：last usage 到 wrapper 复用代码
+
+- 第四份冷启动报告：`/work/learning/1021/56sol/inductor-fresh-reader-review/32_CODEGEN_PARENT_COLD_REVIEW_4.md`，评级 B。主链与分类均可推演；唯一主要缺口是 last usage 已定义，却没有代入一次“最后使用→允许覆盖→wrapper 代码变化”。
+- 使用现有实测混合图而不虚构图输入复用：第一 mm 分配 buf0/S0；relu 是旧 buf0 值的最后消费者并允许原地；wrapper 因此写 `buf1=buf0; del buf0`，不为 buf1 新分配，再用 in-place relu kernel 更新 S0。
+- 正文同时给两个边界：若还需返回 relu 前的 first，旧值在 relu 后仍可观察，必须另分配 relu 输出；若返回 relu 后的 activated，原地 relu 仍可成立，但 S0 的生存期延长到函数出口。
+- 待办：第五名无上下文读者验收 last usage→storage 接管→逻辑名结束以及两个返回变体。
+
+## 第十轮：无上下文冷读通过
+
+- 第五份冷启动报告：`/work/learning/1021/56sol/inductor-fresh-reader-review/33_CODEGEN_PARENT_COLD_REVIEW_5.md`，评级 A。
+- 该读者只读当前父篇，能够独立走通同案 Q41→Q44、kernel binding、boxed callable、三条分类轴、reduction/extern/FX cache，以及 last usage→S0 接管→两类额外返回的复用差异；未发现新的实质断点。
+- AI 冷读 A 只说明正文对设定背景自包含，不代替用户实际阅读反馈。用户后续指出的新断点仍优先回修。
+- 当前 Q40 父篇冷读整改完成；按顺序进入 Q41 `04-codegen/01-kernel-ops/README.md`。
+
 ## 所在层、输入与出口
 
 - 队列项：Q40，第 1 层，父项 Q00；第五轮已按技能重新复核，保留“本层完成”。本状态只覆盖四项直接职责的协作，不替代 Q41–Q44 的内部回修。

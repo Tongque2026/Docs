@@ -1,5 +1,14 @@
 # Lowering 篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/06_LOWERING_REVIEW.md`，64/64 个语义单元。
+- 正文清除 Q21–Q24 作者队列号，统一使用读图、计算与索引、存储安排、特殊调用四个职责名。
+- target 到 lowering 处理器的接口并回读图职责；包装、广播和类型提升细节下放解释器子篇。
+- 计算节只保留 ranges、reduction_ranges 和组合规则；TensorBox/StorageBox/ComputedBuffer 只在存储节解释。
+- 特殊调用父层只交 mm、fallback、cond 的 operation 和接口；后端候选目录与失败策略下放子篇。
+- mutation 父层止于旧读保护结果和 Scheduler 接口，reader 遍历与 realize 机制下放存储子篇。
+
 ## 所在层、输入与出口
 
 - 队列项：Q20，第 1 层，父项 Q00；第五轮已按技能重新复核，保留“本层完成”。本状态只覆盖四项直接职责的协作，不替代 Q21–Q24 的内部回修。

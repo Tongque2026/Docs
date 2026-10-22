@@ -25,7 +25,7 @@ FX 是 PyTorch 保存这类计算关系的一种表示。每个 FX node 记录�
 
 现在才进入四个组件。先不记内部类名，只看同一份计算关系每一步多了什么。
 
-对上面的三个算术操作，FX 图只记录“先加、再 relu、最后乘 2”。Lowering 会把它补成一条可以代入位置的规则：
+对上面的三个算术操作，本例的图优化没有替换节点，交给 Lowering 的 FX 图仍记录“先加、再 relu、最后乘 2”。Lowering 会把它补成一条可以代入位置的规则：
 
 ```text
 给定输出位置 i
@@ -47,7 +47,7 @@ Scheduler 再把这项工作包装成一条待生成记录，可以先把它想�
 必须排在谁后面：没有其他计算
 ```
 
-这样的记录后文称为 scheduler node。Scheduler 会比较多条记录之间谁读谁写、谁必须先执行，以及能否放进同一个循环。假设三项算术原本各自生成一次完整数组，就需要三个循环；把它们放进同一个循环后，每个位置依次完成 add、relu、mul，只写最终结果。后文把这种“多项工作合成一个生成单元”称为 fusion（融合）。本例的实际编译会直接保留可组合的位置规则，最终生成下面这一类循环：
+这样的记录后文称为 scheduler node。Scheduler 会比较多条记录之间谁读谁写、谁必须先执行，以及能否放进同一个循环。后文把这种“多项工作合成一个生成单元”称为 fusion（融合）。本例从 Lowering 得到的是一条已经组合好的位置规则，Scheduler 将它作为一个生成单元，最终产生下面这一类循环：
 
 ```cpp
 for (int64_t i = 0; i < 3; i++) {
@@ -97,7 +97,9 @@ torch.compile 前半段交来一张 FX GraphModule
 | Scheduler 前 | 各项待执行工作已经形成，但还没有比较它们的读写关系 | 谁必须先执行；哪些工作放在同一个生成单元；每份数据最后由谁读取 |
 | Codegen 前 | 工作已经排好顺序和分组，但还不是机器能执行的程序 | CPU/CUDA 等目标代码，以及检查输入、准备内存、调用和返回的外围代码 |
 
-图优化本身还会在编译流程的三个位置运行。AOTAutograd 之前称为 pre-grad；训练时前向和反向仍在一张图里时称为 joint；拆成独立的前向图或反向图以后、进入 Lowering 前称为 post-grad。FX Graph Cache 保存的正是某张单图从 post-grad 往后的编译结果；命中后可以恢复已有结果，不再重做这张图的 post-grad、Lowering、Scheduler 和 Codegen。
+图优化本身还会在编译流程的三个位置运行。AOTAutograd 之前称为 pre-grad；训练时前向和反向仍在一张图里时称为 joint；拆成独立的前向图或反向图以后、进入 Lowering 前称为 post-grad。
+
+FX Graph Cache 位于单图编译主干之外。它保存某张单图从 post-grad 往后的编译结果；命中后可以恢复已有结果，不再重做这张图的 post-grad、Lowering、Scheduler 和 Codegen。
 
 如果某一步已经不缺对应信息，它可以不产生新工作。例如纯转置可能只保留共享视图，没有独立转置 kernel。
 
@@ -108,16 +110,19 @@ torch.compile 前半段交来一张 FX GraphModule
 ```text
 compile_fx
   ├─ pre_grad_passes
-  ├─ AOTAutograd（把训练拆成前向、反向图；把 add_ 这类原地计算改成普通 add 加显式 copy_ 写回）
-  └─ _compile_fx_inner
-       └─ fx_codegen_and_compile
-            ├─ joint_graph_passes / post_grad_passes
-            ├─ GraphLowering(...).run(...)
-            └─ GraphLowering.compile_to_fn()
+  └─ AOTAutograd（functionalization；训练时形成 joint graph）
+       ├─ joint_graph_passes
+       ├─ partition（训练时拆出前向图、反向图）
+       └─ 每张单图进入 _compile_fx_inner
+            ├─ FX Graph Cache lookup
+            │    └─ hit：恢复已有 callable
+            └─ miss / bypass：fx_codegen_and_compile
+                 ├─ post_grad_passes
+                 ├─ GraphLowering(...).run(...)
                  └─ GraphLowering.codegen()
                       ├─ Scheduler(self.operations)
                       ├─ Scheduler.codegen()
-                      └─ wrapper_code.generate(...)
+                      └─ wrapper_code.generate(...) → 编译/加载 callable
 ```
 
 `compile_fx` 并不是只收一张最初的 Dynamo 图然后直线走到底。训练时 AOTAutograd 会准备前向与反向图；动态形状也会增加符号尺寸和输入条件。普通 `torch.compile` 在当前 Python 进程中交回可调用函数；AOT 编译则预先生成可保存、可独立部署的源码、输入输出信息和加载入口。本篇先抓住每一张交给 `_compile_fx_inner` 的单图共有的主干。
@@ -136,7 +141,7 @@ relu(...) = [ 0, 5, 2]
 
 ### 图优化交出什么
 
-实验在 `post_grad_custom_post_pass` 保存了 post-grad 图：
+实验在 `post_grad_custom_post_pass` 保存了 post-grad 中间图：
 
 ```text
 arg0_1, arg1_1
@@ -146,7 +151,7 @@ arg0_1, arg1_1
                   └─ return
 ```
 
-三项算术仍是三个 FX 节点。这说明本例的“最后融合成一个循环”不是 post-grad FX 优化已经做完的事。图优化在这一层整理或替换节点、删除无效节点，并保证节点先后和引用仍然合法；交出的仍是 FX 图。
+这张中间图中的三项算术仍是三个 FX 节点；hook 之后还会继续运行已启用的 post-grad 规则和阶段收尾。无论节点是否继续改变，本阶段交给 Lowering 的对象仍是 FX GraphModule；“最后形成一个循环”由后面的 Scheduler 和 Codegen 完成。
 
 ### Lowering 交出什么
 
@@ -166,9 +171,7 @@ def value_at(i):
 
 ### Scheduler 交出什么
 
-`GraphLowering.codegen()` 用 `self.operations` 创建 `Scheduler`。例如 op0 写 buf0、op1 读 buf0 时，即使输入列表反过来，Scheduler 也会把 op0 排在 op1 前。若 op1 和 op2 都读 buf0，则最终顺序中较后的那一个是最后读取者，此后 buf0 才可释放或复用。Scheduler 还会删除结果无人使用且没有写入等副作用的节点，并尝试融合兼容的工作。
-
-本例最终只有一个已融合的 CPU 调度工作项。注意，Scheduler 并不是把数值算出来；它决定哪些计算应当一起交给哪个设备后端，以及它们的先后与存活关系。
+`GraphLowering.codegen()` 用 `self.operations` 创建 `Scheduler`。本例只有一项产生最终输出的工作，因此没有跨工作项的先后冲突；Scheduler 把它交成一个 CPU 调度工作项，并记录输出何时完成使用。Scheduler 不计算数值，它交出的是后端要生成的工作及其生存期安排。
 
 ### Codegen 交出什么
 
@@ -185,7 +188,7 @@ for (int64_t x0 = 0; x0 < 3; x0++) {
 }
 ```
 
-wrapper 则检查输入 shape/stride，分配 `buf0`，调用 `cpp_fused_add_mul_relu_0`，释放不再需要的输入引用，再返回 `(buf0,)`。所以 Codegen 不只指 kernel 文本，也包括把 kernel 变成可调用程序所需的外围代码和加载过程。
+wrapper 检查输入 shape/stride，分配 `buf0`，调用 `cpp_fused_add_mul_relu_0`，再返回 `(buf0,)`。生成源码经过编译和加载后形成接收 boxed 参数列表的 callable；调用它处理本例的 `[x,y]`，得到 `(buf0,)`，其中 `buf0=[0,10,4]`。所以 Codegen 不只交出 kernel 文本，还交出可以实际调用的编译结果。
 
 ## 四个组件分别回答什么问题
 
@@ -200,7 +203,7 @@ wrapper 则检查输入 shape/stride，分配 `buf0`，调用 `cpp_fused_add_mul
 
 ## 其他请求也完整经过四阶段，但交接内容不同
 
-逐元素链只能说明一条理想路径。下面用三个对照案例走到本层出口，先建立全貌；每个组件的内部算法留给对应子篇。
+逐元素链只能说明一条理想路径。下面用几组对照案例走到本层出口，先建立全貌；每个组件的内部算法留给对应子篇。
 
 ### 按行求和：Lowering 必须增加组内位置
 
@@ -240,13 +243,13 @@ FX：mm → relu → output
   └─ Codegen wrapper：分配 mm 输出 → 调用 mm → 调用 relu kernel → 返回
 ```
 
-若实现选择或设备不同，mm 也可能进入 template：其中保存 mm 的输入、输出 layout、分块参数候选和待填的 kernel 代码；算法选择确定一组参数后，后端填入模板并生成 kernel。共同点是 Lowering 保留“调用什么、参数和输出是谁”，Scheduler 按依赖排序，Codegen 在同一 wrapper 中连接它与生成 kernel。
+若实现选择或设备不同，mm 也可能交出 template 候选，之后由相应后端生成 kernel。共同点是 Lowering 保留“调用什么、参数和输出是谁”，Scheduler 按依赖排序，Codegen 在同一 wrapper 中连接已有调用或生成的 kernel。
 
 ### 输入覆盖：还要保护旧值和外部可见身份
 
 请求 `old=x+1; x.copy_(y); return old,x`，取 `x=[0,1,2]`、`y=[9,9,9]`。正确出口是 `old=[1,2,3]`，调用者的原 x storage 变成 `[9,9,9]`。
 
-Lowering 在建立覆盖写入前让仍读取旧 x 的 `old` 物化；Scheduler 由读写和 mutation 依赖把旧读排在覆盖前；Codegen 生成先读旧 x、再写原 x storage 的程序。若颠倒顺序，old 会错误变成 `[10,10,10]`。这条路径说明编译不仅保存数值公式，还必须保存存储身份和数据版本。
+图优化交出函数式计算 `old=x+1` 和显式写回 `copy_(x,y)`，两者仍引用同一个输入 x。Lowering 在建立覆盖写入前让仍读取旧 x 的 `old` 物化；Scheduler 由读写和 mutation 依赖把旧读排在覆盖前；Codegen 生成先读旧 x、再写原 x storage 的程序。若颠倒顺序，old 会错误变成 `[10,10,10]`。这条路径说明编译不仅保存数值公式，还必须保存存储身份和数据版本。
 
 ### 运行时条件：两张分支图共享一个父图出口
 
@@ -301,22 +304,20 @@ projected[0,0] = rows[0] + rows[2] = 49280
 projected[0,1] = rows[1] + rows[2] = 49408
 ```
 
-独立实验 [`experiments/17_root_composite.py`](experiments/17_root_composite.py) 采集到的 Lowering 结果如下。箭头左边是 FX 操作；右边先说明它留下什么，再在括号中给出源码类名：
+独立实验 [`experiments/17_root_composite.py`](experiments/17_root_composite.py) 采集到的四阶段交接如下：
 
 ```text
-permute      → 只换 size/stride、继续读原输入（ReinterpretView）；operations 仍为空
-add / relu   → 可继续组合的位置计算规则（Pointwise）；operations 仍为空
-sum          → 需要保存的有名结果 buf0（ComputedBuffer）；operations=[buf0]
-unsqueeze    → 对 buf0 的 view；不增加 operation
-mm           → 已有矩阵乘调用的输出 buf1（ExternKernelOut）；operations=[buf0, buf1]
-output       → 返回 buf0 和 buf1
+图优化    → 交出含 permute、add、relu、sum、unsqueeze、mm 和两个输出引用的 FX 图
+Lowering  → permute 只改变读取位置；add/relu 组合进求和；sum 产生 buf0；mm 读取 buf0 并产生 buf1
+Scheduler → 安排先产生 buf0，再调用读取 buf0 和 weight 的 mm
+Codegen   → 生成完成转置读取、add、relu、sum 的 CPU kernel，再由 wrapper 调用 mm 并返回 buf0、buf1
 ```
 
 为什么 sum 在这里必须成为 `buf0`？它一方面是最终第一个输出，另一方面又是 mm 的输入。mm 不能接收一条尚未执行的 Python 位置规则；它需要可传给已有实现的真实张量。于是 Lowering 在这个交接处给三项和稳定的存储身份。
 
 接下来 Scheduler 面对的不是原来的六个 FX 算子，而是两个需要执行的 IR operation：先产生 `buf0`，再由 mm 读取它和 weight、写 `buf1`。视图、加法和 relu 已经包含在产生 `buf0` 的索引与计算中。Codegen 因而生成一个完成转置读取、加一、relu 和规约的 CPU kernel，再由 wrapper 调用 mm，最后同时返回 `buf0`、`buf1`。实验数值正是 `rows=[24512,24640,24768]`、`projected=[[49280,49408]]`。
 
-这个例子展示的不是“算子越多越复杂”，而是三项要求相互作用：非连续 view 改变读取位置，规约把 128 项合成一项，已有调用和多输出共同要求规约结果物化。若删掉 mm，`rows` 仍因作为输出而需要独立保存；若不再返回 rows，mm 仍要求在调用前拿到一份可传入的 rows 数据。两项消费者需求任留其一，本例的这个物化理由仍成立。
+三项要求在这里相互作用：非连续 view 改变读取位置，规约把 128 项合成一项，已有调用和多输出共同要求规约结果物化。若删掉 mm，`rows` 仍因作为输出而需要独立保存；若不再返回 rows，mm 仍要求在调用前拿到一份可传入的 rows 数据。两项消费者需求任留其一，本例的这个物化理由仍成立。
 
 ## 先用本层规则判断三个变化
 
@@ -337,4 +338,4 @@ output       → 返回 buf0 和 buf1
 3. [Scheduler：怎样从读写依赖得到执行与融合计划](03-scheduler/README.md)
 4. [Codegen：怎样生成 kernel、wrapper 并加载](04-codegen/README.md)
 
-读完这四篇，你应能拿到一张简单 FX 图，指出每个节点引用谁、说明四阶段增加或改变了什么，并判断“一个 kernel”究竟在哪一层形成。更深一层的对象、分支和实现按本目录 [`_readme.md`](_readme.md) 中的“全系列广度优先讲解队列”展开；那份文件是教程编写与续写记录，不是学习正文。
+读完这四篇，你应能拿到一张简单 FX 图，指出每个节点引用谁、说明四阶段增加或改变了什么，并判断“一个 kernel”究竟在哪一层形成。

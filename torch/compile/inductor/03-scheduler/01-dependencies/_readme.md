@@ -1,5 +1,14 @@
 # Scheduler 依赖篇作者记录
 
+## 第六轮：独立初学者逐篇审阅整改
+
+- 审阅只覆盖本篇 `README.md` 的 66/66 个语义单元；报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/12_DEPENDENCIES_REVIEW.md`。
+- 新增纯 MemoryDep 链 `op0: x+1 → op1: buf0*2`，完整展示 writes/reads、available 裁剪、unmet、users、`name_to_buf[buf0].defining_op` 和最终 op0→op1。
+- mutation 改称“两类依赖记录”：本例 `StarDep(arg0_1)` 因图输入已 available 而被 prune，只有 `WeakDep(buf0)` 形成 op0→op1 节点边。
+- 正文删除 Q 编号、实验取证和反向辩护；后继乘法案例直接陈述 Scheduler 实际接到的“读 y”关系。
+- 待办：同一独立读者只复查本篇，通过后才进入下一篇。
+- 首次复查覆盖 73/73，机制问题均已关闭；又把两处“本次实际采集/本机 CPU 实际得到”改成直接描述案例对象，等待定点复查。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q31，第 2 层，父项 Q30；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q311 叶子的源码回修。

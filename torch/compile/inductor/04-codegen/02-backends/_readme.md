@@ -1,6 +1,47 @@
 # Q42 作者记录：CPU C++ 与 GPU/Triton 后端
 
-> 第五轮状态：本层完成。以下结论按“范围、过程、事实证据、理解迁移”重新复核；没有把 CPU 实跑外推成 GPU 实测。
+> 当前状态：收到逐篇隔离冷读要求后重新打开。本轮第一位冷读者评为 C，已完成结构重写，等待新读者复验。
+
+## 第六轮：隔离冷读后的结构重写
+
+- 冷读边界：读者只看到本篇 README，认知起点为会基础 torch/torch.compile、刚理解 LoopBody 与 handler，不读取作者记录、源码或旧报告。
+- 报告：`inductor-fresh-reader-review/39_BACKENDS_COLD_REVIEW_1.md`，评级 C。
+- 已通过部分：N=19 的 CPU 16+3 和 Triton 3×8 能闭卷复算，block/lane/mask/thread 的边界基本清楚。
+- 实质断点：2×128 规约没有 accumulator、分块、横向归并和写回状态；persistent、MultiKernel、Disable/EnableReduction 只是名词；kernel 定义与调用缺形实参、grid、device、stream 的完整交接；模板/extern 只有边界声明；正文没有作者记录声称的迁移题。
+- 重写内容：用“逻辑域由谁覆盖”统一全文；保留 CPU N=19 实际循环并解释尾向量长度；把 Triton grid=`ceil_div(N,XBLOCK)` 接到 program 内索引；逐项展开两端 ops；用 2×128 走完 CPU 八次向量累计和 Triton `XBLOCK=1/RBLOCK=64` 两块累计；把 persistent 等放在基础规约完成之后；补 CPU/Triton 定义与 wrapper 调用合同；新增 N=21 与 2×130 迁移题。
+- 证据边界：CPU N=19 仍是当前机器实测；Triton 只使用当前源码公式和当前测试形态作具体推演，不声称 GPU 实跑、实际选中 XBLOCK/RBLOCK 或性能。
+- 验收：等待新的隔离冷读，不能沿用作者复读结论。
+
+### 第二次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/40_BACKENDS_COLD_REVIEW_2.md`，评级 B。
+- 已通过：pointwise 的 CPU 16+3、Triton 3×8、ops 对照和两道尺寸迁移均可由正文推出。
+- 剩余断点：2×128 没声明输入值；Triton 把真实的 64-lane 累计对象压成标量 `acc`，缺跨块逐 lane 更新与最终横向归并；stream 表述可能暗示 program 串行；template/extern 二分过硬；MultiKernel 与规约区域标记仍偏抽象。
+- 修改：声明 `arange(256)` 输入；显式推演 `acc_lane[0..63]` 在两个/三个 r block 中的更新和最终 `sum`；说明 MultiKernel 首次基准测试并缓存选择；用“规约→Disable→后缀 pointwise→Enable”展示生成状态；修正 device/stream/program 的关系；将 template/extern 改成非完备的阅读导航。
+- 当前状态：等待第三位隔离冷读者复验。
+
+### 第三次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/41_BACKENDS_COLD_REVIEW_3.md`，评级 B。
+- 主线状态：N=19、ops 对照、2×128/2×130 规约、wrapper launch、template/extern 导航与迁移题均已可推演。
+- 必改断点：`torch.arange(256)` 默认类型与后文 float32 SIMD/`float*` 合同不一致；规约区域标记被画得像每次规约必然出现的固定序列。
+- 修改：输入显式指定 float32；说明 Disable/Enable 仅在 schedule 需要临时关闭规约循环生成外部节点时成对出现；补 persistent 执行稿边界、资源约束与 MultiKernel 选择缓存粒度；将 device/stream 明确归入 wrapper launch 上下文。
+- 当前状态：等待第四位隔离冷读者复验。
+
+### 第四次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/42_BACKENDS_COLD_REVIEW_4.md`，评级 B。
+- 首要断点：用“状态保留方式”区分 persistent 与 non-persistent，和前文 non-persistent 累计器跨块保留直接冲突。
+- 其他缺口：float32 pointer 合同缺 layout/index/guard 前提；MultiKernel 复用范围过宽；64-lane 累计器需限定为 XBLOCK=1；codegen 标记需明确不是设备指令；2×130 题只是正文复述。
+- 修改：用“单个 reduction block 覆盖完整 r 域 vs 多 roffset 扫描”重定义两种规约；补 dtype、连续 stride、索引式与 guard 的指针合同；限定 MultiKernel 为同一缓存条目/专门化条件；补 XBLOCK>1 的二维累计器；增加 3×130、XBLOCK=2/RBLOCK=64 的双轴尾部题和 stride=2 地址题。
+- 当前状态：等待第五位隔离冷读者复验。
+
+### 第五次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/43_BACKENDS_COLD_REVIEW_5.md`，评级 A。
+- 结论：pointwise、两种规约形态、MultiKernel 边界、codegen 状态标记、wrapper 合同和迁移题均可只凭正文推演，未发现错误教学模型。
+- 轻微补强：为 3×130 写出 `xmask[:,None] & rmask[None,:]` 的二维组合、地址式和有效元素计数；说明 stride=2 时逻辑切分问题仍在，但连续 `loadu` 指令形态未必保留。
+- 当前状态：Q42 通过隔离冷读验收。A 只表示指定冷读角色能够从正文建立逻辑，不代替真实用户反馈；若用户仍有断点，继续以实际断点重开。
 
 ## 本篇位置与教学目标
 

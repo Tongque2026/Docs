@@ -1,5 +1,32 @@
 # Q211 作者记录：GraphLowering 输入登记
 
+## 2026-10-22 隔离冷读回修
+
+- 第一位无历史读者只读正文，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/74_NODE_ENTRY_COLD_REVIEW_1.md`，评级 B。
+- 正文主分流成立，但包装层、ShapeEnv、tensor-only 限定名与 original 表、unused GPU/alignment 组合状态仍需读者自行补全。
+- 本轮在完整源码前建立四层输入对象和四项运行状态；修正 unknown source 编号条件、六种输入标题、标量命名、设备集合和 alignment 边界。
+- 下一轮由新的无历史读者只读当前 README 验收。
+
+### 第二次冷读
+
+- 第二位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/75_NODE_ENTRY_COLD_REVIEW_2.md`，评级 B。
+- 输入分类改为五条正常路径和一个失败出口；device/users/alignment 组合改用完整状态表。
+- 明确 alignment helper 与 Q213 output consumer 只用于解释 placeholder 保存状态的用途，不属于五个完整方法的声明范围。
+- unknown object 的部分状态限定为 tensor assert 案例；静态分支条件与 weights 注释分开。
+
+### 第三次冷读
+
+- 第三位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/76_NODE_ENTRY_COLD_REVIEW_3.md`，评级 B。
+- 修正设备累计状态和首次完整 device 映射；连续展示 CPU x、CPU y、cuda:1 z。
+- 增加 Tensor 三种 size/stride 来源、子图独立输入表与正常失败状态边界。
+
+### 第四次冷读：通过
+
+- 第四位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/77_NODE_ENTRY_COLD_REVIEW_4.md`，评级 A。
+- 读者准确复述五方法、全部输入路径、Tensor 三分支、表示包装、名字差异与设备/alignment 组合。
+- 正文将“四层”修正为三层表示包装加 FixedLayout 字段，并补当前默认 offset=0。
+- Q211 隔离冷读验收完成；下一篇为 Q212 GraphLowering 算子与常量分派源码。
+
 > 第五轮状态：叶子完成。重新按五个完整方法、全部输入类别、部分状态失败、layout/device/alignment 与迁移题验收。
 
 ## 读者、层次与目标

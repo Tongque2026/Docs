@@ -202,6 +202,23 @@ class ReplacementPatternEntry(PatternEntry):
         )
 ```
 
+## Interpreter 怎样把模板节点变成原图节点
+
+`Replacer(...).run(*args)` 按 replacement 图的节点顺序执行。`env` 是“模板节点 → 本次解释结果”的表；父类 `Interpreter` 在每个 `run_node` 返回后把结果写入 env。处理一个普通调用前，`fetch_args_kwargs_from_env` 递归查看该模板节点的参数：若参数是模板 Node，就换成 env 中已经保存的结果。
+
+主例的逐步状态是：
+
+| 当前模板节点 | 本步读取 | `run_node` 返回 | 本步后的关键 env |
+| --- | --- | --- | --- |
+| placeholder `rx` | `args[0]=x_old` | 原图节点 `x_old` | `rx→x_old` |
+| placeholder `ry` | `args[1]=y_old` | 原图节点 `y_old` | `rx→x_old, ry→y_old` |
+| `r_mul_x(rx,2)` | fetch 把 `rx` 换成 `x_old` | 原图新节点 `mul_x(x_old,2)` | `r_mul_x→mul_x` |
+| `r_mul_y(ry,2)` | `ry→y_old` | 原图新节点 `mul_y(y_old,2)` | `r_mul_y→mul_y` |
+| `r_add(r_mul_x,r_mul_y)` | 两个模板输入换成 `mul_x,mul_y` | 原图新节点 `add_new(mul_x,mul_y)` | `r_add→add_new` |
+| replacement output `r_add` | 从 env 取 `add_new` | `add_new` | `run()` 最终返回 `add_new` |
+
+因此模板图只提供“应创建什么关系”；env 把模板里的引用逐步换成原图现有节点或刚创建的新节点。placeholder 不复制，普通 `call_function` 也不执行 tensor 数值计算。
+
 ## 第一条路径：一个旧输出换成一个新输出
 
 对 `(x+y)*2 → x*2+y*2`：
@@ -214,6 +231,27 @@ class ReplacementPatternEntry(PatternEntry):
 | 解释 output | 返回 `add_new`，单 Node 被包成列表 | 准备与旧输出逐位对应 |
 | `replace(mul_old,add_new)` | output user 改读 `add_new` | 擦除 `mul_old` |
 | `match.erase_nodes()` | 检查 match 中旧 add | 无其他用户则删，有 relu 用户则保留 |
+
+users 的状态也可以逐步写出：
+
+```text
+开始： add_old.users = {mul_old}
+      mul_old.users = {output}
+
+三个新节点建立后：旧 users 不变；add_new.users 仍为空
+
+old_mul.replace_all_uses_with(add_new) 后：
+      mul_old.users = {}
+      add_new.users = {output}
+      output 原参数 mul_old → add_new
+
+erase mul_old 后：
+      add_old.users = {}
+
+match.erase_nodes()：
+      若 add_old 没有 match 外的 user，就擦除它；
+      若 relu 仍读取 add_old，就保留 add_old。
+```
 
 实际 float32 输入 `[1,2,3]` 与 `[10,20,30]` 得到 `[22,44,66]`。数值相等只验证 replacement 语义；节点迁移机制由前后图和 users 变化证明。
 
@@ -274,6 +312,17 @@ replacement 直接返回 `[x+1,x+2]`。此时 `len(output_nodes)=1`、`len(repla
 
 若 packed 还有一个直接 user，例如 output 同时返回整个 packed，`maybe_getitem(output)` 返回 None，抛 `AssertionError("can't handle")`。这里没有事务或回滚：排在该 user 之前的 getitem 可能已经被替换。因此失败只说明函数异常退出，不能假设原图保持原样。
 
+本文失败实验按创建顺序给 packed 登记三个 users：`getitem0`、`getitem1`、最后是 `output`。`old_uses=list(...)` 保持这一次快照顺序，所以异常发生前已经做了：
+
+```text
+1. 新建 new0=x+1、new1=x+2
+2. output 的第一项从 getitem0 改为 new0；擦除 getitem0
+3. output 的第二项从 getitem1 改为 new1；擦除 getitem1
+4. 遇到 output 仍直接读取 packed，抛 "can't handle"
+```
+
+异常后的残留图含 `new0`、`new1` 和仍未擦除的 `packed`；output 读取 `(new0,new1,packed)`；两个 getitem 已消失；函数没有走到 `graph.erase_node(packed)` 或末尾 `match.erase_nodes()`。换一种 user 插入顺序，失败前完成的子集也可能不同，这正是非事务修改的含义。
+
 ## `None` 输出的两条路径
 
 Match 的 output pattern 可以包含 None。源码明确区分：
@@ -299,6 +348,14 @@ Match 的 output pattern 可以包含 None。源码明确区分：
 
 若 replacement 已有 val，`replace` 不会把旧输出的所有其他 meta 整体覆盖过去；只有下面两种重算标签另走显式传播路径。
 
+例如旧输出 meta 为 `{val: old_val, old_only: 17, recompute: r1}`，而 traced replacement 新输出已经有 `{val: new_val, tensor_meta: tm}`，最终关键状态是：
+
+```text
+val=new_val、tensor_meta=tm     来自 replacement trace
+old_only 不存在                不做 old.meta 整体覆盖
+recompute=r1                   由下面的显式标签传播写入
+```
+
 ## recompute 与 ac_graph_id 怎样反向传播
 
 这两个字段来自 activation checkpoint。`recompute` 告诉 AOTAutograd 的 partitioner 某个前向节点倾向在反向时重新计算还是必须保存；`ac_graph_id` 标出该节点属于哪一段 checkpoint 图，partitioner 用相邻节点的 id 判断 checkpoint 边界。替换若丢掉标签，新的等价节点可能被错误地保存或重算，因此 Replacer 要把旧输出标签反向传给构成新输出的内部节点。
@@ -320,6 +377,16 @@ new mul: recompute=r1, ac_graph_id=g1
 captured x: 无这两项
 第二个独立新输出 x+3: 无这两项
 ```
+
+以第一项新输出 `new_mul(new_add(x,1),2)` 为例，一种栈状态如下：
+
+| 轮次 | pop 前 queue | 弹出 | 动作 | 本轮后 visited / queue |
+| ---: | --- | --- | --- | --- |
+| 1 | `[new_mul]` | `new_mul` | 写标签，加入输入节点 `new_add` | `{new_mul}` / `[new_add]` |
+| 2 | `[new_add]` | `new_add` | 写标签，加入输入节点 `x` | `{new_mul,new_add}` / `[x]` |
+| 3 | `[x]` | `x` | `x in input_stops`，不写、不展开 | visited 不变 / `[]` |
+
+常数 1、2 不是 FX Node，不会出现在 `all_input_nodes`。若两条新路径共享一个内部节点，第二次弹到它时 `visited` 会阻止重复展开。
 
 `visited` 防止共享子图被反复处理。产品注释明确称这种 many-to-many 标签映射为 best effort；它可能把某些新节点标得过宽，不是精确的一一来源证明。
 
@@ -344,6 +411,16 @@ match.args/kwargs
 ```
 
 传入的 `node` 不在这个方法里直接使用；真正的旧输出来自 `match.output_nodes()`。这使 many-to-many pattern 不必把“当前锚点”误当成唯一输出。
+
+`normalize_args` 解决的是“pattern 捕获次序不一定等于 replacement placeholder 次序”。例如 Match 保存为：
+
+```text
+match.args = []
+match.kwargs = {"right": y_old, "left": x_old}
+replacement placeholder 顺序 = [left, right]
+```
+
+对应的规范化函数按 placeholder 名读取捕获值，返回 `[x_old,y_old]`。随后 `Replacer.run(*args)` 才能让第一个 placeholder 绑定 x、第二个绑定 y；若直接依赖 kwargs 的出现顺序，模板输入可能接反。
 
 ## 用一个变化检查理解
 

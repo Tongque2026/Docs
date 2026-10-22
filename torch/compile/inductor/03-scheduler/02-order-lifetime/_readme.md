@@ -1,5 +1,13 @@
 # Scheduler 排序与生存期篇作者记录
 
+## 第六轮：独立初学者逐篇审阅整改
+
+- 审阅严格只覆盖本篇 68/68 个语义单元；报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/13_ORDER_LIFETIME_REVIEW.md`。
+- 总图补入本篇边界外但时序必需的“融合及节点整理”：topo/DCE/ancestors 在前，`compute_last_usage()` 在最终节点上运行。
+- 正文停在 `node.last_usage` 交给 Codegen，删除 wrapper `free_buffers`、memory planner、kernel-local removal 和 storage reuse 的内部实现。
+- 迁移题改为活路径 `A→B→D` 加死支路 `A→C`，消除“C 同时是输出 D 的依赖又可被删除”的矛盾。
+- 实验取证与上一项/下一项话术改成直接对象和机制描述；待同一读者只复查本篇。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q32，第 2 层，父项 Q30；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q321 叶子的源码回修。

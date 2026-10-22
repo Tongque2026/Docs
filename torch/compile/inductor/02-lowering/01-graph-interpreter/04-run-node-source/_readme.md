@@ -1,5 +1,20 @@
 # GraphLowering run_node 源码叶子作者记录
 
+## 第六轮：隔离冷读整改
+
+- 第一名无历史冷读者只读原 README，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/89_RUN_NODE_COLD_REVIEW_1.md`，评级 B。
+- 主体时间线、分派、stride、物化、origin/readers 与水位均可闭卷复述；主要缺口是 K05 的集合推演与源码顺序不一致。旧文把 `u0<=6` 写成立即生成，但 `bound_unbacked_symbols` 在整个 new-def 循环后才 union，本轮计算 missing 时当前新符号仍可能缺失。
+- 正文现用 `bound={s_old}`、`new_defs=[s0,s1]`、`ras[s0]=[s0<s1]` 逐行代入：missing 为 `{s0,s1}`，记录重新排到 s0，本次调用不会自动重访；循环结束后才把 s0/s1 加入 bound。范围 AssertScalar 与 deferred assertion 分成两条路径。
+- 补充 `inductor_realize_to_strides` 的实际布尔结合、tensor result 接口不变量；补充无 MKLDNN/MKL 时列表怎样缩减但共同多用户逻辑仍执行；集中列出显式断言、schema/范围查表和 binding 覆盖失败。
+- 下一步由新的无历史读者仅凭修订稿复验完整方法，不能向其提供本轮答案或问题清单。
+
+### 第六轮第二次冷读：通过
+
+- 第二名无历史读者只读修订稿，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/90_RUN_NODE_COLD_REVIEW_2.md`，评级 A。
+- 读者能闭卷拼接 helper 与 run_node 四段源码，复原四类分派、stride/平台条件、物化、origin/readers、水位、deferred queue、binding 和所有本层关键失败出口。
+- 对同 key requeue 的生命周期，正文进一步收窄为当前方法可证明的事实：本轮 union 后不重扫，离开时 assertion 仍在队列且尚未生成；不暗示当前源码保证未来一定再次消费。
+- Q214 隔离冷读闭环；下一篇按 BFS 顺序为 Q221（Pointwise、Reduction、View 构造核心源码）。
+
 > 第五轮状态：叶子完成。重新按完整长方法、连续状态、水位切片、layout/mutation、物化与 unbacked assertion 分支验收。
 
 ## 本篇定位、读者与边界

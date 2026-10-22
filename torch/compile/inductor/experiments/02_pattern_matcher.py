@@ -31,7 +31,7 @@ def replacement(a, b):
     return a * 2 + b * 2
 
 
-replacement_graph = make_fx(replacement)(torch.ones(3), torch.ones(3))
+
 
 pattern = CallFunction(
     aten.mul.Tensor,

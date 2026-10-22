@@ -460,6 +460,16 @@ propagate_mutation： schema 说明 dst 可写 → copy_ lowering(old_dst,new_ds
 
 ### stride 要求的判断顺序
 
+`inductor_realize_to_strides` 的内层条件按 Python 运算优先级等价于：
+
+```text
+没有 get_stride
+或
+(当前 stride 与 meta 不同 且 meta stride 不是 symbolic)
+```
+
+因此“meta 含 symbolic stride”只会阻止第二项 mismatch 强制布局；若 result 根本没有 `get_stride`，第一项仍成立。后面的 output/as_strided 合同以 `n.meta["val"]` 是 Tensor 为入口；对这类 FX 节点，Lowering result 必须提供 tensor 的 size/data 接口，否则访问 `result.get_size()` 或 `result.data` 会直接暴露图与 Lowering 结果不一致，而不会退回另一条分支。
+
 用 shape `[2,3]` 的转置 view 举例，它的 FX meta stride 为 `[1,3]`，result 也是 BaseView，并直接返回：
 
 1. `is_output=True`，先 `result.realize()`，确保返回 view 的 alias 有实际 storage；
@@ -503,6 +513,8 @@ a 有两个不同 users：mm 和 output。a 最初可为延迟 Pointwise。
 - Pointwise 的 inner function 已过大：直接 `realize()`，避免后续求值递归过深。
 
 hint 表达“倾向在这里形成存储边界”，而直接 `realize()` 当场把 StorageBox 底层转换为已登记 buffer。正文不把两者写成同一个动作。
+
+固定布局的基础列表始终包含 convolution backward、mm 和 int_mm。若 `layout_opt` 关闭，普通 convolution 也加入。只有当前 PyTorch 构建带 MKLDNN 时，源码才把 MKLDNN/oneDNN target 加入两个列表；没有 MKLDNN 时这些追加完全跳过，基础列表仍照常使用。MKL linear 又要求该构建同时具有 MKL。平台条件只改变“哪些 consumer 进入特殊列表”，不跳过多用户循环、output 物化或 reuse 标记。
 
 ### 用新情况检验理解
 
@@ -653,7 +665,7 @@ K04 已得到 `new_unbacked_defs`。最后一段跳过 placeholder，对每个�
 
 ### 完整源码：新符号处理至 return result
 
-先代入一项数据相关长度：当前节点 n 新建 operation op0，并定义 unbacked symbol `u0`；进入节点前 bound 集合不含 u0，ShapeEnv 有一条等待它的断言 `u0<=6`，FX meta 的 binding 也声明 u0 由本节点产生。循环发现 missing={u0}，建立一项 AssertScalar operation 在运行时检查该值，再把 u0 加入已绑定集合；覆盖检查确认 meta 声明与新 IR 定义一致。若新对象没有定义 u0，末尾断言会失败，而不是把符号当成已绑定。
+先区分两类断言。`var_to_range[u0]` 中的有限上下界在处理 u0 时可以立即形成 `AssertScalar`。`ras_by_symbol[u0]` 中的 deferred runtime assertion 则要重新计算它引用的全部 unbacked symbols；本节点的新定义直到整个循环结束后才并入 bound 集合，所以这类 assertion 可能在本轮重新排队，而不是立即生成。末尾的 binding 覆盖检查只确认 FX 声明的符号确实由本节点 IR 定义，不等于 deferred 队列已经清空。
 
 ```python
     if n.op != "placeholder":
@@ -770,19 +782,37 @@ AssertScalar(s0 <= 10, "s0 <= 10")
 
 每项都同时进入 `buffers` 和 `operations`。若下界为 `-∞`、上界为 `+∞`，`is_convertible` 返回 false，不为对应方向生成无意义断言。若范围没有比默认范围更窄，外层条件也会跳过整个边界生成。
 
-### 延迟断言如何重新排队
+### 延迟断言的集合怎样推进
 
-假设 `ras_by_symbol[s0]` 中有断言 `s0 < s1`。处理 s0 时，源码以处理前的 `bound_unbacked_symbols` 计算缺失集合。若 s1 尚未绑定，断言不会生成；它被放到名字排序最小的缺失符号 key 下等待。
+代入同一轮的完整状态：
 
 ```text
-取出：ras_by_symbol[s0] → [s0 < s1]
-发现：free symbols 中仍有未绑定项
-重排：ras_by_symbol[min(missing)] 追加该断言
+进入循环前：
+bound_unbacked_symbols = {s_old}
+new_unbacked_defs      = [s0, s1]
+ras_by_symbol[s0]      = [s0 < s1]
+ras_by_symbol[s1]      = []
 ```
 
-随后本轮的 `new_unbacked_defs` 才整体并入 bound 集合。这个顺序意味着不能把本循环解释成“看到 s0 就无条件立即生成所有提到 s0 的断言”；实际是否生成只由当时的 `missing` 结果决定。
+处理 s0 时先 `pop(s0)`，取出 `s0 < s1`。表达式的 unbacked symbols 为 `{s0,s1}`；此刻新定义尚未并入 bound，所以：
 
-若某条 ra 的所有 free unbacked symbols 已在旧的 bound 集合中，则直接生成 `AssertScalar(ra.expr, str(ra.expr))`。
+```text
+missing = {s0,s1} - {s_old} = {s0,s1}
+min(missing,key=str) = s0
+ras_by_symbol[s0] = [s0 < s1]   # 重新排队，没有生成 AssertScalar
+```
+
+处理 s1 时，它的队列为空。循环结束后才执行：
+
+```text
+bound_unbacked_symbols = {s_old,s0,s1}
+```
+
+刚重新放回 `ras_by_symbol[s0]` 的 assertion 不会在本次 `run_node` 中自动重访。当前方法没有在 union 后再扫一遍队列，也不在这里保证未来一定再次遇到同一个定义 key；离开本方法时能够确认的状态只是“记录仍保存在队列中，尚未生成 AssertScalar”。
+
+对照一条已经就绪的记录：若 `ras_by_symbol[s0]` 中某项表达式只引用 `{s_old}`，那么 `missing={}`，处理 s0 时会立即建立 `AssertScalar`。所以判断依据不是“当前正在处理哪个 key”，而是 assertion 的 free unbacked symbols 是否已全部属于进入本轮前的 bound 集合。
+
+范围断言走的是另一条路径。若 s0 的范围为 `[2,10]`，`s0>=2` 与 `s0<=10` 在处理 s0 时直接建立，不参与上述 `ras_by_symbol` 的 missing/requeue 过程。
 
 ### 为什么检查 `Inductor >= FX`
 
@@ -808,6 +838,20 @@ renamed_unbacked_bindings = {s0}
 3. FX 经重命名要求 `{s1}`，新定义只有 `{s0}`：覆盖失败，即使两个名字在文字上都像 unbacked symbol。
 4. 一条等待断言仍缺 s2、s3：用 `min(missing,key=str)` 选一个 key 重新排队，不复制到两个队列。
 5. result 是 SymPy 表达式而非 TensorBox：前面的 origin/reader 可能不动作，但本节点新 operation 定义的符号仍在这里处理，最后原 result 照常返回。
+
+### 哪些不变量失败会停止本节点 Lowering
+
+本方法只为预期的分派路径选择 fallback；进入具体路径后，下列不变量失败不会被 `run_node` 吞掉：
+
+| 位置 | 必须成立 | 失败方式 |
+| --- | --- | --- |
+| `propagate_mutation` | target 是具体 `OpOverload`；old/new positional 与 kwargs 数量一致 | 显式断言失败 |
+| kwargs schema 配对 | 每个旧 kwarg 在新 kwargs 和 schema 中都有同名项 | 查表失败，编译停止 |
+| tensor stride 合同 | tensor meta 对应的 result 提供 size/data/stride 所需接口 | 属性访问或下层 layout 要求失败 |
+| 新 symbol 范围 | 每个 `new_unbacked_defs` 项在 `shape_env.var_to_range` 中有记录 | 查表失败 |
+| FX/IR binding | 重命名后的 FX bindings 是 `new_unbacked_defs` 的子集 | 带当前 FX node 和新对象定义信息的断言失败 |
+
+这些是编译期失败，不是生成程序中的 runtime assertion。有限值域和已就绪 deferred expression 形成的 `AssertScalar` 才会作为 buffer/operation 进入后续调度与代码生成。
 
 ## 把完整 run_node 串成一次 relu→mm→output
 

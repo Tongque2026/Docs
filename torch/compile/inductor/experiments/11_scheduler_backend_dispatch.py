@@ -99,6 +99,12 @@ def mixed(x, matrix, weight):
     return pointwise_result, torch.sin(mm_result)
 
 
+def dependent_mixed(matrix, weight):
+    pointwise_result = test_operators.realize(matrix + 1)
+    mm_result = torch.mm(pointwise_result, weight)
+    return torch.sin(mm_result)
+
+
 def fallback(x):
     return torch.histc(x, bins=4, min=0, max=4)
 
@@ -140,6 +146,11 @@ with config.patch({"force_disable_caches": True}), patches[0], patches[1], patch
         mixed, backend="inductor", fullgraph=True
     )(x, matrix, weight)
 
+    case_name = "dependent_mixed"
+    dependent_mixed_result = torch.compile(
+        dependent_mixed, backend="inductor", fullgraph=True
+    )(matrix, weight)
+
     case_name = "fallback"
     hist_input = torch.tensor([0.0, 1.0, 1.5, 4.0])
     fallback_result = torch.compile(
@@ -173,6 +184,9 @@ with config.patch({"force_disable_caches": True}), patches[0], patches[1], patch
 torch.testing.assert_close(pointwise_result, (x + 1) * 2)
 torch.testing.assert_close(mixed_result[0], x + 1)
 torch.testing.assert_close(mixed_result[1], torch.sin(torch.mm(matrix, weight)))
+torch.testing.assert_close(
+    dependent_mixed_result, torch.sin(torch.mm(matrix + 1, weight))
+)
 torch.testing.assert_close(fallback_result, torch.histc(hist_input, bins=4, min=0, max=4))
 torch.testing.assert_close(template_result, torch.relu(torch.mm(template_x, template_weight)))
 torch.testing.assert_close(
@@ -184,6 +198,7 @@ events.extend(
     [
         f"pointwise_result={pointwise_result.tolist()}",
         f"mixed_shapes={[list(value.shape) for value in mixed_result]}",
+        f"dependent_mixed_shape={list(dependent_mixed_result.shape)}",
         f"fallback_result={fallback_result.tolist()}",
         f"template_shape={list(template_result.shape)}",
         f"frozen_template_shape={list(frozen_template_result.shape)}",

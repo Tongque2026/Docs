@@ -4,11 +4,9 @@
 
 实现叶子：[候选扫描与应用完整源码](01-apply-source/README.md) · [replacement 嵌入完整源码](02-replace-source/README.md)
 
-Pattern Matcher 要完成的不是“看到两个算子名字就融合”，而是一次有约束的图变换：先找可能的末端节点，再核对整个子图结构、捕获输入、检查真实 shape/dtype 等附加条件，最后替换节点并维护使用关系。
+Pattern Matcher 完成一次有约束的局部图变换：先找可能的末端节点，再核对整个子图结构、捕获输入、检查真实 shape/dtype 等附加条件，最后按当前 entry 的处理方式修改图。
 
 FX node 的 `op` 表示它是哪类节点，`target` 表示这类节点具体调用谁。例如 `a=torch.ops.aten.add.Tensor(x,y)` 对应 `op="call_function"`，意思是调用一个函数；它的 `target` 是 `aten.add.Tensor`，`args` 则引用 x 和 y。后文的 `(node.op, node.target)` 就是在检查这两项。
-
-改图以后，内存中的 Graph 已经变化，但 `GraphModule.forward` 仍可能是修改前生成的 Python 代码。`recompile()` 根据新 Graph 重建 `forward`；`lint()` 检查输入先于使用者、节点属于当前图等结构条件，发现错误就报错。结果无人引用且删除不会丢掉写入等副作用的节点可由 dead code elimination 删除，后文简称 DCE。
 
 ## 独立实验的规则
 
@@ -21,17 +19,17 @@ mul.Tensor(
 )
 ```
 
-`KeywordArg("x")` 和 `KeywordArg("y")` 表示“此处可以是外部传入的对象，并以给定名字交给匹配成功后的回调函数”。本篇源码也把这个回调叫 handler；它与 Codegen 中“把 load/add/store 翻译成目标代码”的 ops handler 不是同一种对象。实验实现还给内部 add 设置 `_users=MULTIPLE`，允许它除了 mul 之外另有使用者。规则另有一个条件：`x.dtype` 必须是 `float32`。替换图表达：
+`KeywordArg("x")` 和 `KeywordArg("y")` 表示“此处可以是外部传入的对象，并以给定名字保存在匹配结果中”。替换图表达：
 
 ```text
 x * 2 + y * 2
 ```
 
-这个分配律变换只用于观察 matcher；它不是在声称 Inductor 产品优化应该把一项加法和一项乘法改成两项乘法和一项加法。
+选择这条分配律规则，是因为一次命中会同时暴露新增节点、重接使用者和按剩余使用者删除旧节点三种变化。
 
 `_users=MULTIPLE` 是规则边界的一部分。若保留默认值 1，共享 add 会在结构匹配时因 user 数不符而拒绝，后文便观察不到“替换成功，但只删除已无使用者的旧节点”。
 
-## 一次应用经过五步
+## 一次 Replacement 规则怎样应用
 
 ```text
 PatternMatcherPass.apply(gm)
@@ -39,8 +37,8 @@ PatternMatcherPass.apply(gm)
    ├─ 1. 按 (node.op, node.target) 找候选锚点
    ├─ 2. 从输出侧递归匹配 PatternExpr 结构
    ├─ 3. 检查 mutation region 和 extra_check
-   ├─ 4. PatternEntry.apply 执行替换
-   └─ 5. 更新计数；阶段外围再排序、更新 meta、lint/recompile
+   ├─ 4. ReplacementPatternEntry.apply 嵌入替换图
+   └─ 5. 返回本次应用数量和修改后的节点关系
 ```
 
 这里的 `PatternExpr` 是规则中的一个结构节点，例如外层 `CallFunction(mul, ...)`、内层 `CallFunction(add,...)` 和两个 `KeywordArg`；递归匹配就是把这些结构节点逐一对应到实际 FX node。mutation region 是按写入屏障分出的编号；add 在写入前、mul 在写入后时，两者编号不同，不能作为一个纯计算子图替换。
@@ -86,7 +84,19 @@ PatternMatcherPass.apply(gm)
 
 跨 mutation 的例子还说明为什么 region 判断不能省略。`a` 保存覆盖前的 `x+y`；若把它改写成位于 `copy_` 后面的 `x*2+y*2`，新表达式会读取已被覆盖的 x。实际观测为 add=0、copy_=1、mul=1，所以 pass 拒绝这次跨区匹配。
 
-### 4. 把 replacement graph 嵌入原图
+有些注册规则还会在这里按真实输入属性做一次具体重匹配。通用 pattern 先忽略示例尺寸中的具体整数，以便找到相同结构；命中后，`check_fn` 从捕获节点的 `meta["val"]` 取得真实 shape、stride、dtype、device 和 requires-grad，重新 trace 并匹配 specific pattern。specific pattern 与用户条件都通过后，才为这组真实参数 trace replacement graph。因此，尺寸 32 注册的通用结构也能检查尺寸 64 的候选，而 replacement 仍按本次真实参数建立。
+
+结构与条件检查共同产生 `Match`，随后由 entry 类型决定命中动作：
+
+| entry | 命中后的本层出口 |
+| --- | --- |
+| `ReplacementPatternEntry` | 把追踪得到的 replacement graph 嵌入当前 FX 图 |
+| `GraphPatternEntry` | 调用自定义 handler，由它完成声明的图手术；这里的 handler 是改图回调 |
+| `LoweringPatternEntry` | 插入稍后由 Lowering handler 处理的 FX call |
+
+三类 entry 共用候选搜索、结构绑定和条件检查。下面的贯穿案例选择第一条分支。
+
+### 4. Replacement entry 把 replacement graph 嵌入原图
 
 实验预先用 `make_fx` 得到 replacement `GraphModule`。handler 调用 `match.replace_with_graph(replacement_graph, [x,y])`。此时输入状态是“原图中的旧 add/mul、捕获到的 x/y、以及一张描述 `x*2+y*2` 的替换图”；出口状态是“新节点已复制进原图、旧 mul 的使用者改读新 add、没有使用者的旧节点被删除”。内部 `Replacer` 完成这次复制：replacement 的 placeholder 绑定到原图中的 x、y，每个 `call_function` 都在旧输出之前建立一个对应的新节点。
 
@@ -115,9 +125,9 @@ PatternMatcherPass.apply(gm)
 
 应用次数为 1：旧 mul 的 tuple user 改读 `new_add`，旧 mul 删除；旧 add 仍有 relu user，因此保留。规则只声明接管旧 mul 的输出，所以 relu 不会被偷偷改成读取 replacement 的结果。
 
-多输出 replacement 还多一层图手术。若旧节点返回 packed tuple，而外部通过 `getitem(old,0)`、`getitem(old,1)` 使用，replacement 返回新节点列表时，`replace_with_graph` 读取每个 getitem 的整数索引，把它的 users 重接到对应新节点，再删除旧 getitem 和 packed 节点。遇到非 getitem user 会触发 `can't handle`，不会猜测拆包语义。
+多输出 replacement 会按旧 `getitem` 的整数索引，把每个使用者接到对应新输出。完整的 packed-output 分支在 [replacement 嵌入实现](02-replace-source/README.md)展开。
 
-### 5. 计数和阶段收尾各证明什么
+### 5. 交出修改后的节点关系
 
 每次真正应用后：
 
@@ -125,31 +135,7 @@ PatternMatcherPass.apply(gm)
 - `pattern_matcher_count` 加一；
 - `pattern_matcher_nodes` 增加本次匹配节点数。
 
-这些计数证明规则被应用及覆盖多少匹配节点，但不单独证明替换数值正确。实验另做了三项检查：`gm.graph.lint()`、`gm.recompile()`、替换后输出与原函数 `torch.testing.assert_close`。
-
-真实 pre/joint/post-grad 阶段还会在合适时机调用稳定拓扑、fake meta 更新、DCE 或其他图维护。Pattern entry 只负责它声明的局部变换，不承担整个阶段全部不变量。
-
-## 三种 entry 的出口不同
-
-当前实现用共同的结构匹配入口承载三类处理：
-
-| entry | 命中后做什么 | 典型用途 |
-| --- | --- | --- |
-| `ReplacementPatternEntry` | 把追踪得到的 replacement graph 嵌入 FX 图 | 一组 FX 计算换成另一组 FX 计算 |
-| `GraphPatternEntry` | 调用 handler，由 handler 自行改图 | 需要定制节点删除、重接等操作；也可用一组示例输入 trace 出替换图再嵌入，源码称 `replace_by_example` |
-| `LoweringPatternEntry` | 插入一个稍后执行 handler 的 FX call | 命中子图后直接在 Lowering 时构造 Inductor IR |
-
-第三类说明 pattern matcher 不只服务 FX-to-FX replacement；有些 post-grad 模式会延迟到 Lowering handler。但它仍先在 FX 图层识别结构。
-
-三类 entry 共用的是“怎样得到 Match”，图出口却不同。Replacement entry 使用 `extra_check` 已准备的 `match.replacement_graph`；Graph entry 在旧输出前调用自定义 handler，由 handler 决定图手术；Lowering entry 新建包住 handler 的 `call_function`，复制旧输出 meta、重接全部 users，再删除可删旧节点。因此只知道命中次数，还不能判断图会变成哪一种形式。
-
-## 为什么还要具体 shape 重新匹配
-
-`register_replacement` 可以先用 example inputs 生成通用 pattern。注册时若把示例中的尺寸 32 直接写成模式必须等于 32，尺寸 64 的同结构计算就会被错误拒绝；因此初次模式可以忽略这类具体整数。真正命中用户图后，`check_fn` 从捕获节点的 `meta["val"]` 取得实际 shape、stride 和 dtype，重新 trace 并匹配更具体的 pattern，再运行 `extra_check`。只有通过后，才为这次真实参数 trace replacement graph。
-
-这形成两级判断：通用结构负责快速找候选，具体重匹配负责确认当前输入确实满足规则。
-
-具体过程是：按 search function 的参数顺序，从第一次 Match 的命名捕获中取得 FX 节点；读取各节点 `meta["val"]`，以真实 size、stride、dtype、device 和 requires-grad 重建示例输入；重新 trace search function 并在原输出节点上匹配。specific pattern 与用户 `extra_check` 都成功后，才按这组真实参数 trace replacement，并保存到 `match.replacement_graph`。因此 replacement 可以随这次真实形状生成，并非永远复用注册时的一张固定图。
+应用结束后，pass 返回本轮应用数量；修改后的图则交给 [图状态维护](../03-graph-invariants/README.md)，由后者统一同步顺序、节点属性和可执行 `forward` 并检查结构。
 
 ## 用新情况检查理解
 

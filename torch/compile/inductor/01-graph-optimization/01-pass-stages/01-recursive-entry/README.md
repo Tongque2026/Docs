@@ -20,7 +20,21 @@ while_loop(cond_graph, body_graph, carried_inputs, additional_inputs)
            父模块属性中的两张子图
 ```
 
-在这段实现里，节点参数中的 `get_attr` 节点负责指出属性名。枚举器产生这些名字，递归入口再用 `getattr(gm, name)` 取到真正的子 `GraphModule`。
+阶段函数一次只接收一张 `GraphModule`，默认遍历的也是这一个对象的 `graph`。分支图和循环图没有展开成父 `graph` 里的普通计算节点，而是保存在父模块属性中，所以必须显式取出并递归处理。
+
+以 true 分支为例，当前实现接过下面四层对象：
+
+```text
+cond_node.args[1]
+    = 一项 get_attr 节点
+    ├─ name: "true_graph"       本实现读这个字符串
+    └─ target: "true_graph"     该节点读取的模块属性路径
+
+getattr(gm, "true_graph")
+    = 真正的 true 分支 GraphModule
+```
+
+在本文实验以及当前编译流程交来的这类控制流图中，子图属性使用 `true_graph`、`false_graph` 等简单名字，`get_attr` 节点的 `name` 与该属性路径相同；产品代码据此读取 `.name` 并交给 `getattr`。这不是在宣称任意 FX `get_attr` 节点的 `name` 永远等于 `target`，而是这四个函数依赖的输入表示合同。
 
 ## 声明范围的完整源码
 
@@ -30,7 +44,7 @@ while_loop(cond_graph, body_graph, carried_inputs, additional_inputs)
 | --- | --- | --- |
 | `gm` | 父 `GraphModule`，其 graph 含一项 cond，参数 1、2 是 true/false 子图的 `get_attr` 节点 | `_get_subgraph_names` 调用 `gm.graph.find_nodes(...)` 找 cond/while 节点 |
 | `find_nodes(...)` 的结果 | 本例是只含该 cond 节点的可迭代结果；while 查询为空 | `itertools.chain` 合并后由 `sorted` 按 FX 顺序遍历 |
-| `true_subgraph_name` / `false_subgraph_name` | 两个 `get_attr` 节点的名字，例如 `true_graph_0`、`false_graph_0` | `getattr(gm, name)` 取出真正的子 `GraphModule` |
+| `true_subgraph_name` / `false_subgraph_name` | 两个 `get_attr` 节点的 `.name`，例如 `true_graph_0`、`false_graph_0`；在本实现接收的图中也是父模块子图属性名 | `getattr(gm, name)` 取出真正的子 `GraphModule` |
 | `example_inputs` 或阶段参数 | 调用当前 pre/joint/post 函数时一并传入的样例或配置 | 递归调用子图的同阶段函数时继续传递 |
 
 这段代码的可检查结果是：先分别处理 true、false 子图，再处理或返回父图；若子图函数返回了新的 `GraphModule`，父模块对应属性会被替换。
@@ -91,6 +105,22 @@ def _recursive_post_grad_passes(gm, is_inference: bool = False):
     post_grad_passes(gm, is_inference)
 ```
 
+这里的 `_get_subgraph_names(gm)` 是生成器，不会先建立完整名字列表。外层 `for` 请求一个名字时，它运行到一次 `yield` 后暂停；外层可以递归处理整棵子树并写回，下一次循环再让生成器从暂停处继续。一个 cond 的 pre 路径因此实际交替执行：
+
+```text
+生成器 yield "true_graph" 后暂停
+    → 外层取得 true 子图
+    → 递归完成 true 的所有后代与 true 本身
+    → setattr 写回 new_true
+外层请求下一个名字，生成器从上次 yield 后恢复
+    → yield "false_graph" 后再次暂停
+    → 外层递归完成 false 子树并写回 new_false
+生成器结束
+    → 对父 gm 执行 pre_grad_passes
+```
+
+所以访问顺序不是先把所有名字“运行”一遍再统一递归。生成器的暂停点把每个名字与紧随其后的整棵子树处理连接起来。
+
 ## 第一条路径：普通图没有子图
 
 若图只有 `sin`、`add_` 等普通节点，两个 `find_nodes` 都返回空集合，生成器不产生名字。三个递归入口各自直接执行当前图的阶段函数：
@@ -122,9 +152,20 @@ pre hook 仍看到 `sin + add_`；AOTAutograd functionalization 之后，joint �
 | 3 | `false_graph` | false 分支 GraphModule | 同样递归并写回 `new_false` |
 | 4 | 循环结束 | 父 `gm` | 对已持有两张新子图的父图调用 `pre_grad_passes` |
 
-所以这是后序遍历：后代先、当前图后。若 pre pass 返回另一张 `GraphModule`，替换不会凭空传播；正是 `setattr` 把递归结果接回父模块，而最外层调用者还必须接住整个函数的返回值。
+所以这是后序遍历：保持直接子图从左到右的次序，但把当前图放到所有子图之后。若 pre pass 返回另一张 `GraphModule`，替换不会凭空传播；正是 `setattr` 把递归结果接回父模块，而最外层调用者还必须接住整个函数的返回值。
 
-joint 和 post 的次序相同，但没有 `new_subgraph` 与 `setattr`。它们依赖各自阶段函数原地修改传入的图。这里能断言的是对象上的修改会留下；具体修改 graph、meta 还是其他状态，由被调用阶段函数决定，递归包装器没有额外保证。
+用对象身份看区别更直接。进入 true 分支前，令 `old_true = gm.true_graph`：
+
+```text
+pre：  递归返回 new_true
+      setattr 后 gm.true_graph is new_true 为 True
+      gm.true_graph is old_true 为 False
+
+joint/post：阶段函数修改 old_true 本身
+            调用后 gm.true_graph is old_true 仍为 True
+```
+
+joint 和 post 的次序相同，但没有 `new_subgraph` 与 `setattr`。当前包装器根本不接它们的返回值，因此它们依赖阶段函数原地修改传入图的合同；若阶段函数改成返回新图，这两个包装器也必须像 pre 一样接住并写回。这里能断言的是对象上的修改会留下；具体修改 graph、meta 还是其他状态，由被调用阶段函数决定。
 
 ## 第三条路径：while、cond 与嵌套图的完整次序
 
@@ -147,7 +188,15 @@ root
 根图中的 `while_loop` 节点写在 `cond` 节点之前。`_get_subgraph_names(root)` 的实际结果是：
 
 ```text
-while_cond, while_body, true_graph, false_graph
+cond 查询结果：  [root_cond]
+while 查询结果： [root_while]
+chain 后：        [root_cond, root_while]
+按 FX 位置 sorted：[root_while, root_cond]
+
+root_while 依次 yield：while_cond, while_body
+root_cond 依次 yield： true_graph, false_graph
+
+最终直接名字：while_cond, while_body, true_graph, false_graph
 ```
 
 继续递归后，三个入口都得到同一后序访问序列：
@@ -176,7 +225,9 @@ wc_true → wc_false → while_cond → while_body
 
 “子层 pre 收到 `None`”不表示子图没有输入。它只表示这个递归入口没有一份与每张子图参数一一对应的样例输入列表。子图 pass 若需要形状或类型，应使用当前接口真正能取得的资料，不能假定这里总会传来运行样例。
 
-## 用两个变化检查是否真正理解
+根函数的输入列表也不能直接原样传给每张子图：cond 分支收到的是 `operands` 对应的参数，while 的条件图和循环体还会接收 carried values 等各自签名。当前包装器没有重建这些逐子图样例，因此明确传 `None`。
+
+## 用四个变化检查是否真正理解
 
 第一，若删除根图的 while，只保留那个嵌套 cond，访问序列变为：
 
@@ -187,5 +238,7 @@ t_true → t_false → true_graph → false_graph → root
 理由不是“cond 总在后面”，而是根图只剩 `true_graph`、`false_graph` 两个直接子图，其中 true 分支仍要先完成自己的两个后代。
 
 第二，若 pre 的 true 分支阶段函数返回新对象，但父层漏掉 `setattr`，后续处理父图时仍会从属性取得旧 true 分支；递归产生的新对象将失去连接。joint/post 不需要这次写回，是因为当前包装合同采用原地修改，而不是因为控制流子图不重要。
+
+再检查两个变化：若在第一次 `yield "true_graph"` 暂停时 true 子图内部还有一个 cond，生成器何时才会恢复并产生 `false_graph`？答案是内部 cond 的两支、true 子图本身以及 `new_true` 写回全部完成之后。若 joint 阶段函数以后改为返回新 `GraphModule`，包装器也必须保存递归返回值并 `setattr`；否则新对象会像缺少 pre 写回时一样失去连接。
 
 至此，四个函数的每个循环、条件分支、参数传播和出口都已落到具体状态。下一叶子进入 pattern matcher 的候选扫描与应用。

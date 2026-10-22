@@ -1,5 +1,13 @@
 # FX 图不变量篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/04_GRAPH_INVARIANTS_REVIEW.md`，81/81 个语义单元。
+- 正文固定为顺序、node meta、`forward`、结构合法性四项，不再加入 DCE 作为第五项。
+- stable sort 与 FakeTensorUpdater 只保留父层可观察变化，内部队列、hash 和传播状态下放两个实现叶子。
+- 删除 pre/joint/post 收尾清单；阶段差异归阶段编排篇。
+- 综合 transpose 案例用最终表明确交出可由下一 pass 或 GraphLowering 读取的 GraphModule。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q13，第 2 层，父项 Q10；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q131/Q132 两个叶子的源码回修。

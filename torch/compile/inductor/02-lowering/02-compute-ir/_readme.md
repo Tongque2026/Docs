@@ -1,5 +1,13 @@
 # 计算 IR 篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/08_COMPUTE_IR_REVIEW.md`，88/88 个语义单元。
+- 删除作者层级状态和 Q21/Q23/Q24；正文使用模块名与正式链接。
+- Reduction 父层只保留 Pointwise 退化、单层 Reduction、多层 Reduction 三种出口；0/1项、阈值与 split 决策下放构造叶子。
+- 出口补齐“延迟规则 → 存储职责决定物化 → ComputedBuffer/operation → Scheduler”的条件接力；view 共享 storage 时不虚构 operation。
+- layout 冻结机制和实验取证理由回到作者记录或存储篇。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q22，第 2 层，父项 Q20；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q221 叶子的源码回修。

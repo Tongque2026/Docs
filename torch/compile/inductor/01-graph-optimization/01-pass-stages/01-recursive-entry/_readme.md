@@ -99,3 +99,17 @@ post flags: 九项全部 True；return: None
 - **证据边界**：构造实验实际调用产品递归包装器但 mock 阶段函数，只支持遍历、参数、返回和对象连接；不外推真实 pass 算法或运行时 HOO 分支。
 
 Q111 第五轮叶子复核完成。全系列下一项是同一深度的 Q121：matcher 候选扫描与应用完整源码。
+
+## 第一次隔离冷读整改
+
+- 报告：`../../../../inductor-fresh-reader-review/54_RECURSIVE_ENTRY_COLD_REVIEW_1.md`，评级 B。
+- 读者能复述主线和三条路径，但无法只凭正文解释生成器暂停/恢复、`get_attr` 节点到模块属性的四层引用链，以及替换对象与原地修改的身份差异。
+- 源码核对：产品实现确实读取 HOO 参数中 `get_attr` 节点的 `.name`；当前实验用 `Graph.get_attr("true_graph")` 等简单属性名构图，节点 `name/target` 均对应同名父模块属性。正文将这一点限定为本实现接收的输入表示合同，没有推广到任意 get_attr。
+- 本轮增加单 cond 的 yield 时间线、混合根的 find/chain/sorted/yield 中间值、pre 与 joint/post 的对象身份对照、子图参数签名为何不能直接沿用根样例，以及两道覆盖生成器和返回合同的迁移题。
+
+## 第二次隔离冷读验收
+
+- 报告：`../../../../inductor-fresh-reader-review/55_RECURSIVE_ENTRY_COLD_REVIEW_2.md`，评级 A。
+- 读者可独立推导单 cond 的生成器暂停与恢复、mixed root 的直接名字、九图后序、pre 漏写回和 joint 返回新对象时的后果，以及 `example_inputs=None` 的边界。
+- 必须修改项：无。
+- 当前状态：Q111 通过隔离冷读验收；下一篇为同层 Q121。

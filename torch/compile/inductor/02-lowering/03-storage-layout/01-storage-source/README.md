@@ -120,7 +120,7 @@ class StorageBox(MutableBox):
 
 ### realize 对已有存储与延迟计算分别返回什么
 
-输入 x 已经是 `StorageBox(InputBuffer("arg0_1"))`。调用 `realize()` 直接返回 `arg0_1`，不会登记新 operation。转置输入若是 `ReinterpretView`，也返回底层可引用名字；view 关系仍由 layout 保留。
+输入 x 已经是 `StorageBox(InputBuffer("arg0_1"))`。调用 `realize()` 直接返回 `arg0_1`，不会登记新 operation。转置输入若是 `ReinterpretView`，`BaseView.get_name()` 会继续调用底层 data 的 `get_name()`，因此返回的仍是底层 storage 名；view 自己的 FixedLayout 另外保存 size、stride 和 offset。
 
 对延迟 `x+1`，StorageBox.data 是 Pointwise。`realize()` 保存它的 origin/traceback，建立 `ComputedBuffer(name=None, FlexibleLayout(cpu,float32,[2,3]), pointwise)`，再由 GraphLowering 登记为例如 buf0/op0。原 Pointwise 没有消失，而是成为 ComputedBuffer.data，负责将来生成每个位置的 store 值。
 
@@ -153,9 +153,50 @@ FlexibleLayout 已有一份暂定 stride，但仍允许改变。冻结分两层�
 
 ### 完整源码：FlexibleLayout 计算目标 stride
 
-第一次阅读用 shape `[2,3]`、CPU float32、offset 0。默认连续 layout 的 fill order 是 `[1,0]`，得到 stride `[3,1]`；若传 stride order `[0,1]`，转换成 fill order 后仍得到 `[3,1]`；传 exact strides `[1,2]` 时则原样冻结成 `[1,2]`。`_stride_order` 只在尚未显式给 stride 时保存排列要求，一旦读取 `stride` 就据此计算实际数值。
+第一次阅读用 shape `[2,3]`、CPU float32、offset 0。默认连续 layout 的 fill order 是 `[1,0]`，得到 stride `[3,1]`；stride order `[1,0]` 转成 fill order 后同样得到 `[3,1]`，stride order `[0,1]` 则得到 `[1,2]`；exact strides `[10,2]` 会原样冻结成 `[10,2]`。`_stride_order` 只在尚未显式给 stride 时保存排列要求，一旦读取 `stride` 就据此计算实际数值。
 
 padding 只在 `comprehensive_padding=True` 且调用路径允许时发生。以默认阈值 1024、128-byte 对齐和 float32 为例，shape `[3,1025]` 的连续候选 stride 原为 `[1025,1]`；外层 stride 1025 超过阈值且不是 32 个 float32 元素的倍数，会向上补到 1056，得到 `[1056,1]`。动态尺寸、禁用配置或 `allow_padding=False` 都保留原 stride。
+
+完整 padding 规则保持原 stride order，从最快维重新累乘：最快维 stride 固定为 1；每生成下一维 stride，如果它大于阈值且不是 `align=128 bytes / dtype.itemsize` 的倍数，就向上取整到 align。channels-last 在配置禁止 padding 时跳过；当前 FX 节点带 `dislike_padding` 时跳过；任一 size/stride 不是静态整数时也跳过。只有确实发生过补齐才采用重算结果，避免 size=1 维把等价 stride 无谓改掉。
+
+```python
+@staticmethod
+def _pad_strides(in_strides, size, dtype):
+    align = get_align_for_dtype(dtype)
+    if len(in_strides) == 0:
+        return in_strides
+    if not config.pad_channels_last and Layout.is_channels_last_contiguous(
+        size, in_strides
+    ):
+        return in_strides
+    current_fx_node = V.get_current_node()
+    if hasattr(current_fx_node, "meta") and current_fx_node.meta.get(
+        "dislike_padding", False
+    ):
+        return in_strides
+    if not all(
+        isinstance(s, (int, sympy.Integer))
+        for s in itertools.chain(in_strides, size)
+    ):
+        return in_strides
+
+    stride_order = get_stride_order(in_strides)
+    fill_order = stride_order2fill_order(stride_order)
+    new_strides = [0 for _ in range(len(in_strides))]
+    new_strides[fill_order[0]] = 1
+    padded = False
+    for rank, idx in enumerate(fill_order[1:], start=1):
+        prev_idx = fill_order[rank - 1]
+        stride = new_strides[prev_idx] * size[prev_idx]
+        if stride > config.padding_stride_threshold and stride % align != 0:
+            stride = ceildiv(stride, align) * align
+            padded = True
+        new_strides[idx] = stride
+    if not padded:
+        return in_strides
+    metrics.num_comprehensive_padding += 1
+    return new_strides
+```
 
 ```python
 class FlexibleLayout(Layout):
@@ -412,6 +453,43 @@ def decide_layout(self):
             self.freeze_layout()
 ```
 
+上面真正把多条 stride hints 合成一个 fill order 的是 `pick_loop_order`。它比较任意两个输出维 a、b：对每一项读取分别投票；a 的绝对 stride 更小，或 b 在该读取中是广播 stride 0，就给 a 一票。b 同理。票多的维放在前面，表示先填、stride 更小；平票时维号较大的维在前，保持默认连续顺序。size=1 的维不影响地址，被移到最后。
+
+```python
+def pick_loop_order(stride_lengths, sizes, priority_idx=()):
+    @functools.cmp_to_key
+    def index_cmp(a, b):
+        if sizes[a] == 1 or sizes[b] == 1:
+            return cmp(sizes[a] == 1, sizes[b] == 1)
+
+        stride_len_a = [abs(sl[a]) for sl in stride_lengths]
+        stride_len_b = [abs(sl[b]) for sl in stride_lengths]
+        a_first = sum(
+            sl_b == 0 or sl_a < sl_b
+            for sl_a, sl_b in zip(stride_len_a, stride_len_b)
+        )
+        b_first = sum(
+            sl_a == 0 or sl_b < sl_a
+            for sl_a, sl_b in zip(stride_len_a, stride_len_b)
+        )
+        if a_first > b_first:
+            return -1
+        if b_first > a_first:
+            return 1
+        return cmp(b, a)
+
+    order = list(reversed(range(len(stride_lengths[0]))))
+    if len(priority_idx) > 0:
+        stride_lengths = [stride_lengths[pi] for pi in priority_idx]
+    if config.pick_loop_orders:
+        order.sort(key=index_cmp)
+    return order
+```
+
+广播 stride 0 的处理容易读反。对单条 `[0,1]` 比较 dim0 与 dim1：dim0 本身为 0 时，`b_first` 的 `sl_a==0` 成立，票给 dim1；所以有效读取 stride 1 的 dim1 排在广播 dim0 前，得到 `[1,0]`。广播维不会因为数值 0 被误选成最快输出维。
+
+再看两项冲突读取：第一项 hints `[1,4]` 偏好 dim0，第二项 `[4,1]` 偏好 dim1。两维各得一票，比较器走平票规则，让维号较大的 dim1 在前，fill order 为 `[1,0]`。若 `priority_idx=(0,)`，投票前只保留第一项读取，结果改为 `[0,1]`。如果关闭 `config.pick_loop_orders`，函数不排序，直接返回默认的倒序维号。
+
 两个方法属于 `ComputedBuffer`，代码块去掉类级缩进。若 layout 已经被外部合同固定，最外层 `isinstance(FlexibleLayout)` 为假，`decide_layout` 不再覆盖它。
 
 ### 四种 `[2,3]` 读取式
@@ -427,7 +505,9 @@ def decide_layout(self):
 
 第一行让 d1 连续变化，因为它使输入地址每次只加 1。第二行让 d0 最快，因为 d0 的地址增量为 1。第三行对 d0 是广播 stride 0；当前 `pick_loop_order` 仍选 d1 为最快有效访问维，输出冻结为行连续。最后一行没有读取可投票，走普通 freeze。
 
-有多个 MemoryDep 时，`stride_lengths` 保存多行建议，`pick_loop_order` 比较各维在这些读取中的相对优势；它不是只看第一项。StarDep 没有具体 index，源码明确排除它。Reduction 的组内变量被替换为 0，是因为这里决定输出位置的排列，而不是规约组内循环怎样执行。
+有多个 MemoryDep 时，`stride_lengths` 保存多行建议，`pick_loop_order` 按上面的逐对投票比较各维；它不是只看第一项。MemoryDep 是“读某个 buffer 的具体 index 表达式”，因此能计算 stride；StarDep 只表示对整个结果的依赖，没有单一 index，源码将它排除。
+
+`index_vars_squeeze(pointwise_size,reduction_size)` 为普通输出维建立 `index_vars`，为规约维建立 `reduction_vars`；size=1 的维没有变化空间，可能直接用字面量 0 表示，所以替换表要过滤 `v != 0`，不能把常数 0 当成待替换符号。其余组内变量统一替换成 0，是因为这里决定输出位置的排列，而不是规约组内循环怎样执行。
 
 ### 用新情况检验理解
 
@@ -443,6 +523,54 @@ def decide_layout(self):
 ### 完整源码
 
 先走普通 buffer：x 是 size `[2,3]` 的 ComputedBuffer，当前 FlexibleLayout stride `[3,1]`；调用给 `order=[1,0]`、`exact_strides=None`、`allow_padding=False`。函数可直接把 x 的 layout 冻结成按该顺序计算的 FixedLayout，不复制数据。随后再对照四种变化：x 是 view 时尝试建立 ReinterpretView；已有 FixedLayout 不满足 exact `[1,2]` 时复制；x 是 StorageBox 时递归处理其 data；零元素 tensor 直接返回。
+
+`require_strides` 开头反复调用的 storage helper 先把包装拆开。TensorBox 递归到 `data`；StorageBox 只有在 `data` 已是 Buffer 时才交回 `(StorageBox, layout)`，并按参数冻结；ReinterpretView 递归取得底层 StorageBox，但保留 view 自己的 layout。其他对象抛 NotImplementedError，因此 `is_storage_and_layout` 返回 false。
+
+```python
+def is_storage_and_layout(x):
+    try:
+        as_storage_and_layout(x, freeze=False)
+        return True
+    except NotImplementedError:
+        return False
+
+
+def as_storage_and_layout(
+    x, freeze=True, want_contiguous=False,
+    stride_order=None, allow_padding=False, exact_strides=None,
+):
+    if isinstance(x, TensorBox):
+        return as_storage_and_layout(
+            x.data,
+            freeze=freeze,
+            want_contiguous=want_contiguous,
+            stride_order=stride_order,
+            allow_padding=allow_padding,
+            exact_strides=exact_strides,
+        )
+    if isinstance(x, StorageBox) and isinstance(x.data, Buffer):
+        if freeze:
+            if want_contiguous:
+                x.data.freeze_layout()
+                assert x.data.layout.is_contiguous()
+            elif stride_order is not None:
+                x.data.freeze_layout_with_stride_order(
+                    stride_order, allow_padding=allow_padding
+                )
+            elif exact_strides is not None:
+                x.data.freeze_layout_with_exact_strides(
+                    exact_strides, allow_padding=allow_padding
+                )
+            else:
+                x.data.decide_layout()
+        return x, x.data.layout
+    if isinstance(x, ReinterpretView):
+        buffer, _ = as_storage_and_layout(x.data, freeze=freeze)
+        return buffer, x.layout
+    raise NotImplementedError
+```
+
+所以“x 是 StorageBox 时递归处理 data”更准确地说，是 helper 检查 `StorageBox.data` 是否已经是 Buffer；它不会把仍指向 Pointwise 的 StorageBox 当成现成 storage。
 
 ```python
 @classmethod
@@ -586,7 +714,54 @@ def require_stride_order(cls, x, order, allow_padding=False):
 
 三个方法属于 `ExternKernel`。两个短入口只把合同类型传给共同分支；`require_strides` 最终只有两类结果：复用/原地冻结 x，或建立 copy 后返回新对象。
 
-### 五个实际分支
+这里的“exact 相等”会忽略 size=1 维，而不是忽略 size=0 维或任意符号差异。helper 先保留 `size_hint(dim,fallback=2) != 1` 的维，再把两组对应 stride 求 hint 后逐项比较：
+
+```python
+def significant_strides_equal(strides1, strides2, size):
+    non_1_indices = [
+        i
+        for i, dim in enumerate(size)
+        if V.graph.sizevars.size_hint(dim, fallback=2) != 1
+    ]
+    strides1 = [V.graph.sizevars.size_hint(strides1[i]) for i in non_1_indices]
+    strides2 = [V.graph.sizevars.size_hint(strides2[i]) for i in non_1_indices]
+    return strides1 == strides2
+```
+
+前面不能复用时，`copy_input` 不是一个含糊的“以后也许复制”：它立即建立读取 x loader 的同 shape/dtype Pointwise，并调用 realize，使返回值拥有新的 ComputedBuffer 身份。新 Pointwise 只读旧 x，不继承 MutationLayout；因此外部调用拿到的是独立逻辑结果，原 mutation 对象仍保留自己的写入身份。
+
+```python
+def copy_input(x):
+    pw = Pointwise.create(
+        device=x.get_device(),
+        dtype=x.get_dtype(),
+        inner_fn=x.make_loader(),
+        ranges=x.get_size(),
+        origin_node=x.get_origin_node(),
+        traceback=x.get_traceback(),
+    )
+    pw.realize()
+    return pw
+```
+
+“可能融合”表示调度器以后可以把这个读取旧 x、写新 buffer 的 Pointwise 与 producer 合并；在当前 IR 出口，它已经是另一份具名 ComputedBuffer，而不是原对象的别名。
+
+普通 BaseView 能否零复制转换，取决于它的最终索引是否为仿射式 `dot(range_vars,strides)+offset`。转换函数先冻结底层 buffer，再从 view 的 `make_indexer()` 得到 index，求每个逻辑维的 stride 和常数 offset；若重新拼出的 expected 不等于原 index，抛 NotImplementedError，调用方随后 copy。成功时才建立同一 data 上的 FixedLayout ReinterpretView：
+
+```text
+view index = 3*r0 + r1 + 5
+stride_vars → [3,1]，offset → 5
+expected = 3*r0 + r1 + 5，与原式相等
+→ ReinterpretView(data=x.data, FixedLayout(size, [3,1], offset=5))
+
+view index = r0*r1
+无法写成各维线性 stride 加常数 offset
+→ 转换失败 → copy_input
+```
+
+转换成功后，`x.data` 被替换为 ReinterpretView，递归的 `require_stride_order/exact_strides` 再通过上面的 storage helper 检查该 view 自己的 FixedLayout。NonOwningLayout 则先沿 `layout.view` 找到真正承担 storage 合同的对象。这样 view 转换只证明“能用固定 stride 表达”，不保证它已经满足外部要求。
+
+### 五个实际探针
 
 实验 21 的 direct IR probes 得到：
 
@@ -598,7 +773,7 @@ def require_stride_order(cls, x, order, allow_padding=False):
 | Fixed `[2,1,3]`, stride `[3,3,1]` | exact `[3,99,1]` | size-1 差异无地址意义，返回同一对象 |
 | size `[0,3]` | 任意 exact `[99,7]` | numel=0，layout 无可观察元素，返回同一对象 |
 
-FlexibleLayout 路径为何能原地冻结：它尚未承诺具体排列，改变 layout 不改变已存在 storage 的外部身份。FixedLayout 不匹配时不能原地改写；copy_input 建立一份满足消费者合同的新结果。源码注释说明这份 clone 可能继续融合进尚未物化的 producer，因此“走 copy 分支”也不等于最终必有独立复制 kernel。
+FlexibleLayout 路径为何能原地冻结：这个具名逻辑 buffer 尚未承诺具体排列，运行时物理空间也还没有在此处分配；改变 layout 不会换掉 buffer 名和引用身份。FixedLayout 不匹配时不能原地改写；copy_input 建立一份满足消费者合同的新结果。源码注释说明这份 clone 可能继续融合进 producer，因此“走 copy 分支”也不等于最终必有独立复制 kernel。
 
 MutationLayout 比较的不是包装本身，而是 `real_layout()`；若真实 layout 仍 flexible，当前源码直接断言失败。如果它已经 Fixed 且满足合同，保留 mutation 对原 storage 的写入身份。
 

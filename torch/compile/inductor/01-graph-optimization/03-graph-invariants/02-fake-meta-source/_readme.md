@@ -1,5 +1,32 @@
 # Q132 作者记录：`FakeTensorUpdater`
 
+## 2026-10-22 隔离冷读回修
+
+- 第一位无历史读者只读正文，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/70_FAKE_META_COLD_REVIEW_1.md`，评级 C。
+- 主循环实验可理解，但 FakeMode dispatch、hash 漏检边界、pytree 展开、storage 对象关系、device 出口和 unbacked symbol 重绑仍依赖读者既有知识。
+- 本轮把这些前提移到完整源码之前，以 `c/d fake → dispatcher → 新 fake`、混合参数树、storage S/A/B/C、CPU→CUDA 和 `size()[0]` 路径逐项展开。
+- 下一轮由新的无历史读者只读当前 README；提示词只提供目标读者背景和逐段审查方法，不提供上述答案。
+
+### 第二次冷读
+
+- 第二位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/71_FAKE_META_COLD_REVIEW_2.md`，评级 B。
+- 修正两项事实错误：构造器不建立 users；`to_process` 初始为空，首个结构变化节点由 hash miss 进入。
+- FakeMode 补到 dispatch mode 栈和 backend kernel 选择前拦截；unbacked binding 补到 `node.meta` 的 key path 数据。
+- 输出类型支持边界、旧 val 缺失和 storage 计数只增不减均加入正文。
+- 下一轮仍由新的无历史读者只读当前 README 验收。
+
+### 第三次冷读
+
+- 第三位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/72_FAKE_META_COLD_REVIEW_3.md`，评级 B。
+- 修正无 storage Tensor 的自相矛盾；补齐 tuple/list 内部 storage 未计数的保守传播，以及空 unbacked binding 不清除旧键的当前行为。
+- 在符号段先画 rebind（写回前）与 compute bindings（写回后）的控制流；add→sub 段立即说明新 hash 未缓存。
+
+### 第四次冷读：通过
+
+- 第四位无历史读者报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/73_FAKE_META_COLD_REVIEW_4.md`，评级 A。
+- 读者仅凭正文准确复述完整主循环、所有主要比较分支及 tuple/storage、空 binding、无 storage、缓存重试等组合出口。
+- Q132 隔离冷读验收完成；下一篇按 BFS 顺序进入 Q211 GraphLowering 输入登记源码。
+
 > 第五轮状态：叶子完成。重新以完整源码、传播状态、alias 对照、跳过/失败边界和当前 dtype 缺口验收。
 
 ## 读者、层次与完成目标

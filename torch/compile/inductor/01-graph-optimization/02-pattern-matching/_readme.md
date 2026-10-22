@@ -1,5 +1,12 @@
 # Pattern Matcher 篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/03_PATTERN_MATCHING_REVIEW.md`，73/73 个语义单元。
+- 共同流程止于候选、结构绑定和条件检查；此后先列三种 entry 出口，再选择 Replacement 分支继续贯穿案例。
+- 具体 shape 重匹配移到条件阶段；阶段级拓扑、meta、DCE、`lint/recompile` 下放图状态维护篇。
+- 计数只作为 matcher 返回状态，实验验收方法与旧稿免责声明不再占据正文主线。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q12，第 2 层，父项 Q10；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q121/Q122 两个叶子的源码回修。

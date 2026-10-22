@@ -25,9 +25,11 @@ get_attr 节点
 
 两条路径最后都给 FX Interpreter 一个可放入 env 的结果，但来源不同：函数节点执行一条构造规则，属性节点读取 GraphModule 已有对象。
 
+本篇沿用 Q211 的名字规则：`qualify_name(name)` 在当前 GraphLowering 有子图名时返回 `子图名_name`，否则返回原名。常量先限定子图名，再把点号等不适合作变量名的字符换成下划线。
+
 ## 完整源码
 
-进入第一段源码时，`name: Optional[str]` 表示调用者可以给常量建议名字，也可以传 `None`；本例用 `name="weight"`。`data` 是一份 Tensor 常量，`use_runtime_constant_folding=False`，constants 与 constant_reprs 起初为空，也没有名称冲突或 device override。函数先检查现有常量是否已指向同一块数据；若没有，就登记为 weight，constant_reprs 保存用于缓存/诊断的常量表示。后面的 `call_function` 案例则固定 `target=aten.add.Tensor`、`args=(x_ir,y_ir)`、`kwargs={}`，最终从 `lowerings[target]` 取得处理函数并返回 add 的 IR。ScriptObject/TorchBind 分支不在这次调用中进入。
+进入第一段源码时，`name: Optional[str]` 表示调用者可以给常量建议名字，也可以传 `None`；本例用 `name="weight"`。`data` 是一份 Tensor 常量，`use_runtime_constant_folding=False`，constants 与 constant_reprs 起初为空，也没有名称冲突或 device override。函数先检查现有常量是否已指向同一块数据；若没有，就登记为 weight，constant_reprs 保存稍后写入 wrapper/cache key 的对象表示。后面的 `call_function` 案例则固定 `target=aten.add.Tensor`、`args=(x_ir,y_ir)`、`kwargs={}`，最终从 `lowerings[target]` 取得处理函数并返回 add 的 IR。ScriptObject/TorchBind 分支不在这次调用中进入。
 
 ```python
 def allocate_non_dup_const_name(
@@ -65,7 +67,7 @@ def allocate_non_dup_const_name(
     while name in self.constants:
         name = f"{prefix}_{cnt}"
         cnt += 1
-    # 教学：三张表分别保存实际 tensor、用于缓存辨识的表示和原属性名。
+    # 教学：三张表分别保存实际 tensor、写入 wrapper/cache key 的表示和原属性名。
     self.constants[name] = data
     self.constant_reprs[name] = (
         f"{data.device!r} {data.dtype!r} "
@@ -243,6 +245,23 @@ kwargs = {}
 
 `make_fallback` 的结果也登记进 `lowerings[target]`，所以成功分支最终共用同一个 try/except 调用点。存在 decomposition 不代表 GraphLowering 此刻还能自动回到 AOTAutograd 重跑分解；源码注释明确此阶段已经太晚，因此在禁用 fallback 时给出专门错误。
 
+try/except 包住最后的统一查表、日志和调用段：第一次 `lowerings[target]` 查表、`log.debug`、第二次查表以及 lowering 调用都在其中。因此各位置的异常出口不同：
+
+| 出错位置 | 出口 |
+| --- | --- |
+| 未标记的普通 callable | OpOverload assert |
+| container getitem 的父 Interpreter | 原异常直接向外 |
+| pattern passthrough callable | callable 原异常直接向外 |
+| `make_fallback` 注册过程 | 注册过程原异常直接向外 |
+| MissingOperator 两个分支 | 专用异常直接向外 |
+| 统一查表、日志和 lowering 调用段抛出普通 `Exception` | 包装为 `LoweringException` |
+
+若 `make_fallback` 返回却没有把 target 登记进 lowerings，随后第一次查表产生的 KeyError 也会在这段中包装。相反，`operator.getitem` 分支在进入 try 前就读取 `args[0]`；畸形的空 args 会在这里直接产生 IndexError。
+
+更一般地说，进入最终 try 之前发生的求值异常都保持原类型向外，包括 target 属性检查、registry/allow-list 查询、`target.name()`、decomposition 查询、错误信息构造和 fallback 注册。`LoweringException` 只标记已经走到统一 lowerings 查表、日志与调用段的普通 `Exception`；`KeyboardInterrupt`、`SystemExit` 等不属于 `Exception` 的控制异常不会被这个 except 捕获。
+
+带 `_inductor_lowering_function` 标记的 `OpOverloadPacket` 不走 passthrough，因为条件显式排除了 packet。若 packet 已经是 lowerings 的 key，它落到统一调用段；若不在表中，则后面的“必须是具体 OpOverload”断言失败。
+
 独立 probe 保持产品 `call_function` 不变，只在隐式 fallback 一例中把 `make_fallback` 换成可记录的最小注册器，实际得到：
 
 ```text
@@ -277,7 +296,7 @@ obj = 一个 ScriptObject
 | bias1 | 一维且长度 ≤ 8 | tensor lowering 的内联 IR | 不走 `add_tensor_constant` |
 | table | 其余 Tensor | `TensorBox(ConstantBuffer)` | `constants` 等三张表增加记录 |
 | branch | GraphModule | `ir.Subgraph` | 保留子图模块 |
-| obj | ScriptObject | `TorchBindObject` | 写入 `torchbind_constants` |
+| obj | ScriptObject | `TorchBindObject` | 写入 `torchbind_constants` 与空的 `constant_reprs` 项 |
 
 若开启 `always_keep_tensor_constants`，bias0 和 bias1 也会在到达内联判断前走 `add_tensor_constant`。配置改变的是表示路径，不是常量数值。
 
@@ -291,13 +310,21 @@ branch       -> Subgraph
 constants keys 只有 ['table_const']
 ```
 
-在 `always_keep_tensor_constants=True` 下，scalar 与 small 都变为 ConstantBuffer，constants keys 为两者。ScriptObject 是由 TorchScript/C++ 注册、从 GraphModule 属性取出的有状态对象；TorchBindObject 是 Inductor 为它建立的 IR 包装，后续自定义 operator 可以把这份对象作为参数传回已注册的 C++ 实现。它不是普通 tensor 常量，因此不会走 size/stride layout 或小常量内联分支。
+在另一张只包含 scalar 与 small 两项属性的实验图中设置 `always_keep_tensor_constants=True`，两者都变为 ConstantBuffer，constants keys 正好是这两项。若同一次图中还读取 table，它也会留在 constants 中。
+
+ScriptObject 是由 TorchScript/C++ 注册、从 GraphModule 属性取出的有状态对象；TorchBindObject 是 Inductor 为它建立的 IR 包装，后续自定义 operator 可以把这份对象作为参数传回已注册的 C++ 实现。这个分支写入 `torchbind_constants[target]`，同时令 `constant_reprs[target]=""`；它不写普通 tensor 使用的 `constants` 或 `allocated_constant_name`。
+
+tensor 常量只用 `constants` 检查名字冲突，TorchBind 只写 `torchbind_constants`；两者没有统一的跨表查重，却共享 `constant_reprs`。正常情况下同一 GraphModule 属性 target 只有一种值类型；若 tensor 名字清理后恰好撞上另一个 TorchBind target，后登记者会覆盖 `constant_reprs` 的同名项，两个各自类型表中的对象仍同时存在。这是当前源码的组合边界。
+
+`get_attr` 没有像统一 lowering 调用点那样包装异常。点分属性不存在时，递归查找的原异常直接向外；属性既不是 GraphModule、ScriptObject 也不是 Tensor 时，在 Tensor assert 失败。之后 `.item()`、tensor lowering、常量登记若失败，也从各自位置直接向外。正常分支的类型选择到此已经完整；任意 helper 内部异常不另列为新的属性类别。
 
 ## 常量名字与共享存储的具体推演
 
 模块属性名 `layer.weight` 先清理为 `layer_weight`。若该名字已在 `constants`，新记录依次尝试 `layer_weight_0`、`layer_weight_1`。子图名为 `true_graph` 时还会先限定成 `true_graph_layer.weight`，再清理点号。
 
 若两个属性 tensor 具有相同 size、stride、dtype、device、底层 data pointer 和 storage offset，且没有启用运行时常量折叠，第二次登记直接返回第一份 `constant_name`。这不是比较数值相等：两份内容恰好相同但存储独立的 tensor 不会因此合并；同一 storage 上 offset 不同的 view 也不会合并。
+
+直接返回发生在三张表写入之前。因此 alias 属性复用旧名时，不会新增 constants 项，也不会把 alias 的原属性名另写进 `allocated_constant_name`；旧名仍保留首次登记属性的来源。`constant_reprs` 的字符串包含 device、dtype、size、stride 和 `hash(data)`；这里的 tensor hash 不是逐元素内容哈希。本方法只建立这张字符串表，Codegen 对它的消费不属于八个方法的控制流。
 
 实际命名状态为：
 
@@ -311,9 +338,16 @@ base[1:4]，同 storage 不同 offset -> layer_weight_0
 
 跨设备请求则由 `constant_name(name, cuda:1)` 创建实际 `.to(cuda:1)` 副本，并以类似 `name_cuda1` 的基础名重新登记。未启用运行时常量折叠时，后来同 storage 条件的登记可由前述去重逻辑找到已有记录；启用时这段去重循环按源码被跳过。当前环境未运行 CUDA 跨设备复制，这一段限于源码合同。
 
+`constant_name` 要求 name 已存在于 `self.constants`。不存在的 name 会在第一次 `self.constants[name]` 查询处抛 KeyError，尚未执行设备比较、复制或新常量登记。
+
+若 `name_cuda1` 已存在，重新登记仍经过同一个流程：新副本若实际满足 storage 身份条件便提前复用，否则用 `_0`、`_1` 后缀解决冲突。`constant_name` 没有“原名、目标设备 → 已有副本名”的缓存；连续两次请求同一目标设备都会再次执行 `.to()`，所以仅凭目标设备相同不能保证复用 `name_cuda1`。运行时常量折叠开启时，storage 去重循环整体跳过，同名登记选择新的不冲突名字。
+
+显式传入的建议名还必须是非空字符串。`name=None` 会生成默认名；`name=""` 则会在访问 `name[0]` 时抛 IndexError，此时三张表尚未写入。
+
 ## 用新情况检验理解
 
 1. 长度为 9 的一维常量不会内联，因为当前上限为 8；它进入 ConstantBuffer。
+   长度为 0 的一维常量满足同一条件，会进入小向量内联路径。
 2. `operator.getitem` 的第一个参数若是 Python tuple，直接由父 Interpreter 取项；若是一个 IR 多输出对象，则不满足这个分支，需要产品注册的相应 lowering。
 3. 一个未知普通 Python callable 既无 `_inductor_lowering_function` 标记、也不是 OpOverload，会在断言处失败，而不会悄悄生成 fallback。
 4. 两个数值完全相同、但分别分配的 3×4 tensor 具有不同 data pointer，名字去重不会把它们当成同一常量。

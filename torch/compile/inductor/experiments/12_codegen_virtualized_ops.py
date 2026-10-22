@@ -20,6 +20,7 @@ replay_number = 0
 
 original_scheduler_codegen = SchedulerNode.codegen
 original_block_call = LoopBodyBlock.__call__
+original_compile_to_module = GraphLowering.compile_to_module
 
 
 def short(value, limit=180):
@@ -77,6 +78,16 @@ def save_code(code):
     (OUT / f"virtualized_ops_{case_name}_output.py").write_text(code)
 
 
+def observed_compile_to_module(self):
+    module = original_compile_to_module(self)
+    events.append(
+        f"[{case_name}] module_load "
+        f"cache_key={self.cache_key} cache_path={self.cache_path} "
+        f"module_file={module.__file__} callable={module.call.__name__}"
+    )
+    return module
+
+
 def pointwise(x, y):
     return torch.relu(x + y) * 2
 
@@ -91,6 +102,8 @@ with config.patch({"force_disable_caches": True}), mock.patch.object(
     LoopBodyBlock, "__call__", observed_block_call
 ), mock.patch.object(
     GraphLowering, "save_output_code", save_code
+), mock.patch.object(
+    GraphLowering, "compile_to_module", observed_compile_to_module
 ):
     case_name = "pointwise"
     x = torch.tensor([-2.0, 1.0, 3.0])

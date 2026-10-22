@@ -16,7 +16,7 @@ IR operation 保存“怎样计算”。Scheduler 还需要附加只服务于全
 | `ExternKernel` | `ExternKernelSchedulerNode` | operation 已保存的 `get_read_writes()` |
 | no-op operation | `NopKernelSchedulerNode` | operation 已保存的 `get_read_writes()` |
 
-所以 FX 节点数、Lowering operation 数和 Scheduler 节点数不能互换。案例 `(x+1).sum(dim=1)*2` 的 FX 图包含多步数学运算，本次实际采集在 Scheduler 入口只有一个 `ComputedBuffer`：逐元素加法和乘法已经进入规约的计算体。
+所以 FX 节点数、Lowering operation 数和 Scheduler 节点数不能互换。在案例 `(x+1).sum(dim=1)*2` 中，FX 图包含多步数学运算，Scheduler 入口则只有一个 `ComputedBuffer`：逐元素加法和乘法已经进入规约的计算体。
 
 ## `ReadWrites` 是一项工作的读写清单
 
@@ -45,7 +45,7 @@ result = (x + 1).sum(dim=1) * 2
 
 这种带精确索引和迭代范围的记录叫 `MemoryDep`。它不仅说明“读 x”，还说明本循环如何访问 x；后面的融合和循环顺序判断会使用这些信息。
 
-## 三种依赖表达三种强度
+## 三种依赖分别记录什么
 
 ### `MemoryDep`：知道访问哪个位置
 
@@ -62,7 +62,7 @@ buf0 = torch.mm(x, weight)
 buf1 = torch.sin(buf0)
 ```
 
-本机 CPU 实际得到两个入口节点：
+这个 CPU 案例得到两个入口节点：
 
 ```text
 op0 ExternKernelSchedulerNode
@@ -84,6 +84,29 @@ op1 SchedulerNode
 
 创建节点时，`read_writes.reads` 已经存在，`unmet_dependencies` 初始取同一组读取，再删去已经可用的图输入和常量。
 
+先看一条完全由普通逐元素计算组成的链：
+
+```text
+op0: buf0 = x + 1
+  reads  = MemoryDep(arg0_1, c0, {c0: 8})
+  writes = MemoryDep(buf0,   c0, {c0: 8})
+
+op1: buf1 = buf0 * 2
+  reads  = MemoryDep(buf0, c0, {c0: 8})
+  writes = MemoryDep(buf1, c0, {c0: 8})
+```
+
+图输入 `arg0_1` 已在 `available_buffer_names` 中，所以它从 op0 的 `unmet_dependencies` 删除。`buf0` 是内部结果，op1 的未满足读取仍保留：
+
+```text
+op0.unmet_dependencies = {}
+op1.unmet_dependencies = {MemoryDep(buf0, c0, {c0: 8})}
+users[buf0]             = {op1}
+users[buf1]             = {OUTPUT}
+```
+
+`name_to_buf[buf0].defining_op` 指回 op0。于是 op1 中尚未满足的 `buf0` 读取有了明确生产者，形成 `op0 → op1`；后面的排序必须把 op0 放在 op1 前面。这里两端都是精确的 `MemoryDep`，依赖名字确定生产—消费关系，索引式则继续供融合等判断使用。
+
 在 mm 案例中，op0 读取的两个输入一开始就在 `available_buffer_names`，所以它们不是未满足依赖。op1 读取内部结果 `buf0`，因此保留：
 
 ```text
@@ -92,11 +115,13 @@ users[buf0]             = op1
 users[buf1]             = OUTPUT
 ```
 
-`compute_dependencies()` 遍历每个节点的读取，把当前节点登记为相应 buffer 的使用者。输出还会登记一个虚拟的 `OUTPUT` 使用者，防止最终结果被死节点删除。这里的边表达“op1 要等 buf0 的生产者”，是否把两项合成一个生成单元是 Q33 才处理的问题。
+`compute_dependencies()` 遍历每个节点的读取，把当前节点登记为相应 buffer 的使用者。输出还会登记一个虚拟的 `OUTPUT` 使用者，防止最终结果被死节点删除。
 
-## mutation 为什么需要两条额外关系
+在这条 mm→sin 链中，同样由 `name_to_buf[buf0].defining_op` 找到 extern op0。生产端的 `StarDep` 和读取端的 `MemoryDep` 精度不同，但相同的 buffer 名仍形成 `op0 → op1`。是否把两项合成一个生成单元由后面的融合阶段处理。
 
-沿用前篇案例：
+## mutation 会增加两类依赖记录
+
+看下面的旧值读取与写回：
 
 ```python
 old = x + 1
@@ -115,7 +140,7 @@ op1：读 arg1_1，写 buf1
 只看 op1 的数学循环，它读 y、写 buf1，与 op0 看似无关。但 `buf1` 最终覆盖 `arg0_1`，而 op0 需要旧的 `arg0_1`。`compute_dependencies()` 因而为 op1 增加：
 
 ```text
-StarDep(arg0_1)                  # 修改必须接在旧版本之后
+StarDep(arg0_1)                  # 记录被写回的目标版本
 WeakDep(buf0, mutating_buf=buf1) # 修改必须晚于先前读者 op0
 ```
 
@@ -128,7 +153,7 @@ mutation_renames = {'arg0_1': 'buf1'}
 mutation_real_name = {'buf1': 'arg0_1'}
 ```
 
-`StarDep(arg0_1)` 指向图输入，输入已可用，所以经过 `prune_deps()` 后不留在 `unmet_dependencies`；它仍保留在完整读取清单。`WeakDep(buf0)` 没有被满足，因此明确连接 op0 与 op1。后续读原名 `arg0_1` 时，依赖图会把它重命名为最新版本 `buf1`；生成代码仍通过 `mutation_real_name` 知道实际被写回的是原输入。
+`StarDep(arg0_1)` 记录写回目标；若目标由一个尚未完成的内部节点产生，它也会约束写回等待该生产者。本例的目标是已经可用的图输入，所以经过 `prune_deps()` 后，它不留在 `unmet_dependencies`，也不形成另一条 op0→op1 边。真正保护旧值读取的是未满足的 `WeakDep(buf0)`，它明确连接 op0 与 op1。后续读原名 `arg0_1` 时，依赖图会把它重命名为最新版本 `buf1`；生成代码仍通过 `mutation_real_name` 知道实际被写回的是原输入。
 
 由这条边可推出正确顺序：先用旧 x 算得 `old=[1,2,3]`，再把 y 写入 x，最终 x 为 `[9,9,9]`。若反过来，old 会错误地变成 `[10,10,10]`。
 
@@ -142,7 +167,7 @@ def read_after_mutation(x, y):
     return x * 2
 ```
 
-不能先验地断言乘法一定读取 mutation operation 的逻辑输出 buf1。当前 functionalization/Lowering 已知道 copy 后 x 的值就是 y，本次实际 Scheduler 入口为：
+这里进入 Scheduler 的后继乘法已经被改成直接读取 `y`，因此入口是：
 
 ```text
 op0：读 arg1_1(y)，写 buf0 = y*2       # 普通输出
@@ -158,9 +183,9 @@ users[buf0] = OUTPUT
 users[buf1] = OUTPUT
 ```
 
-运行得到输出 `[8,10,12]`，调用者 x 更新为 `[4,5,6]`。这里的两个 OUTPUT 含义不同：buf0 是普通函数结果，buf1 代表必须保留的输入更新。版本表仍登记“原名 arg0_1 的最新逻辑版本是 buf1”，但这个具体图没有一个后继计算用原名来检验重命名读取；该一般机制来自 `compute_dependencies()` 的源码，不能伪装成本例实测。
+运行得到输出 `[8,10,12]`，调用者 x 更新为 `[4,5,6]`。这里的两个 OUTPUT 含义不同：buf0 是普通函数结果，buf1 代表必须保留的输入更新。版本表仍登记“原名 arg0_1 的最新逻辑版本是 buf1”；当前图的后继计算直接读 `y`，没有节点再读取这个逻辑新版本。
 
-这与旧读案例的决定因素不同：是否需要 WeakDep 取决于 mutation 前是否已经登记了必须完成的旧版本 reader，不取决于 Python 源码里是否在 copy_ 后写了一条算式。上游 functionalization 可能已经把那条算式改写为直接读取新值来源。
+是否需要 WeakDep，取决于 mutation 前是否已经登记了必须完成的旧版本 reader。这个案例没有旧 `x` reader，因此不需要 WeakDep。
 
 ## 别名为什么共用使用者集合
 
@@ -181,7 +206,7 @@ users[buf1] = OUTPUT
 
 改变某个消费者的布局会改变 `MemoryDep.index`，但不会取消它对 `buf0` 生产者的依赖。改变访问方式与改变执行先后，是依赖记录提供给后续阶段的两类不同信息。
 
-若第一个消费者经 view 名读取、第二个经 base 名读取，而这两个名字已声明 alias，mutation 仍必须看见两名消费者。若其中一个消费者随后被 DCE 删除，对应 weak 顺序边才可能在 Q32 的裁剪阶段消失；Q31 只负责把当前已知读者完整登记出来。
+若第一个消费者经 view 名读取、第二个经 base 名读取，而这两个名字已声明 alias，mutation 仍必须看见两名消费者。若其中一个消费者随后被死节点删除，对应 weak 顺序边才可能在依赖裁剪时消失；本篇只负责把当前已知读者完整登记出来。
 
 ## 继续阅读实现
 

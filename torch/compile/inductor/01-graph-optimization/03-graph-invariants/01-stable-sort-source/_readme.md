@@ -103,3 +103,16 @@ empty_graph=ok
 - **职责边界**：排序只移动现有 Node；meta、recompile、lint 和 DCE 各有对照但不算作本函数效果。失败也不保证回滚已移动节点。
 
 Q131 第五轮叶子复核完成。下一项 Q132：FakeTensorUpdater 的增量 meta 更新完整源码与传播状态。
+
+## 第一次隔离冷读整改
+
+- 报告：`../../../../inductor-fresh-reader-review/61_STABLE_SORT_COLD_REVIEW_1.md`，评级 C。
+- 冷读发现原文稳定性定义过强：`A,B,X` 且 A 依赖 X 时实际得到 `B,X,A`，并不保留 A/B 的原序。
+- 本轮将保证收窄为“合法输入不动、同一 dependency 的 waiter 按登记顺序重查”；明确三态针对 waiting value 而非 key；解释 `Node.append` 的摘除/插入语义；展开深倒序链前六轮；加入 `[y,bad,x]` 先移动后因外部依赖断言的非事务案例。
+
+## 第二次隔离冷读验收
+
+- 报告：`../../../../inductor-fresh-reader-review/62_STABLE_SORT_COLD_REVIEW_2.md`，评级 A。
+- 读者可独立推演正常、重挂、多 waiter、深链、合法图、外部依赖、环和失败前部分移动，并能用 `A,B,X` 反例准确界定 stable。
+- 必须整改项：无。
+- 当前状态：Q131 通过隔离冷读验收；下一篇为同层 Q132。

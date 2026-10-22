@@ -1,5 +1,14 @@
 # 特殊调用与控制流篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/10_SPECIAL_CALLS_REVIEW.md`，73/73 个语义单元。
+- 父篇按实现选择、fallback、控制流三类同层 operation 重写；每类只讲 Lowering 输入、动作、operation 出口和 Scheduler 接口。
+- template 停在候选/TemplateBuffer/MultiTemplateBuffer；Scheduler 的 epilogue 选择和 Codegen render 不再提前展开。
+- fallback/cond/while 停在编译期接口，不展开 wrapper 运行时语句和 buffer reuse。
+- 为 while 增加 carried value 0→1→2→3 的具体演进，与 mm、histc、cond 案例保持同层深度。
+- 删除作者取证、完成宣告和内部类/后端目录清单。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q24，第 2 层，父项 Q20；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q241 叶子的源码回修。

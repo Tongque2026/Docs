@@ -1,246 +1,251 @@
-# 后端分派：Scheduler 按边界提交生成工作
+# 后端分派：把调度节点变成有顺序的生成请求
 
-[上一项：融合](../03-fusion/README.md) · [返回 Scheduler](../README.md) · [返回总览](../../README.md) · 下一项：Codegen 中的虚拟化操作
+[返回 Scheduler](../README.md) · [返回总览](../../README.md)
 
-融合完成后，Scheduler 已有一列最终节点。最后一项职责不是亲自写 C++ 或 Triton，而是维护当前 device 与 backend 状态，遇到边界时提交已积累的工作，再调用对应的生成函数。例如 CPU 普通节点交给 `CppScheduling.codegen_node(node)`；已有函数调用则先让 CPU 生成器写完当前循环，再由 wrapper 记录该调用。
+实现叶子：[设备切换、flush 与节点出口](01-dispatch-source/README.md)
+
+融合结束后，Scheduler 手里已有一列顺序合法的节点。每个节点记录自己的 device、计算种类、输入结果、输出结果，以及哪些输入在自己这里最后一次使用。
+
+后端分派沿这列节点走一遍。普通计算交给对应 device 的 backend 形成 kernel；已有函数调用直接写进 wrapper；同时，Scheduler 记录后面的生成步骤已经可以引用哪些结果、已经处理过哪些 operation，以及哪些数据可以安排释放。
+
+这里发生的都是**生成代码**。`completed` 表示某项 operation 已经走过分派，不表示 CPU 或 GPU 已经运行完它。
+
+## backend 积累 kernel，wrapper 排列调用
+
+device backend 接收普通计算。例如 CPU 默认使用 `CppScheduling`。它可以把连续且兼容的节点暂存在一个 kernel group 中，等到边界出现时再结束这组 kernel。
+
+wrapper generator 写最终的调用顺序：准备结果空间、调用生成的 kernel、调用 ATen 等已有函数，以及在合适的位置写释放代码。
 
 ```text
-最终 scheduler nodes
-       │
-       ├─ 选择/复用 device backend
-       ├─ device、extern、template 边界前 flush
-       ├─ 按节点类型调用对应的 codegen 函数并传入当前节点
-       ├─ 更新 available buffers 与 completed operations
-       └─ backend 主动请求或遍历结束时 flush
-       │
-       ▼
-kernel 定义 + wrapper 中的分配、调用、释放和 device guard
+普通节点 A ─┐
+普通节点 B ─┴─> CPU backend 的当前组 ──flush──> kernel AB 的定义和调用
+
+extern 节点 C ───────────────────────────────> wrapper 中的已有函数调用
 ```
 
-本篇讲清 Scheduler 怎样递交工作；backend 内部怎样把循环翻译成具体指令，从 Q41 开始展开。
+把 CPU 普通节点交给 `CppScheduling` 时，kernel 可能还没结束。`flush()` 才会让它提交当前组，然后把当前积累的释放请求交给 wrapper。提交后，旧组结束；下一个 CPU 普通节点从空组继续。其他 backend 不一定积累组；当前 CUDA SIMD backend 在一次 `codegen_node` 中直接生成并调用 kernel，也在该调用之后处理释放请求。
 
-## device type 先映射到一组 backend 能力
+以下情况会在继续处理前提交当前组：
 
-`codegen.common` 维护 `device_codegens` 注册表，每个 device type 对应：
+- 节点换到另一 device；
+- 当前节点是 extern 或 template；
+- backend 在接收一个节点后报告当前组已满；
+- 所有节点遍历完毕。
 
-- 一个 Scheduling 实现，负责 kernel 级生成、融合能力和 flush；
-- 一个 Python wrapper 生成类；
-- 可选的 C++ wrapper 生成类。
+Scheduler 为每个完整 device 缓存一个 backend。开始时 `current_device=None`，所以第一个 CPU 节点会触发一次 `None→CPU` 的 flush。此时还没有 backend 工作，也没有释放请求，因而这次 flush 不生成调用。
 
-当前内置注册的主路径是：
+## 每访问一个节点，状态按固定顺序改变
 
-| device type | Scheduling 选择 | wrapper |
+理解后面的案例需要三份编译期状态：
+
+| 状态 | 保存什么 | 何时改变 |
 | --- | --- | --- |
-| CPU | 配置为 `cpp` 时由 `CppScheduling` 生成 C++ 循环；若用户启用 Halide 后端，则改由 Halide 的调度器生成对应代码 | `WrapperCodeGen` / `CppWrapperCpu` |
-| CUDA | `CUDACombinedScheduling` 在 Triton、模板等 CUDA 路径间分派；启用 Halide 时也可改走 Halide 调度器 | `WrapperCodeGen` / `CppWrapperCuda` |
-| XPU | `TritonScheduling` | `WrapperCodeGen` |
-| 已注册 PrivateUse1 | PyTorch 为第三方设备预留的设备类型；扩展必须注册自己的 Scheduling 与 wrapper 生成类 | 由扩展提供 |
+| `available_buffer_names` | Scheduler 建立节点时用来删去“结果已经存在”的未满足依赖；进入分派后继续累计已经越过的结果名 | 节点分派后加入该节点的结果名；本轮分派中不删除 |
+| `completed_operations` | 已经走过分派的 operation 名；生成器决定原地复用时据此排除已经处理完的使用者 | 节点分派后加入该节点的 operation 名；本轮分派中不删除 |
+| `buffer_names_to_free` | 已到最后一次使用、等待 `free_buffers()` 检查的候选名字 | 分派当前节点前加入；`free_buffers()` 检查后清空 |
 
-`Scheduler.get_backend(device)` 第一次请求某个规范化 device 时调用 `create_backend()`，随后缓存在 `self.backends[device]`。这里的 key 是完整 `torch.device`，不是只有字符串 `"cpu"` 或 `"cuda"`。创建时还把 device 信息登记到图中；不支持的 device type，以及源码列出的无可用 Triton GPU 情况会在这里失败，而不是静默改用 CPU。
-
-CPU pointwise 实验实际记录：
+对本篇主案例采用的 CPU C++ 普通节点，顺序是：
 
 ```text
-create_backend device=cpu type=CppScheduling
+1. 如果 device 或节点身份要求边界，先 flush 旧组
+   └─ backend 提交旧组；free_buffers() 交付旧 pending，并清空 pending
+2. pending 加入当前节点的 last_usage
+3. backend.codegen_node(node)：逐个成员决定原地复用，mark_run 安排输出空间，再把生成工作放进当前组
+4. available 加入当前节点的结果名
+5. completed 加入当前节点的 operation 名
+6. 若 backend 报告组已满，再 flush 当前组并清空 pending
 ```
 
-同一份 Scheduler 后续反复请求 CPU backend 时复用该对象，因为其中保存着尚未 flush 的 kernel group。
+CPU C++ 普通节点在第 3 步已经让 wrapper 安排输出的分配或复用，但读取这些输入的 kernel 调用还没有写出，所以此时不能处理释放候选。等组被提交后再调用 `free_buffers()`，wrapper 中的顺序才会是“准备输出空间，调用 kernel，然后释放它最后读取的数据”。
 
-## 为什么第一个节点之前也会 flush
+`free_buffers()` 会逐项过滤候选：图输出不能释放；已经被删除或处理过的名字不重复生成；没有独立可释放存储的逻辑名也不会产生释放语句。检查结束后 pending 集合仍会清空。因此 pending 中出现 `buf0`，只表示它到达最后使用并要接受检查，不保证 wrapper 一定出现一行 `free(buf0)`。
 
-`_codegen()` 遍历每个最终节点。对于有 device 的非 nop 节点，只要满足任一条件就先 `flush()`：
+extern 的前两步相同，但第 3 步不同：它直接把已有函数调用写进 wrapper，随后立即调用 `free_buffers()`。因此 extern 当前节点登记的 pending 不必等下一次 Scheduler flush；已有函数调用已经写在它们前面。
 
-```text
-节点 device != current_device
-或节点是 extern
-或节点是 template
-```
+`available` 和 `completed` 跨 flush、跨 device 保留。flush 结束的是 backend 当前组，并清空 pending；它不会让 Scheduler 忘掉已经分派的结果和 operation。它们是 Scheduler 的建图与生成记录，不是 wrapper 中某个结果能否被读取的运行时门禁：`available` 的直接依赖裁剪已经在建立调度节点时完成，当前 `_codegen` 循环只继续维护这份集合；`completed` 还会被后续节点的原地复用判断读取。节点依赖和顺序在进入分派前已经确定，backend 按节点 IR 中的结果名生成读写。
 
-初始 `current_device=None`，所以第一个 CPU 节点也满足 device 改变。此时 flush 的组为空，不会生成空 kernel；它先清理所有 backend 的待提交状态和可释放 buffer，再把 `current_device` 设为 CPU。
+## 完整案例：pointwise → mm → sin
 
-pointwise 案例是 Q33 的两成员融合节点：
-
-```text
-visit op0_op1, current_device=None
-scheduler.flush
-  cpp.flush scheduled_nodes=[]
-dispatch cpp.codegen_node(op0_op1)
-遍历结束 scheduler.flush
-  cpp.flush scheduled_nodes=[op0, op1]
-```
-
-第一次 flush 建立干净的 device 边界；`codegen_node` 把两个成员加入 C++ `kernel_group`；末尾 flush 才把该组变成 kernel 定义和 wrapper 调用。
-
-## 普通节点、extern、template、foreach 分别去哪里
-
-当前分派表是：
-
-| 最终节点 | Scheduler 调用 | 交付含义 |
-| --- | --- | --- |
-| `SchedulerNode` / `FusedSchedulerNode` | `backend.codegen_node(node)` | 生成一个普通或预融合循环组 |
-| template 节点或带 epilogue 的融合组 | `backend.codegen_template(template, epilogues)` | 第一个成员是模板主体，其余成员作为 epilogue |
-| `ExternKernelSchedulerNode` | `Scheduler.codegen_extern_call(node)` | 让 IR extern 直接向 wrapper 写调用 |
-| foreach/combo 节点 | `SIMDScheduling` 或 `CUDACombinedScheduling.codegen_combo_kernel(node)` | 多个子 kernel 由组合生成器安排 |
-| `NopKernelSchedulerNode` | `node.mark_run()` | 更新分配/运行状态，不生成普通 kernel |
-
-分派顺序很重要：template 可能也是融合节点，必须先命中 template；extern 不走普通 backend loop codegen；foreach 只接受具备 SIMD/combo 接口的后端。
-
-## extern 为什么切断正在积累的 kernel group
-
-混合案例：
+看下面的计算：
 
 ```python
-pointwise_result = realize(x + 1)
-mm_result = torch.mm(matrix, weight)
-return pointwise_result, torch.sin(mm_result)
+pointwise = matrix + 1
+product = torch.mm(pointwise, weight)
+output = torch.sin(product)
 ```
 
-当前 CPU 最终顺序是：
+实验用 `realize` 要求 `matrix + 1` 在进入 mm 前成为有名字的结果。当前 CPU 路径形成四个 operation：
 
 ```text
-op0_op1  FusedSchedulerNode       # pointwise 分支
-op2      ExternKernelSchedulerNode # mm
-op3      SchedulerNode             # sin
+op0：matrix + 1                         写 buf0
+op1：realize 读取 buf0，写具名结果       写 buf1
+op2：extern mm(buf1, weight)            写 buf2
+op3：sin(buf2)                          写 buf3
 ```
 
-实际调用时间线：
+op0 和 op1 已融合成最终节点 `op0_op1`。在 Scheduler 的逻辑记录中，`buf0` 是加法结果，`buf1` 是 realize 后交给 mm 的结果。生成的 wrapper 最终让 `buf1` 复用 `buf0` 的存储，所以运行程序不必真的保留两块相同形状的空间；但分派时两项 operation 和两个结果名仍然存在。
+
+两个函数输入在生成代码中名为：
 
 ```text
-op0_op1 -> cpp.codegen_node，暂存在 kernel_group
-
-到 op2 extern：
-    scheduler.flush
-      cpp.flush [op0, op1]       # 先提交此前普通循环
-    codegen_extern_call(op2)     # wrapper 写 mm 调用
-
-到 op3：
-    cpp.codegen_node(op3)，进入新的 kernel_group
-
-遍历结束：
-    cpp.flush [op3]              # 提交 sin kernel
+arg0_1 = matrix
+arg1_1 = weight
 ```
 
-这保证 wrapper 的实际调用顺序与依赖一致：先得到 pointwise 输出；调用 mm 得到 `buf2`；随后 sin kernel 才读取它。即便 extern 与前一节点 device 都是 CPU，extern 条件仍强制 flush，因为它不能被留在同一个普通 C++ loop group 中。
-
-`codegen_extern_call()` 会在一个临时 `Kernel` handler 下决定原地复用并标记输出分配，然后让 `ir.ExternKernel.codegen()` 写 wrapper 调用，最后处理可释放 buffer。
-
-fallback 也属于 extern 分派。`histc` 实验实际依次访问 `FallbackKernel` 和取结果的 `MultiOutput`，两者都是 `ExternKernelSchedulerNode`，因此每个节点前都有 extern flush；数值结果为 `[1,2,0,1]`。
-
-## 同一个 mm 请求可以交成 extern，也可以交成 template
-
-实验开启 CPU max autotune 并只保留 CPP GEMM backend，但把 mm 权重作为运行时输入。当前 `use_cpp_packed_gemm_template()` 要求第二个矩阵是 module buffer，本例没有合法 CPP choice，于是 Lowering 发出警告并回退到 ATen extern：
+初始状态为：
 
 ```text
-op0 ExternKernelSchedulerNode(aten.mm)
-op1 SchedulerNode(relu)
+group = 空
+available = {arg0_1, arg1_1}
+completed = {}
+pending = {}
 ```
 
-Scheduler 随后只能按 extern→普通节点分派，不会在 Q34 阶段把它重新变成 template。这说明算法候选选择属于 Q24，Q34 消费的是已经确定的节点身份。
+### 访问融合节点 `op0_op1`
 
-为了实际进入模板分支，第二个案例把 64×64 单位矩阵登记成模块 buffer，并在 inference/no-grad 下开启 freezing。此时权重成为 `constant0`，最终调度节点是包含两个成员的 `op0_op1`：
+它是第一个 CPU 节点。`None→CPU` 先触发空 flush，三份集合不变。然后执行普通节点的固定顺序：
+
+- `op0_op1.last_usage = {arg0_1, buf0}`：matrix 只在加法中读取，buf0 只在组内被 op1 读取；二者加入 pending。
+- backend 遍历 op0、op1，决定输出是否复用，并用 `mark_run()` 让 wrapper 安排 buf0、buf1 的空间；随后当前组变成 `{op0, op1}`。
+- available 加入 `buf0、buf1`；completed 加入 `op0、op1`。
+
+此时完整快照是：
 
 ```text
-op0：CppTemplateBuffer 完成 mm
-op1：ComputedBuffer 完成 relu epilogue
+group = {op0, op1}
+available = {arg0_1, arg1_1, buf0, buf1}
+completed = {op0, op1}
+pending = {arg0_1, buf0}
 ```
 
-实际分派记录为：
+pending 还没有交给 wrapper，因为产生并最后读取它们的普通 kernel 仍在当前组中。
+
+### 访问 extern `op2`
+
+extern 是提交边界。Scheduler 先 flush `{op0, op1}`：backend 写出产生 `buf1` 的 pointwise kernel 及其调用；随后检查 `arg0_1、buf0` 的释放候选并清空 pending。当前生成结果中 buf1 已复用 buf0 的空间，因此 buf0 不需要另一条独立释放语句；matrix 输入 `arg0_1` 的释放排在 pointwise 调用之后。`available` 和 `completed` 不变。
+
+接下来才处理 op2 自己：
+
+- `op2.last_usage = {arg1_1, buf1}`，因此 pending 先变为这两个名字；
+- wrapper 写 `mm(buf1, arg1_1) → buf2`；
+- extern 路径立即检查 `arg1_1、buf1` 的释放候选，把需要的释放写到 mm 调用之后，并清空 pending；
+- available 加入 `buf2`，completed 加入 `op2`。
 
 ```text
-visit op0_op1 type=FusedSchedulerNode
-先做一次空 cpp.flush
-dispatch cpp.codegen_template op0 epilogues=['op1']
+group = 空
+available = {arg0_1, arg1_1, buf0, buf1, buf2}
+completed = {op0, op1, op2}
+pending = {}
 ```
 
-`CppScheduling.codegen_template()` 接收主模板与 epilogue 列表，渲染模板源码，在同一 kernel context 中对二者执行 `mark_run()`，定义 kernel 并写 wrapper 调用，随后兑现可释放 buffer。这里与普通 `codegen_node()` 的另一个区别是：模板调用当场完成定义和调用，不把成员留到 `CppScheduling.kernel_group` 等下一次 flush；所以末尾的 `cpp.flush scheduled_nodes=[]` 是空的。
+集合仍保留旧名字，是因为它们记录“生成过程中曾经可引用或已处理”，不是当前仍存活的运行时 buffer 清单。是否释放由 wrapper 中已经写下的语句表达。
 
-## 每个节点交付后更新两份状态
+### 访问普通节点 `op3`
 
-普通分支分派完成后，Scheduler 执行：
+op3 与 op2 都在 CPU 上，且 op3 不是 extern 或 template，所以没有前置 flush：
+
+- `op3.last_usage = {buf2}`，pending 变为 `{buf2}`；
+- backend 判断 sin 可以让输出 buf3 原地复用 buf2 的空间；wrapper 先写下 `buf3 = buf2` 这项复用安排，再把 op3 放入新的当前组；
+- available 加入 `buf3`，completed 加入 `op3`。
+
+遍历结束触发最终 flush。backend 提交原地更新 buf3 的 sin kernel，随后检查 `buf2` 的释放候选。buf2 的空间已经转交给 buf3，而 buf3 是函数输出，因此这里不会再释放同一块空间；检查只清空 pending。
 
 ```text
-available_buffer_names += node.get_buffer_names()
-completed_operations   += node.get_operation_names()
+group = 空
+available = {arg0_1, arg1_1, buf0, buf1, buf2, buf3}
+completed = {op0, op1, op2, op3}
+pending = {}
 ```
 
-混合案例在进入 extern op2 前已经是：
+wrapper 中与本例有关的空间、调用和逻辑名结束顺序是：
 
 ```text
-available 包含 buf0、buf1
-completed = [op0, op1]
+分配 buf0；让 buf1 复用 buf0
+pointwise kernel(matrix → buf1)
+结束 matrix 的输入引用
+    → 分配 buf2
+      mm(buf1, weight → buf2)
+      结束 weight 和 buf1 的引用
+        → 让输出名 buf3 接管 buf2 的空间
+          sin kernel 原地更新 buf3
+          返回 buf3；这块输出空间不释放
 ```
 
-op2 完成后，进入 op3 时：
+“结束逻辑名引用”与“释放物理存储”不是一回事。buf0 的空间继续由 buf1 使用，buf2 的空间继续由 buf3 使用；只有 `free_buffers()` 检查后确认不再被输出或复用关系持有的存储，才会得到真正的释放语句。
+
+## 不同节点身份改变第 3 步的出口
+
+所有节点都先经过“必要时提交旧组”和“登记当前 last_usage”。随后根据身份选择出口：
+
+| 节点身份 | 分派动作 | 当前节点的 pending 何时清空 |
+| --- | --- | --- |
+| CPU C++ 普通或融合节点 | `CppScheduling.codegen_node(node)`，进入当前组 | 下一次 flush |
+| CUDA SIMD 普通或融合节点 | SIMD backend 在 `codegen_node` 内生成并调用 kernel | kernel 调用写完后由 backend 立即清空 |
+| extern | wrapper 写已有函数调用 | 调用写完后立即 `free_buffers()` |
+| template 或带 epilogue 的模板融合组 | backend 生成并调用模板 kernel | 模板调用写完后立即 `free_buffers()` |
+| foreach/combo | backend 生成并调用组合 kernel | 组合调用写完后立即 `free_buffers()` |
+| nop | `mark_run()`，不生成 kernel | 自身不清空；等待后续分支内的 `free_buffers()` 或之后的 flush |
+
+身份在进入这次遍历前已经确定。Scheduler 在这里不重新比较实现候选。template 的主体怎样渲染、combo 怎样组成多个子 kernel，属于 Codegen；本层只关心它们已经直接写出调用，因此可以接着交付当前 pending。
+
+foreach/combo 身份本身不会触发 Scheduler 的前置 flush。它只允许交给 SIMD 或 CUDA combined backend；这些 backend 的普通节点和 combo 都在各自的生成调用内写出 kernel 调用并清空 pending，没有一个像 CPU `CppScheduling.kernel_group` 那样等待提交的旧组。于是同一 backend 上的普通 A 后接 combo B 时，A 的调用已在处理 A 时写入 wrapper，B 再写在后面。
+
+例如 SIMD 普通 A 读取 `x` 写 `a`，随后 combo B 的两个子节点读取 `a、y` 并写 `b、c`。A 处理后，wrapper 已有 `kernel_A`，pending 已清空，available 加 `a`、completed 加 A。B 再登记自己的 last usage，写组合调用并清空 pending；返回后，`get_buffer_names()` 汇总两个子节点的 `b、c` 加入 available，`get_operation_names()` 汇总两个子 operation 加入 completed。
+
+`mark_run()` 与 `completed_operations` 不是同一份记录。前者逐个处理 operation 的输出：普通输出会调用 wrapper generator 的 allocation 接口，原地复用输出会调用相应的复用接口；后者只是 Scheduler 在这轮生成中维护的“已经越过分派位置”的名字集合。合法执行顺序在进入本篇前已经排好，后续节点不会因为一个名字没进入 completed 就跳过已经生成的工作。
+
+每条分支返回后，Scheduler 都更新 available 和 completed。template 有一个当前实现的特例。假设融合节点由模板主体 `opT` 和 epilogue `opE` 组成，分别写 `bufT` 和 `bufE`：template backend 在同一次生成中对二者调用 `mark_run()`，所以 wrapper 收到 `bufT`、`bufE` 的分配或复用安排；随后写出的同一个模板 kernel 调用会产生最终的 `bufE`。`_codegen` 返回后只按拆出的模板主体更新公共集合，因此 available 加入 `bufT`，completed 加入 `opT`，不会在这里再加入 `bufE`、`opE`。
+
+若后继节点 `opN` 读取 `bufE`，它的依赖和位置在本轮分派开始前已经确定；backend 从 `opN` 的 IR 读取 `bufE` 这个名字生成代码，不会重新查询 available 来决定是否准许读取。wrapper 也已经在 template backend 内收到 `bufE` 的空间安排和生产调用。因此 available 漏记 epilogue 结果不会丢掉 `bufE` 的分配、生产或后继读取。
+
+completed 漏记 `opE` 会影响后续原地复用判断：当某个候选输入的 users 中仍列着 `opE` 时，判断可能把它当成尚未处理的使用者，从而放弃本可进行的一次存储复用。这是保守地少复用，不是提前覆盖仍需读取的数据；template kernel 已经生成的 epilogue 也不会因此重复分派。
+
+例如后继 `opN` 正在判断能否原地复用输入 `old`，而 `old.users={opE, opN}`，两项都允许原地使用。判断会删掉名字已在 completed 中的 users：
 
 ```text
-available 又包含 buf2
-completed = [op0, op1, op2]
+若 completed 含 opE：remaining_users={opN}
+    → 只剩当前 opN，可以继续检查并选择复用
+
+当前 template 特例下 completed 不含 opE：remaining_users={opE, opN}
+    → 仍有两个使用者，不选择复用，为 opN 另行安排输出空间
 ```
 
-op3 分派后再加入 `buf3` 和 op3。普通融合节点的 `get_buffer_names()` 和 `get_operation_names()` 包含所有成员，因此一次加入整个普通融合组。这些集合让后端和 wrapper 知道哪些结果已经可以引用，也参与原地复用、断言与调试状态；它们不是运行时事件计数器。
+第二条路径多保留一块空间，却不会覆盖 `old`；所以它影响复用机会，不影响计算顺序和结果。
 
-template 分支有一个必须单独看的当前实现差异。`_codegen()` 先执行：
+nop 的作用是完成不需要 kernel 调用的 IR 工作，例如只重新安排已有输入存储的 concat。假设 nop 读取 `part0、part1` 并登记结果 `joined`：`mark_run()` 让 wrapper 安排 `joined` 的存储，分支返回后 available 加 `joined`、completed 加 nop 的 operation 名；`part0、part1` 若属于该节点的 last usage，则留在 pending。这个分支自己不调用 `free_buffers()`，所以这些名字等待下一个清理点：若后继是 extern、template、SIMD 普通节点或 combo，就由那个生成入口末尾的 `free_buffers()` 一并检查；若后继是 CPU C++ 普通节点，则继续积累到下一次边界或最终 flush。这里并不存在一个尚未提交的 nop kernel。
 
-```python
-node, *epilogue = node.get_nodes()
-backend.codegen_template(node, epilogue)
-```
+backend 也可以在接收普通节点后用 `ready_to_flush()` 报告“当前组已满”。Scheduler 把这个返回值当作可观察信号；一旦为真，立即执行与其他 flush 相同的“提交当前组、交付并清空 pending”。本篇不需要根据节点形状自行猜 backend 的资源上限。
 
-局部变量 `node` 从原来的融合组重新绑定为 template 主节点。后面的两个集合也就按这个主节点更新。冻结模板案例在调用结束后实际是：
+## device 改变时，当前节点仍在 flush 之后登记
+
+假设已经处理 CPU 普通节点 A、B，下一项是 CUDA 普通节点 C：
 
 ```text
-available：原有 arg1_1、constant0，再加入 buf0
-completed：加入 op0
+处理 A、B
+    → CPU group={A,B}，pending 保存 A、B 的最后使用
+看到 C 的 device 不同
+    → flush CPU：提交 {A,B}，交付并清空旧 pending
+    → wrapper 退出旧 guard、进入 CUDA guard
+    → 登记 C.last_usage
+    → 把 C 交给 CUDA backend；当前 SIMD 路径当场写出 C 的 kernel 调用并清空 C 的 pending
+    → 更新全局 available/completed
+遍历结束
+    → 退出 CUDA guard
+    → 最终 flush：处理各 backend 的剩余状态；当前 SIMD 路径没有尚未提交的 C 组
 ```
 
-epilogue `op1` 并没有因此漏算：`CppScheduling.codegen_template()` 已在内部对 `[op0, op1]` 都调用 `mark_run()`，而模板生成的最终代码包含 relu。只是不能把“成员都已生成”误写成“Scheduler 的 available/completed 集合也加入全部模板成员”。
+device 切换发生在登记当前节点 C 的 `last_usage` 之前。因此旧 device 的 flush 不会误处理 C 的释放请求。available 和 completed 是整个遍历共享的集合，不会因为换 backend 而清空。当前 CUDA SIMD backend 在 guard 已进入后直接写 kernel 调用，所以遍历末尾退出 guard 时，没有一组尚未写出的 CUDA 普通调用留给最终 flush。
 
-进入节点之前，`enter_context()` 还会从成员的 FX origins 中选图顺序最靠后的 origin，交给 wrapper 建立源码/调试上下文。这样融合节点生成的 wrapper 行仍能追溯到用户图位置。
+guard 也是 wrapper 中将来执行的上下文代码；编译器此刻没有真的进入 GPU。
 
-## `last_usage` 怎样在提交边界兑现
+## 改变条件后重新推演
 
-访问一个节点时，Scheduler 先把该节点的 `last_usage` 加入 `buffer_names_to_free`。普通 C++ `codegen_node` 可能只是积累循环，不能立刻释放；`Scheduler.flush()` 会：
+把主案例中的 extern mm 换成与前后节点兼容的 CPU 普通节点，并先固定 `ready_to_flush()` 始终为 false。访问它之前不再强制 flush：`{op0, op1}` 继续留在当前组，旧 pending `{arg0_1, buf0}` 继续等待；随后并入 mm 的 `last_usage={arg1_1, buf1}`，再并入 sin 的 `last_usage={buf2}`。最终 flush 一次提交整组，并交付 `{arg0_1, buf0, arg1_1, buf1, buf2}`。
 
-1. 调用所有已创建 backend 的 `flush()`，把积累的 kernel 和调用写完；
-2. 调用 `free_buffers()`，为真正可释放的 buffer 生成释放动作；
-3. 清空 pending-free 集合。
+再只改变一个条件：若 backend 在接收普通 mm 后让 `ready_to_flush()` 返回 true，Scheduler 就在 mm 分派后提交 `{op0, op1, op2}`，交付并清空当时的 pending；sin 随后从空组开始，在最终 flush 时单独提交并交付 `{buf2}`。这样，两条轨迹的差异只来自一个明确的 backend 返回值。
 
-混合案例中，pointwise 节点访问后 pending-free 包含其中间结果与输入；到 extern 前 flush 完 C++ 组后集合清空。extern 自己又处理其输入最后使用。op3 的 `buf2` 最后使用则在末尾 flush 后清空。
+把 op2 移到另一 device。处理顺序变为：先 flush 旧 CPU 组和旧 pending，切换 guard，再登记 op2 自己的 last_usage，最后交给新 device 的生成入口。extern 身份还会使 op2 的调用写完后立即清空它自己的 pending。
 
-因此 Q32 的 `last_usage` 到这里才转成 wrapper 释放安排，并且释放不会越过仍未提交的 kernel。
+如果 `buf1` 同时是函数输出，`compute_last_usage()` 会从图输出名开始反向计算仍需保留的结果，因此不会把这份输出当作可以在 mm 后释放的普通中间值。分派循环只消费已经算好的 `node.last_usage`；它不会在这里重新决定输出能否释放。
 
-## backend 也可以主动要求 flush
-
-节点状态更新后，Scheduler 查询 `backend.ready_to_flush()`。CPU `CppScheduling` 在累计参数数超过保守上限时设置该标志；Scheduler 随即 flush，避免继续扩大一个 C++ kernel group。SIMD/Triton 后端也可按自己的资源和生成策略实现该接口。
-
-不论中途是否触发，遍历结束总会执行最后一次 flush，空组安全地不产生 kernel。
-
-## device guard 只在需要的 device 上生成
-
-device 改变时，Scheduler 先退出旧 device guard，再进入新 device guard。`device_need_guard(device.type)` 决定该类型是否需要 guard；CPU 实验没有生成 guard。对于需要 guard 的 CUDA 等设备，wrapper 入口形如：
-
-```text
-退出旧 device 上下文（若有）
-进入新 device index 的上下文
-在其中取得/使用对应 stream 并发出调用
-```
-
-遍历结束时，Scheduler 先发出“退出当前 device guard”的请求，再要求各 backend 把尚未输出的工作 flush 到 wrapper。这里描述的是生成器接收请求的顺序；最终生成代码怎样把缓冲内容放进 guard 作用域，由 wrapper 生成器负责。阅读这一层时只需记住：设备切换前会 flush 旧设备工作，遍历结束也一定会 flush，因而没有节点会留在 backend 的暂存组里。
-
-## 用新节点序列推算
-
-假设最终顺序是：CPU 普通 A、CPU 普通 B、CPU extern C、CPU 普通 D、CUDA 普通 E。
-
-可以推出：
-
-1. A 前因 `None→CPU` 做一次空 flush；A、B 可在同一 CPU backend group 中积累。
-2. C 前即使 device 不变也 flush A、B；C 直接写 extern 调用。
-3. D 开始新的 CPU group。
-4. E 前因 `CPU→CUDA` flush D，再进入 CUDA device guard，交给 CUDA backend。
-5. E 完成后退出 guard，最后 flush CUDA backend 与待释放 buffer。
-
-能按这条规则画出调用顺序，就已经掌握 Scheduler 怎样把全局计划交到不同 codegen 后端。
-
-## 继续阅读实现
-
-[Backend 分派循环源码：设备切换、flush 与节点出口](01-dispatch-source/README.md)
+面对一列新节点，可以逐项套用同一个顺序：先看当前节点是否要求在它之前 flush；再登记当前节点的 `last_usage`；按身份生成；更新 available/completed；最后检查 backend 是否要求 flush。只要每次交付后把 pending 清空，就能同时推出 kernel group、wrapper 调用顺序和三份状态。

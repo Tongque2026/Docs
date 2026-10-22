@@ -1,5 +1,14 @@
 # Scheduler 篇作者记录
 
+## 第六轮：独立初学者逐篇审阅整改
+
+- 审阅范围严格限定为本篇 `README.md`，覆盖 85/85 个语义单元；报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/11_SCHEDULER_REVIEW.md`。
+- 旧稿把“排序与生存期”整体放在融合前，与当前 `Scheduler._init()` 中 `fuse_nodes()`、节点整理、`compute_last_usage()` 的实际次序冲突；正文主轴已改为“建边 → 初排与 DCE → 融合和节点整理 → 最终 last usage → 后端分派”。
+- 父篇改用 `op0 → op1 → extern op2 → op3` 一条案例贯通入口与出口。依赖种类、融合评分、dispatch 内部集合和实验取证均留在子篇或作者记录。
+- Scheduler 只交出 `last_usage` 记录；wrapper 如何生成释放或复用代码不再提前展开。TemplateBuffer 从 Lowering 的身份在本篇只追踪到 template 分派出口。
+- 待办：让同一独立读者仅复查本篇；复查通过后才进入下一篇。
+- 首次复查覆盖 50/50，原 S0 已关闭；随后补入具名的旧读→写回→新读 mutation 边，区分融合节点内部 `a` 的 kernel-local last usage，并明确“排序与生存期”子篇横跨融合前后的两个时点。
+
 ## 所在层、输入与出口
 
 - 队列项：Q30，第 1 层，父项 Q00；第五轮已按技能重新复核，保留“本层完成”。本状态只覆盖四项直接职责的协作，不替代 Q31–Q34 的内部回修。

@@ -1,5 +1,12 @@
 # 存储、布局与修改篇作者记录
 
+## 2026-10-22 独立读者审阅后的结构回修
+
+- 审阅依据：`/work/learning/1021/56sol/inductor-fresh-reader-review/09_STORAGE_LAYOUT_REVIEW.md`，98/98 个语义单元。
+- 父篇重建为延迟规则 → realize → layout 固定，以及 view/mutation 两条分支；内部 MemoryDep、stride hint、pick_loop_order 与 alias fast path 下放实现叶子。
+- mutation 明确停在 Lowering 的 operations、mutated_buffers、旧读保护和真实 storage target；Scheduler 顺序与 wrapper 写回只作为后继接口。
+- 新增普通物化、view、mutation 的同层出口表；删除 Q 编号、内部维护类名和作者取证过程。
+
 ## 所在层、输入与出口
 
 - 队列位置：Q23，第 2 层，父项 Q20；第五轮已按技能重新复核，保留“本层完成”。本状态不替代 Q231 叶子的源码回修。

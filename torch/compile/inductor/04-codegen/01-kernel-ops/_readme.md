@@ -8,7 +8,7 @@
 - 出口：当前 handler 生成的标量/向量临时表达、load/store/reduction 语句；Q42 再打开 CPU 与 Triton 如何组织完整 kernel。
 - 学完标准：能区分 callable、捕获后的 FX 小图、索引表、`ops` placeholder、当前 handler 与 `CSEVariable`；能沿 pointwise/reduction 写出具体重放状态，并判断依赖快速路径是否真的执行整张图。
 - 依据：当前提交 `8332c5622aabd9535969e9a8d0ed60e4a90e4402`、当前源码与独立 CPU 实验；无 GPU 执行。
-- 第五轮状态：已按技能重新复核，保留“本层完成”；Q411 尚未创建，仍按第 3 层队列待讲。
+- 当前状态：收到真实读者“仍然看不懂”的反馈后重新打开本篇；已完成第一轮隔离冷读和结构改写，等待新读者复验。Q411 尚未创建，仍按第 3 层队列待讲。
 
 ## 本层职责和边界
 
@@ -82,7 +82,44 @@
 5. 依赖提取一定重放 add/relu 吗？不一定；已有 LoopBody 直接遍历捕获期保存的 memory usage，只重建内存依赖。
 6. 换成 Triton handler，什么不变？FX 图、索引和 ops 语义不变；handler 返回的目标表达和后端循环组织改变。
 
-作者复读通过；实际读者反馈尚无。
+作者复读不能代替读者理解。真实读者已明确反馈当前版本仍然看不懂；本轮据此撤销此前仅凭作者复读作出的完成判断。
+
+## 第六轮：真实读者反馈后的隔离冷读与整改
+
+- 反馈边界：读者只被告知“真实用户读完仍不理解”，没有获得机制答案、旧批注或作者讨论；评价必须只依据当前正文。
+- 冷读报告：`inductor-fresh-reader-review/34_KERNEL_OPS_COLD_REVIEW_1.md`，评级 B。
+- 主要断点：开篇误把捕获 handler 画成既有 LoopBody 的并列解释器；裸 backend 与 `CSEProxy` 的关系后置；原始 callable 没有最小外形；规约突然声称“三次重放”；maximum 题把快速路径和 callable 慢路径混在一起；部分向量循环、cache 和间接索引细节越入 Q42/Q411。
+- 本轮修改：把总图改为 `callable → 捕获 → LoopBody → codegen replay / dependency summary`；补充 callable 的参数与 buffer 名来源；在 tmp 表前建立 backend override 与 `CSEProxy` 两步；删除无从正文推出的“三次重放”及越层细节；规约只保留 handler 语义差异；maximum 分开快慢路径。
+- 验收状态：待全新冷读者只凭修改后的正文复验。即使 AI 评为 A，也只证明该角色能够由正文闭环，不能替代真实用户反馈。
+
+### 第二次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/35_KERNEL_OPS_COLD_REVIEW_2.md`，评级仍为 B。
+- 新断点：捕获段只有输入和产物，没有 wrapper、handler 与 FX proxy 的逐步交接；CSE 只有职责和成品 tmp 表，没有候选式查表及命中/未命中；规约缺少累计器初始化、逐项更新、收尾和写回时点；maximum 要求读者猜未教过的具体后端形式。
+- 第二次修改：用闭包变量分开 callable 参数和 buffer 名；补 `ops.load/add` 经过 `OpsWrapper → CaptureIndexing → FX proxy → OpsValue` 的对象轨迹；补 add 候选式的 CSE 未命中、登记、后续命中；用第 0 行前两项和最后一项推进 accumulator，并说明 `store_reduction` 位于规约循环之后；依赖快慢路径用同一读写集合对照；maximum 只要求推断正文已经建立的原则。
+- 当前状态：等待第三位全新冷读者复验。
+
+### 第三次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/36_KERNEL_OPS_COLD_REVIEW_3.md`，评级 B。
+- 已通过：callable 捕获、LoopBody 三份内容、placeholder 重放、CPU 候选式与 CSE、规约状态、依赖快慢路径均可只凭正文重建。
+- 剩余断点：maximum 节声称让读者核对捕获结果，却没有给出结果；也没有把新操作走到具体候选式、CSE 命中和最终 C++。
+- 第三次修改：定义 FX proxy 的用途；把 maximum 改成含两次相同操作的完整迁移案例，列出索引表、内存摘要、FX 值流、CPU 候选式、CSE 未命中/命中和最终 C++；删去读者无法由本篇推出的具体向量/Triton API。
+- 当前状态：等待第四位全新冷读者复验。
+
+### 第四次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/37_KERNEL_OPS_COLD_REVIEW_4.md`，评级 B；主线已经闭环。
+- 剩余断点：第一次 maximum 的结果未被使用，引入死节点是否保留的新问题；案例没有显式固定 dtype、kernel 和执行条件，CSE 命中仍需作者补前提。
+- 第四次修改：让两个 maximum 的结果都进入后续 add，消除死结果；明确两次调用处于同一 kernel、同一位置、同一 float32 dtype 和同一执行条件；同步更新 FX 值流、CSE 轨迹和最终 C++。
+- 当前状态：等待第五位全新冷读者复验。
+
+### 第五次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/38_KERNEL_OPS_COLD_REVIEW_5.md`，评级 A。
+- 结论：该认知背景的读者能只凭正文闭环 callable 捕获、LoopBody 三份信息、重放、CPU backend/CSE/C++、规约累计、依赖快慢路径及 maximum 迁移案例。
+- 轻微修订：明确产生值的 ops 才返回 `T`，store 可无返回；将“实际重放”限定为本例标量 CPU 轨迹；在 `tmp_acc0` 首次出现处标明它是跨 `x1` 循环维护的状态。
+- 当前状态：本篇通过隔离冷读验收。该 A 只证明指定读者角色能由正文建立逻辑，不代替真实用户阅读反馈；若用户仍有断点，继续以具体断点重新打开。
 
 ## 续写位置
 

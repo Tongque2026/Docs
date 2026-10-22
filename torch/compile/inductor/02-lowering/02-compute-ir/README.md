@@ -2,11 +2,11 @@
 
 [返回 Lowering](../README.md) · [上一篇：GraphLowering 解释器](../01-graph-interpreter/README.md) · [返回总览](../../README.md)
 
-实现叶子：[Pointwise、Reduction 与 View 构造源码](01-ir-construction-source/README.md)将在第 3 层重新验收。
+实现叶子：[Pointwise、Reduction 与 View 构造源码](01-ir-construction-source/README.md)。
 
-Q21 看到 add、relu 会返回 `Pointwise`，sum 返回 `Reduction`，permute 返回 view。本篇打开这些对象内部共同使用的语言：范围说明合法逻辑索引，loader 说明怎样从输入取值，`inner_fn` 把索引和算术组合起来，view 的 reindexer 则先把新坐标换回旧坐标。
+Graph interpreter 看到 add、relu 会返回 `Pointwise`，sum 可返回 `Reduction`，permute 返回 view。本篇打开这些对象内部共同使用的语言：范围说明合法逻辑索引，loader 说明怎样从输入取值，`inner_fn` 把索引和算术组合起来，view 的 reindexer 则先把新坐标换回旧坐标。
 
-本篇出现两种 layout 记录。若 size、stride、offset 都已经确定，例如 size=`[2,3]`、stride=`[3,1]`、offset=`0`，源码称为 `FixedLayout`；位置 `[1,2]` 的物理偏移可立即算出为 5。新建普通计算结果时，size 已知但 stride 还允许后续根据读取方式选择，源码称为 `FlexibleLayout`；等消费者要求确定的排布时，再选定 stride 并换成不可继续改动的记录。
+本篇出现两种 layout 记录。`FixedLayout` 已确定 size、stride 和 offset，因此可以直接算物理位置；`FlexibleLayout` 只承诺 size，具体 stride 由后续存储职责确定。
 
 先把三条路径放在同一张图里：
 
@@ -139,34 +139,11 @@ row=0 同理得到 3，因此结果为 `[3,12]`。这里 column 不能并入普�
 
 实验用 `[2,128]` 同时运行两种情况：非 keepdim 为 `ranges=[2]`，keepdim 为 `ranges=[2,1]`；二者的 `reduction_ranges` 都是 `[128]`、type 都是 sum。两种情况对每个 row 都读取相同 128 个元素，差别只是输出坐标系统和输出 layout（本例分别为 size `[2]` 与 `[2,1]`）。
 
-### 小规约为何可能不是 Reduction
+### Reduction 构造可能有三种出口
 
-`Reduction.create` 会按 device、规约类型、范围和配置决定是否拆分或展开。若实际返回对象内部仍是 `Reduction`，`make_reduction` 会立即 realize，因为规约通常是明确的调度边界；若构造过程已经把它改成等价 pointwise 表达，就不应在教程或分析工具里强称它为 Reduction。
+Reduction 的坐标模型不保证最终一定保留为单层 `Reduction`。组内没有元素或只有一个元素时，构造器可用恒等值或唯一输入建立等价 Pointwise；较小静态规约也可能展开为 Pointwise。较大的规约可以保留为一层 Reduction，或先产生若干部分结果，再由第二层 Reduction 合并。
 
-本实验选 `[2,128]`，实际观测 `ranges=[2]`、`reduction_ranges=[128]`、`type=sum`，所以它能证明当前环境确实走了 Reduction 路径。上面的 `[2,3]` 用于数值推演，不用于证明 IR 保留类型。
-
-### 组内有 0 项或 1 项时，构造器直接改写问题
-
-`Reduction.create` 先计算所有 `reduction_ranges` 的乘积。这个数量决定每个输出位置实际要组合几项，它为 0 或 1 时不会建立真正的 Reduction 循环。
-
-若输入 shape 是 `[2,0]`，请求沿 dim 1 求和，则输出仍有两个位置，但每个位置都没有输入项：
-
-```text
-输出 row=0：空集合求和 → 0
-输出 row=1：空集合求和 → 0
-```
-
-当前构造器为 `sum`、`xor_sum`、`prod`、`any` 选择相应恒等值，建立一条覆盖输出 `ranges=[2]` 的 Pointwise 常量规则。独立实验直接调用当前 `Reduction.create`，观察到 zero-size sum 的结果链是 `TensorBox→StorageBox→Pointwise(ranges=[2])`。`prod` 的恒等值是 1，sum/xor_sum/any 的值是 0；常量还会按目标 dtype 转成 bool、浮点或整数。
-
-并非每种空规约都有这个出口。当前零项分支不支持 `max`、`min`、`argmax`、`argmin` 等类型；直接构造 zero-size max 得到 `AssertionError: max not supported for zero-dimension tensors!`。因此“空规约”不能统一描述为返回 0，也不能声称总会产生合法 IR。
-
-若每个输出只组合 1 项，例如 shape `[2,1]` 沿 dim 1 规约，构造器同样返回 Pointwise：普通 sum/max 等直接用全 0 的组内索引调用原 loader；`argmin/argmax` 则为每个输出位置产生索引常量 0。本实验的 size-one argmax 也实际返回 `Pointwise(ranges=[2])`。
-
-最后还有第三类小静态规约：组内项数大于 1、低于 `config.unroll_reductions_threshold`，且输出数不等于 1时，当前实现可把组合展开成 Pointwise。它与 0 项恒等值、1 项直接读取是三个不同条件；共同结果只是“不保留 Reduction 类型”。
-
-越过这些出口后，构造器还要决定是否分层计算大型规约。例如要把很长的一行加成一个数时，可以先把这一行分成若干段，每段产生一个部分和，再用第二层规约合并这些部分和。`num_splits()` 根据设备是否擅长直接规约到单个元素、规约项数、输出位置数和设备并行能力决定分段数：返回 1 时建立一层 `Reduction`，大于 1 时建立“部分结果 + 最终合并”的多层规约。`argmax/argmin`、无法取得静态规模的动态情况，以及关闭 `split_reductions` 时不会走这项拆分。
-
-据此可以判断新情况：`[4,0].prod(1)` 产生四个恒等值 1；`[4,1].argmax(1)` 产生四个索引 0；`[4,3].sum(1)` 是否展开还取决于当前阈值和输出数，不能仅凭函数名或尺寸小直接下结论。
+本实验的 `[2,128]` sum 实际保留 `ranges=[2]`、`reduction_ranges=[128]`、`type=sum`。构造器怎样处理 0 项、1 项、静态展开和 split 决策，留到[构造实现叶子](01-ir-construction-source/README.md)。本层只要求后继按实际返回对象继续处理。
 
 ## View：先改逻辑坐标，不必新增计算 operation
 
@@ -242,16 +219,16 @@ sum     → ComputedBuffer buf0(size=[3])       operations=[ComputedBuffer]
 mm      → ExternKernelOut buf1(size=[1,2])    operations=[ComputedBuffer, ExternKernelOut]
 ```
 
-本篇在 sum 出口关心的是：Reduction 的三个输出位置 p=0、1、2，各自让组内 q 遍历 0…127；它的输入 loader 依次执行 permute 的 `[q,p]` 映射、加 1 和 relu。实际 rows 为 `[24512,24640,24768]`。mm 怎样消费 buf0 属于 Q24；这里仅用它证明 Reduction 交出的 storage 被后继特殊调用读取。
+本篇在 sum 出口关心的是：Reduction 的三个输出位置 p=0、1、2，各自让组内 q 遍历 0…127；它的输入 loader 依次执行 permute 的 `[q,p]` 映射、加 1 和 relu。实际 rows 为 `[24512,24640,24768]`。后续特殊调用把已经物化的 buf0 作为 mm 输入。
 
 迁移到 `sum(dim=0)` 时，输出不再按 p 选转置后的行，而是按 q 选列：输出范围变为 `[128]`，每个 q 的 reduction index p 遍历三项 `[0,q]、[1,q]、[2,q]`。改变 axis 同时改变 kept/reduced 集合，不能只把最终输出 shape 改掉而沿用原 loader。
 
 ## 本层出口
 
-| IR | 必要信息 | Scheduler/Codegen 能据此知道什么 |
+| IR | 必要信息 | 交给下一职责的内容 |
 | --- | --- | --- |
-| Pointwise | device、dtype、ranges、inner_fn | 输出迭代空间；每个位置的 loads/ops/store |
-| Reduction | 上述信息 + reduction_ranges/type/src_dtype | 外层输出空间、组内组合空间和组合操作 |
-| View/ReinterpretView | 新 size、reindex 或固定 stride/offset、共享 data | 读哪个原位置；是否共享已有 storage；本身是否需要 operation |
+| Pointwise | device、dtype、ranges、inner_fn | 一条可继续被后继 loader 组合的位置规则 |
+| Reduction | 上述信息 + reduction_ranges/type/src_dtype | 输出空间、组内空间和组合规则 |
+| View/ReinterpretView | 新 size、reindex 或固定 stride/offset、共享 data | 读取原 storage 的坐标关系，通常不新增 operation |
 
-下一项 Q23 将接住这里尚未展开的存储问题：一条延迟计算何时 realize，FlexibleLayout 怎样决定实际 stride，view/alias 和 mutation 怎样迫使数据版本落到 buffer。
+这些对象先交给[存储与数据版本](../03-storage-layout/README.md)。可继续组合的规则仍由后继 loader 引用；图输出、外部调用或其他物化条件会让规则进入 `ComputedBuffer` 并登记 operation。Scheduler 只读取已经登记的 operations，并在分析或生成时重放其中的计算/索引规则；共享原 storage 的 view 没有独立 operation，也不会单独成为调度节点。

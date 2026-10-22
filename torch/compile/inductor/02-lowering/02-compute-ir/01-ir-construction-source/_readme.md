@@ -1,6 +1,15 @@
 # 计算 IR 构造源码叶子作者记录
 
-> 第五轮状态：叶子完成。第五轮修正了正文结尾仍指向“待审计”的陈旧续写语句，并重新按三类 IR、36 个函数/方法、分支状态与证据边界验收。
+> 第六轮状态：通过隔离冷读 A 级验收。七名全新读者只读本篇 README，评级依次为 B、B、B、B、B、B、A；每轮由主智能体按读者断点回修，读者不参与写作。
+
+## 第六轮真实读者反馈与整改
+
+- 评审报告：`91_IR_CONSTRUCTION_COLD_REVIEW_1.md` 至 `97_IR_CONSTRUCTION_COLD_REVIEW_7.md`，保存在教程外的 `inductor-fresh-reader-review/`。
+- 第一轮发现 K03 编号与物理顺序冲突、关键对象迟到、跨千行缺状态账本、全常量与 existing-ranges 等案例未闭合；正文增加统一对象图和 K03-1～K03-5 账本，并按阅读顺序重编号。
+- 第二至第四轮继续补齐 TensorBox/StorageBox 包装、realize 前后状态、existing-ranges 搜索、Generic View loader、动态 reshape 连续化与两层 dtype；对 0 项 dtype 的源码参数差异保留精确说明。
+- 第五至第六轮纠正两项过度概括：existing-ranges 只检查首次发现 Reduction 的 frontier，不检查整个依赖闭包；Triton 低精度累加提升受 `config.triton.codegen_upcast_to_fp32` 控制。补出最终 Reduction 由 K02 调用方物化，以及全常量通过 `BaseConstant.get_size()=()` 构造标量 Pointwise。
+- 第六轮还发现对象层级表述过宽：`TensorBox.create` 产生 StorageBox 包装，但并非所有 TensorBox 永远有双层 data。正文补入 `MutableBox` 转发，并区分 helper 可接收的 `TensorBox(ComputedBuffer)`、普通 Loops 包装、BaseView、ReinterpretView 与 copy_input 路径。
+- 第七位读者闭卷恢复全部 K 的输入、动作、出口和指定案例，确认主要分支可迁移，评级 A。两处实验观测仅作为旁证，正文机制不依赖读者读取实验文件。
 
 ## 本篇定位、读者与边界
 
@@ -48,7 +57,7 @@
 - 具体 `[1,2]` 位置从两个 loader 走到 store；没有把 Lowering 阶段写成已读取真实数值。
 - 复杂分支覆盖 alpha、bool、GPU float64、低精度 barrier、Triton fallback、size 0/1。
 - 迁移题：rank 不同且未广播的第二输入在维数断言失败；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 - AST 有序覆盖审计通过：`promote_constants` 37 行、`make_pointwise` 79 行、`Loops.create` 9 行、`Loops._index` 5 行、`nop_loader_fn` 5 行、`Pointwise` 18 行，均为去空行和类级缩进后的非教学产品源码行数。
 
 ## K02 完整性与复读
@@ -57,7 +66,7 @@
 - 2×3 row=1 逐项展示 index/reduction_index 回填成原坐标，不只列 ranges 名称。
 - keepdims 与 int32→int64 各有完整状态变化；Reduction/Pointwise 出口按实际类型区分。
 - 迁移题：shape `[2,3,4]` 规约 `[0,2]` 时 loader 槽位为 reduction、kept、reduction；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 - AST 有序覆盖审计通过：`_validate_reduction_axis` 16 行、`_make_reduction_inner` 43 行、`make_reduction` 16 行、`sum_` 7 行；`sum_` 的注册 decorator 另行确认存在。
 
 ## K03 子队列
@@ -74,7 +83,7 @@
 - sum 用两套变量走到只含外层 index 的 store；argmax 用相等值和索引 2/5 推演 tie；Welford 代入两组具体状态。
 - 明确 dtype、src_dtype、hint 各自用途，未把 hint 写成数学组合规则。
 - 迁移题：ranges/reduction_ranges 中 size=1 的索引均变 0；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 - AST 有序覆盖审计通过：组合函数 50 行；Reduction 连续前缀的十个方法分别通过；简单组合表 any/max/min/prod/sum/xor_sum 六个 key 均存在。
 
 ### K03b 完整性与复读
@@ -84,7 +93,7 @@
 - argmax 多维索引用 `[2,3]` 的 `[1,2]→5` 展示 flatten，不只说“保留索引”。
 - 明确 2×128 CPU 实验只证明实际对象类型，不用它推断其他设备的 split。
 - 迁移题：小静态规约但 scalar output 不展开；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 - AST 有序覆盖审计通过：`_unroll_reduction_fn` 33 行、`Reduction.create` 128 行；六类关键出口条件另行检索全部存在。
 
 ### K03c 子队列
@@ -101,7 +110,7 @@
 - 以假定 80 SM 明确标注公式推演，不冒充当前设备实测。
 - reader 投票用实际 stride hint 解释 inner/outer，包含广播无完整索引和平票出口。
 - 迁移题：argmax 或 unbacked 动态规模不会 split；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 
 #### K03c2a 完整性与复读
 
@@ -128,7 +137,7 @@
 - transpose 完整编译仍观测为 size `[3,2]`、stride `[1,3]`、同 InputBuffer、0 个新增 buffer/operation；正文用新 `[2,1]` 与旧 `[1,2]` 的同 offset=5 解释原因。
 - 空 shape 分支按源码解释 fake reindex 的接口用途；该 case 在当前编译管线没有留下 GraphLowering 事件，因此不登记为内部类型实测。
 - 迁移题覆盖负 dims、`-1` 推导、无效 view 消除和非连续延迟 reshape；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 
 ## K04b 完整性与复读
 
@@ -137,7 +146,7 @@
 - 实验 05 增加直接产品方法探针：输入 `[1,2]` 得旧线性 `(5,)`，flat 5 得旧 `(1,2)`，fallback 新 `[2,1]` 也得旧 `(1,2)`；三项断言通过。
 - size-1 维用旧 `[2,1,3]` 的中间坐标恒为 0 解释，没有把 view 写成数据复制。
 - 迁移题覆盖三维合并/拆分、size-1 和总元素数失败边界；正文足以推出。
-- 实际读者反馈：尚无。
+- 第六轮读者反馈：对应缺口已纳入 91–97 号报告，第七位读者评级 A。
 
 ## 整篇严格审计（完成）
 
@@ -148,7 +157,7 @@
 
 ## 当前衔接
 
-## 第五轮叶子验收
+## 第五轮叶子验收（第六轮冷读前的作者复核）
 
 - **完整源码**：Pointwise、Reduction、View 的 36 个声明函数/方法逐项 AST 等价；Pointwise 整类、Reduction 四字段/19 方法及组合表完整，物理顺序与产品类一致。
 - **分支与出口**：常量提升与 dtype/broadcast，axis/keepdim，0/1/小静态/普通/split/existing-ranges 规约，固定 storage/空/动态/延迟/fallback view 均有出口。
@@ -157,4 +166,4 @@
 - **证据边界**：CPU 实验只证明实际保留的 Pointwise/Reduction/View 路径；GPU split/multilayer 按当前源码和数学状态推演，不标成设备实测。
 - **续写一致性**：正文末尾已从“下一步审计”改为“审计完成，转 Q231”，与本记录和根队列一致。
 
-Q221 第五轮叶子复核完成。根队列转 Q231：realize 与布局决定完整源码。
+Q221 第六轮隔离冷读完成并通过 A 级验收。根队列转 Q231：realize 与布局决定完整源码。

@@ -109,3 +109,22 @@ AST 等价检查需在每次正文修改后重新执行。源码无漏行只能�
 - **证据边界**：日志分支由源码支持；call_module handler 只记录事件；`entry.apply` 内部替换机制不在本篇冒充完成，继续由 Q122 承担。
 
 Q121 第五轮叶子复核完成。下一项 Q122：`ReplacementPatternEntry.replace_with_graph` 的完整源码与具体节点映射状态。
+
+## 第一次隔离冷读整改
+
+- 报告：`../../../../inductor-fresh-reader-review/56_MATCHER_APPLY_COLD_REVIEW_1.md`，评级 C。
+- 主要缺口位于主线：entry 注册没有走到 registry；region id 没落到 `node.meta`；候选集合的形状、全局排序与 target 提取需从源码猜；逆序安全性表述过宽；local/global 计数的异常边界缺失。
+- 当前源码核对：`PatternEntry.register` 用 `(pattern.op,target)` 调用 pass 的 `__getitem__` 并 append/insert；region id 写入 `node.meta`；普通 `extract_target` 返回原 target，call_module 返回实例类；FX Node 以 `_sort_key` 比较；`find_nodes(sort=False)` 返回索引集合，最终统一 sorted；local count 位于 apply 前、global counters 位于 apply 后。
+- 本轮把注册、region 状态、双 key 候选容器、全局排序、target 映射、完整门禁图和异常计数链补入正文，并将 `_erased` 结论收窄到当前锚点的后续 entry。
+
+## 第二次隔离冷读整改
+
+- 评级 B；注册、入口、拒绝、旧候选边界和计数均闭合，只剩双 key 缺确定图序、成功路径缺 `entry.apply` 后的可观察图。
+- 本轮加入 `mul_0 → neg_0 → mul_1` 的全图顺序，展示 flatten 临时顺序为何最终变成 `mul_1 → neg_0 → mul_0`；补入实际 float32 实验的前后图，明确 output 改读新 add、旧 add/mul 擦除，同时将嵌入算法继续留给 Q122。
+
+## 第三次隔离冷读验收
+
+- 报告：`../../../../inductor-fresh-reader-review/58_MATCHER_APPLY_COLD_REVIEW_3.md`，评级 A。
+- 读者可独立复述从 entry 注册到候选、门禁、改图、正常与异常计数的整条链路，并能算出双 key 全图逆序和 `2/2/4`。
+- 必须整改项：无。
+- 当前状态：Q121 通过隔离冷读验收；下一篇为同层 Q122。

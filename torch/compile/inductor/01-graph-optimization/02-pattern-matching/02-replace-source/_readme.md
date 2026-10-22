@@ -111,3 +111,16 @@ packed 失败案例会在修改部分 getitem 后遇到 output user；只记录�
 - **证据边界**：ProbeMatch 只隔离 graph surgery；PatternExpr 捕获由 Q12/Q121 覆盖。packed 失败只证明非事务异常，不把残缺图当合法出口。
 
 Q122 第五轮叶子复核完成。全系列下一项 Q131：stable topological sort 的完整源码与具体 pending/ready/waiting 状态。
+
+## 第一次隔离冷读整改
+
+- 报告：`../../../../inductor-fresh-reader-review/59_REPLACE_GRAPH_COLD_REVIEW_1.md`，评级 C。
+- 分支虽齐全，但读者无法独立推出 Interpreter env、单输出 users、packed 失败残图、tag queue 和 normalize 参数映射。
+- 本轮增加六节点 env 表，逐步展示 placeholder 绑定、fetch 参数替换、新节点写回 env 和 output 返回；增加单输出 users 变化；固定实验 users 顺序并画出异常后的部分图；展开 tag 的 queue/visited/input_stops；补 kwargs 捕获重排到 placeholder 顺序的例子和 traced meta 最终对照。
+
+## 第二次隔离冷读验收
+
+- 报告：`../../../../inductor-fresh-reader-review/60_REPLACE_GRAPH_COLD_REVIEW_2.md`，评级 A。
+- 读者可独立推演 env、users、插入点、输出映射、packed 失败残图、meta/tag、normalize 与最终清理。
+- 必须整改项：无。
+- 当前状态：Q122 通过隔离冷读验收；下一篇为同层 Q131。

@@ -1,6 +1,45 @@
 # Q43 作者记录：wrapper 与内存计划
 
-> 第五轮状态：本层完成。第五轮补齐 mutated-input 输出合同的完整案例后，再按范围、过程、事实和迁移分别验收。
+> 当前状态：逐篇隔离冷读已重新打开本篇。第一轮评级 B，已完成首轮结构补强，等待新读者复验。
+
+## 第六轮：隔离冷读后的首轮整改
+
+- 报告：`inductor-fresh-reader-review/44_WRAPPER_MEMORY_COLD_REVIEW_1.md`，评级 B。
+- 已通过：wrapper 主线、延迟 planning line、两次 mm 的两次分配/两次复用、`del` 不等于设备内存立即释放。
+- 实质断点：逻辑 buffer、Python 引用和 storage 混写；mutated input 从模块 `(buf0,)` 到用户 `(old,x)` 的外层重组未展开；pool 实验 offset 全 0，不能解释 Temporal/Spatial split；reinterpret 和 alias/view 无完整案例；boxed/last_usage/BufferGroup 后置；无迁移题。
+- 修改：开头固定三层对象与两层返回；修正 S0/S1 时间线；首次定义 boxed、last_usage、BufferGroup；增加 `(2,3)→(3,2)` reinterpret 推演；增加 A/B/C 三 group 的 112B pool 数值放置稿；展开外层保存原输入、模块原地写回、元数据重建 `(old,x)`；补 input view；增加含 reinterpret、同时活跃、最后使用再复用和输入 view 的新时间线题。
+- 证据边界：A/B/C pool 是依据当前 planner 约束构造的教学放置稿，不冒充实际实验；实际 mm pool 仍只证明 group/live range/pool 首末使用且 offset=0。
+- 当前状态：等待第二位隔离冷读者复验。
+
+### 第二次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/45_WRAPPER_MEMORY_COLD_REVIEW_2.md`，评级 B。
+- 已通过：A/B/C 112B 放置、reinterpret、S0/S1 时间线、模块 tuple 与用户 tuple 的基本分层、末尾 buf3 接管 S0。
+- 核心断点：mutation contract、output-alias contract 和 fresh-output contract 混写；将保存 `original_x` 的语义模型写成未经限定的通用实现；开头“空间足够”与默认等容量 reuse key 冲突；迁移题把规划前 empty 和规划后 reuse 混在一起。
+- 修改：固定三份独立合同并逐项解释 `return old,x`；限定该 tuple 形态为本次 inference 编译入口；将开头改成命中兼容 key；说明 last use 是静态复用候选而非运行时 del 后查池；展示迁移题规划后的 reinterpret 行；补 pool 基底引用与 allocator、同 stream 与 host/跨 stream 的边界。
+- 当前状态：等待第三位隔离冷读者复验。
+
+### 第三次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/46_WRAPPER_MEMORY_COLD_REVIEW_3.md`，评级 B。
+- 已通过：三份输出合同与 ABI 限定、静态 free/reuse、默认等容量 key、pool 放置和模块/user tuple 分层。
+- 剩余断点：迁移题把待规划 IR 写成可执行 `empty/del`；GPU 异步 kernel 未完成时，正文没有连接 host `del`、同 stream 复用和 stream-aware allocator。
+- 修改：迁移题规划前改成 Allocate/Free/Call/Return 抽象行，规划后单列最终 reinterpret Python；说明同 stream 提交顺序保护先读后写，allocator 必须记录未完成 stream 使用，跨 stream 需要 event/wait 或等价记录；阅读清单改为 host 提交 last use，而非设备完成时刻。
+- 当前状态：等待第四位隔离冷读者复验。
+
+### 第四次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/47_WRAPPER_MEMORY_COLD_REVIEW_4.md`，评级 B。
+- 剩余断点：跨 stream 直接 alias/reinterpret 与 allocator 回收后重分配混写；allocator tracking 不能替代直接跨流覆盖的执行依赖。迁移题预置 ReuseLine，但未解释其来源。
+- 修改：拆分两条异步安全路径，直接接管跨流必须 event/wait，allocator tracking 只保护回收再分配；迁移题改用 `InplaceAliasLine` 教学标记，并说明它表示已批准原地覆盖，不是普通 free/allocate 配对结果。
+- 当前状态：等待第五位隔离冷读者复验。
+
+### 第五次隔离冷读
+
+- 报告：`inductor-fresh-reader-review/48_WRAPPER_MEMORY_COLD_REVIEW_5.md`，评级 A。
+- 结论：直接 alias/reinterpret 与 allocator 回收再分配已经分开；`InplaceAliasLine` 明确为教学标记；三份输出合同、普通规划、pool、guard/stream 与迁移题均可只凭正文闭环。
+- 非阻断观察：迁移题保留了一个写入后无用户的 buf3，用于检验 free/reuse；它是 planner 抽象时间线，不是声称死结果一定会留在优化后的真实图中。
+- 当前状态：Q43 通过隔离冷读验收。A 只证明指定冷读角色能从正文建立逻辑，不代替真实用户反馈；若用户仍有断点，继续按实际断点重开。
 
 ## 本篇位置与教学目标
 
@@ -94,3 +133,10 @@
 - **层次**：本篇讲 wrapper 级时间线和对象交接；planning classes 与复用扫描的完整源码仍归 Q431。
 
 Q43 第五轮回修完成。根队列转同层 Q44；Q431 仍按广度优先队列留到下一层。
+
+## 第五次隔离冷读
+
+- 报告：`../../inductor-fresh-reader-review/48_WRAPPER_MEMORY_COLD_REVIEW_5.md`，评级 A。
+- 结论：正文已经把直接 alias/reinterpret 的流顺序要求与 allocator 回收后的异步安全分开；迁移题也明确区分了教学用 `InplaceAliasLine` 与 planner 实际产生的 `ReuseLine`。普通规划、pool 规划、三类返回合同和迁移题均能仅凭正文闭合。
+- 非阻断观察：迁移稿里的 `buf3` 是用于推演 free/reuse 的抽象 planner 时间线，不表示真实优化图一定保留无消费者的结果；这不影响本篇要检验的内存规划关系。
+- 当前状态：Q43 通过隔离冷读验收，停止继续润色，进入同层 Q44。

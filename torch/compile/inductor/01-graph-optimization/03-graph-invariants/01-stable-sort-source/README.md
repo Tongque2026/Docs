@@ -4,7 +4,7 @@
 
 图改写可以先创建新节点、再重接 users，过程中暂时出现“消费者排在生产者前面”。FX 的线性节点表若保持这种顺序，生成 Python 或继续遍历都会先看到一个尚未定义的名字。
 
-本叶子完整讲解当前 `/work/pytorch/torch/_inductor/pattern_matcher.py` 中连续的 `_args` 与 `stable_topological_sort`。它们不重新计算数值，也不创建节点；任务是移动现有 Node，使每条输入依赖都指向线性顺序中更早的节点，并尽量保留不受依赖约束的原顺序。
+本叶子完整讲解当前 `/work/pytorch/torch/_inductor/pattern_matcher.py` 中连续的 `_args` 与 `stable_topological_sort`。它们不重新计算数值，也不创建节点；任务是移动现有 Node，使每条输入依赖都指向线性顺序中更早的节点。函数名中的 stable 有具体而有限的表现：已经合法的图不动，同一个依赖唤醒的一批 waiter 按登记顺序重查；它不保证保留所有互不依赖节点的原相对次序。
 
 ## 先用一张坏图建立问题
 
@@ -105,7 +105,17 @@ x, y, x, y
 | 已经放入合法前缀 | `ready` | 它的所有输入都更早 ready |
 | 检查过但仍缺输入 | `waiting[dependency]` | 等 dependency ready 后重新压回 pending |
 
-`cursor` 指向合法前缀的最后节点。`ready` 回答依赖是否完成；`cursor` 回答下一个完成节点应该放在哪里。节点即使已经处于正确的紧邻位置，也要加入 ready 并更新 cursor，只是不用执行 `append` 移动。
+这里“三种状态”看的是节点作为待处理项、ready 成员或 waiting 的 **value**。`waiting[x]=[add]` 表示 add 正在等待；字典 key `x` 只充当唤醒条件，不表示 x 自己也属于 waiting 状态。此时 x 通常仍在 pending 中，之后会按原扫描顺序被取出。
+
+`cursor` 指向合法前缀的最后节点。`ready` 回答依赖是否完成；`cursor` 回答下一个完成节点应该放在哪里。FX 的 `cursor.append(node)` 会先把 node 从链表旧位置摘下，再插入 cursor 紧后方。例如：
+
+```text
+移动前：[y, add, x]，cursor=y
+执行： y.append(x)
+移动后：[y, x, add]
+```
+
+节点即使已经处于正确的紧邻位置，也要加入 ready 并更新 cursor，只是不用执行这次链表移动。
 
 ## 完整推演 `y,add,x`
 
@@ -195,13 +205,41 @@ add ready → 唤醒 mul
 mul ready → 唤醒 output
 ```
 
+其中前几轮的容器与链表状态为：
+
+| 轮次 | pop | 动作 | graph / cursor / waiting |
+| ---: | --- | --- | --- |
+| 1 | output | 挂到 mul | `[output,mul,add,x,y]` / None / `{mul:[output]}` |
+| 2 | mul | 挂到 add | 原图不动 / None / 再有 `{add:[mul]}` |
+| 3 | add | 缺 x、y，挂到 y | 原图不动 / None / 再有 `{y:[add]}` |
+| 4 | x | 首个 ready，无 cursor 不移动 | 原图不动 / x / 等待表不变 |
+| 5 | y | 已紧跟 x，无需移动；随后唤醒 add | `[output,mul,add,x,y]` / y / pending 末端为 add |
+| 6 | add | 从旧位置摘下并插到 y 后，唤醒 mul | `[output,mul,x,y,add]` / add / pending 末端为 mul |
+
+接下来 mul、output 依次移动到 cursor 后，最终才成为 `x,y,add,mul,output`。
+
 最终实际顺序为 `x,y,add,mul,output`，并通过 lint。普通常量 2 不在 `_args(mul)` 的 Node 列表里，所以不会形成等待项。
 
-## 已合法图为什么不被任意重排
+## 稳定性的实际范围
 
 测试图原顺序为 `b,a,add(a,b)`。b、a 都没有依赖，依次进入 ready；add 随后就绪。每次 `cursor.next is node`，没有任何移动，最终仍是 `b,a,add`，而不是按名字、参数位置或创建类型改成 a,b,add。
 
-算法因此是稳定拓扑修复，不是唯一规范顺序。多种合法拓扑序中，它尽量保留输入的线性次序。
+因此已经合法的输入不会被任意规范化成另一种拓扑序；同一 waiting key 下的一批消费者也会保留登记顺序。
+
+但这不等于保留所有互不依赖节点的原相对次序。看下面的反例：
+
+```text
+原顺序：A, B, X
+依赖：  A 读取 X；B 与 A、X 都无数据边
+```
+
+A 首先因缺 X 挂起；B 随后 ready，成为合法前缀第一项；X ready 后排在 B 后并唤醒 A；A 最后排到 X 后，结果是：
+
+```text
+B, X, A
+```
+
+虽然另一个合法拓扑序 `X,A,B` 可以保留 A 在 B 前，本算法不会回头把已经 ready 的 B 让到 A 后面。这里应把“稳定”理解为上述已合法输入与同批 waiter 的局部保序性质，而不是所有可保留关系的全局最优化。
 
 ## 空图、外部依赖和环
 
@@ -212,6 +250,17 @@ pending、ready、waiting 都为空，while 不执行；最终 `0==len(graph.nod
 ### 引用了另一张 Graph 的 Node
 
 若本图唯一消费者引用外部图的 placeholder，该外部 Node 会进入 waiting_for，却永远不会出现在本图 pending 中。循环结束后 waiting 非空，最终断言失败。实验实际得到 `external_dependency=AssertionError`。
+
+失败前也可能已经移动其他节点。例如本图顺序为 `[y,bad,x]`，bad 读取一张外部图的节点：
+
+```text
+1. y ready，cursor=y
+2. bad 挂到 waiting[external]
+3. x ready；y.append(x) 把图改成 [y,x,bad]
+4. pending 耗尽，但 external 永不 ready，最终断言失败
+```
+
+断言不会把 `[y,x,bad]` 恢复成原顺序。
 
 ### 环
 
