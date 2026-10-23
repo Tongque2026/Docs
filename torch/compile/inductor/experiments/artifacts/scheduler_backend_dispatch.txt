@@ -72,9 +72,16 @@
 [frozen_template_mm] scheduler.flush before available=['arg1_1', 'constant0', 'buf0'] completed=['op0'] pending_free=[]
 [frozen_template_mm] cpp.flush scheduled_nodes=[] ready=False
 [frozen_template_mm] scheduler.flush after available=['arg1_1', 'constant0', 'buf0'] completed=['op0'] pending_free=[]
+[nop_empty] visit op0 type=NopKernelSchedulerNode device=cpu current_device=None last_usage=[] available=[] completed=[] pending_free=[]
+[nop_empty] scheduler.flush before available=['buf0'] completed=['op0'] pending_free=[]
+[nop_empty] scheduler.flush after available=['buf0'] completed=['op0'] pending_free=[]
+[nop_debug_sync] visit op0 type=NopKernelSchedulerNode device=cpu current_device=None last_usage=[] available=[] completed=[] pending_free=[]
+[nop_debug_sync] error=BackendCompilerFailed: backend='inductor' raised:\nUnboundLocalError: local variable 'device' referenced before assignment\n\nSet TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information\n\n\nYou can suppress this exception and fall back to eager by setting:\n    import torch._dynamo\n    torch._dynamo.config.suppress_errors = True\n
 pointwise_result=[2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
 mixed_shapes=[[8], [2, 4]]
 dependent_mixed_shape=[2, 4]
 fallback_result=[1.0, 2.0, 0.0, 1.0]
 template_shape=[16, 16]
 frozen_template_shape=[64, 64]
+nop_shape=[2, 3]
+nop_debug_sync_error=BackendCompilerFailed: backend='inductor' raised:\nUnboundLocalError: local variable 'device' referenced before assignment\n\nSet TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information\n\n\nYou can suppress this exception and fall back to eager by setting:\n    import torch._dynamo\n    torch._dynamo.config.suppress_errors = True\n

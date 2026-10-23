@@ -1,6 +1,6 @@
 # Q321 排序、删除与最后使用源码备课记录
 
-第五轮状态：补齐 Scheduler 构造期真实调用顺序，以及 `WeakDep(buf0)` 怎样经 DFS 把旧 reader 排在 mutation 前之后，叶子复核完成；根队列转 Q331。
+第六轮状态：经三位相互隔离的冷读者逐轮审查与整改，最终达到 A 级验收；根队列转 Q331。
 
 ## 读者、层次与边界
 
@@ -51,4 +51,13 @@ K01–K04 均完成，Q321 叶子完成。最终审计以“按产品声明顺�
 - **真实阶段顺序：** 正文已经连接依赖构造、首次拓扑排序、反向 DCE/弱边裁剪、ancestors、组合节点后的再次排序、融合后 last usage；不会把每个函数误讲成互不相干的工具。
 - **分支与状态：** 覆盖单链、分叉、逆序候选、集合外依赖、mutation WeakDep、dead chain、弱 user、副作用、多输出、多级祖先、graph output、mutation real-name 和 fused 内外两级 last usage。three-mm 的 `future` 表、controlled DCE 的 removed 集合和逆序 DFS 均给出逐步状态。
 - **作者迁移复读：** 逆序 `[op1,op0]` 中 WeakDep 仍得到 `[op0,op1]`；删除 op0 后弱边被裁而真实 MemoryDep 不会；三层 DAG 的后继取得传递祖先闭包；交换两个合法 sibling 会把共享 buf 的 last usage 交给新的较晚 consumer；图输出不会成为内部释放候选。答案均可仅凭正文推出。
-- **证据边界：** three-mm、input/double mutation 与 controlled DCE 来自实验 09；fused 内层 future、多输出和弱边裁剪的若干对照来自当前源码推演。实际读者尚未作答，只登记作者复读。
+- **证据边界：** three-mm、input/double mutation 与 controlled DCE 来自实验 09；fused 内层 future、多输出和弱边裁剪的若干对照来自当前源码推演。实际读者反馈见下方第六轮记录。
+
+## 第六轮隔离冷读整改
+
+- 第一位读者评级 C：正文没有明确 DFS 的 DAG 前提和环行为；DCE 缺 users/OUTPUT 活性根；last usage 未定义 alias 扩展，普通 alias、链式 mutation 和 fused 两种尺度无法迁移。
+- 第一轮整改补入正向 unmet/反向 users/删除集合/last usage 的对象关系、方法交接表、环与重复 producer 的失败边界、DCE 活性规则、`used_or_aliased_buffer_names` 完整语义、连续 mutation 与 fused 内外 future。
+- 第二位读者评级 B：K03 没解释为何可以直接索引内部 producer，min/max order 只有初始化没有消费者，若干核心对象仍需在首次使用前集中定义。
+- 第二轮整改明确 K03 只接收 DCE 后的全体幸存节点和已裁剪 unmet，补充 group `[min,max]` 合并、peak-memory proximity 消费，以及 Base/Fused node、read_writes、defining_op、mutation_real_name 的契约。
+- 第三位全新读者只读最终 README，排序、DCE、ancestors/order、last usage 四条主线及主要失败边界均可闭卷迁移，评级 A。
+- 完整报告保存为 `110_ORDER_LIFETIME_COLD_REVIEW_1.md` 至 `112_ORDER_LIFETIME_COLD_REVIEW_3.md`；读者均未读取作者记录、其他教程、源码、实验、Git、前轮报告或聊天，也未修改教程。

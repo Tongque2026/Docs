@@ -192,3 +192,4 @@ Lowering 完成后，关键产物不是一张新的 FX 图，而是：
 2. [Pointwise、Reduction 与 View 怎样表达索引计算](02-compute-ir/README.md)
 3. [realize、layout、alias 与 mutation 怎样决定存储](03-storage-layout/README.md)
 4. [模板、外部调用、fallback 与控制流](04-special-calls/README.md)
+

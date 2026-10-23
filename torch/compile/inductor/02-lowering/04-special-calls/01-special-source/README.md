@@ -2,7 +2,7 @@
 
 [返回特殊调用篇](../README.md) · [返回 Lowering](../../README.md) · [返回总览](../../../README.md)
 
-Q24 已经解释了三类结果，本篇打开它们的实现。先从算法选择路径开始，因为这里最容易把三个不同对象混成“模板”：
+这一篇追踪四条不会变成普通 `Pointwise` 或 `Reduction` 的 Lowering 路径：算法候选、fallback、`cond` 和 `while_loop`。每条路径都从 Lowering handler 收到的对象开始，一直走到登记进图的 operation 和输出引用。
 
 ```text
 ChoiceCaller：一份候选，保存输入、输出 layout 和“选中后怎样建 IR”
@@ -15,11 +15,38 @@ MultiTemplateBuffer：也已经是 operation，但内部 render 仍可等 Schedu
                      看见 epilogue 后再固定
 ```
 
-## K01：候选被选中后，才建立对应的 IR 节点
+## K01：算法选择怎样从候选表走到一项 IR operation
 
-设两个候选接收相同的 A、B，输出 layout 都是 4×4 float32。一个 caller 指向 Triton template，另一个指向 `at::mm_out`。caller 本身不会出现在 `GraphLowering.operations`；调用 `output_node()` 后，才产生可登记、调度和生成的 IR。
+设矩阵乘有两个候选：T 是 Triton template，E 是 `at::mm_out`。二者都接收 A、B，输出 layout 都是 4×4 float32。`AlgorithmSelectorCache.__call__` 收到的是候选表 `[T,E]`，不是已经选好的候选。它有两个出口：
 
-Triton caller 的转换只有一条路径。下面保留当前产品方法的完整语句，并用 `# 教学` 注释指出数据交接：
+```text
+立即选择：测 T、E → 取耗时最小者 → 调用该 caller.output_node() → 具体 operation
+
+延迟选择：建立 MultiTemplateBuffer operation → Scheduler 比较基础候选以及可融合的 epilogue
+                                            → 固定 Triton render，或用 extern operation 替换它
+```
+
+caller 只保存“如果选中我，怎样建立 IR”，不会出现在 `GraphLowering.operations`。operation 的构造器负责把自己登记到当前 `GraphLowering`，它才是后续 Scheduler 和 Codegen 处理的图节点。`TensorBox` 是 Lowering 传递 tensor 值的外层盒子；`TensorBox.create(buffer)` 会再套一层 `StorageBox`，由这层持有底层 buffer。
+
+`render` 是 Triton template 的代码生成函数：layout 和输入已经确定后，它把模板填成内核代码。`do_autotuning(...)` 返回以 caller 为 key、运行时间为 value 的字典，例如 `{T: 2.4, E: 1.1}`，单位是毫秒。
+
+### 立即选择：先计时，再调用胜者的 `output_node()`
+
+当前 selector 的收束代码是：
+
+```python
+timings = do_autotuning(precompile_fn)
+if timings == {} or choices[0] not in timings:
+    return choices[0].output_node()
+
+selected_key = builtins.min(timings, key=timings.__getitem__)
+selected_choice = selected_key.output_node()
+return selected_choice
+```
+
+若得到 `{T: 2.4 ms, E: 1.1 ms}`，`selected_key` 是 E，随后才调用 `E.output_node()`。若计时表为空或缺少第一项，代码不凭空补全结果，而是直接使用第一候选。无论哪条分支，selector 返回的都不再是 caller，而是 caller 建立的 `TensorBox`。
+
+Triton caller 的转换只有一条路径：
 
 调用前，`self` 是已选中的 `TritonTemplateCaller`：`self.layout` 是 4×4 float32 输出排布，`self.input_nodes=[A,B]`，`self.make_kernel_render` 是稍后填模板的函数，`self.mutated_inputs` 记录模板会改写的输入（本例为空）。`output_node()` 不运行矩阵乘；它把这些字段装进 `TritonTemplateBuffer`，再包成 TensorBox 交回 GraphLowering 登记。
 
@@ -82,13 +109,13 @@ GraphLowering.operations = [ExternKernelOut]
 
 这里的关键变化不是“算出了矩阵乘数值”，而是候选身份消失，图中留下具有输入、layout 和调用名的 operation。数值要到生成程序运行时才由 `at::mm_out` 计算。
 
-## 已建立的判断
+### extern caller 的三个建图出口
 
 若同一个 extern choice 把 `has_out_variant` 从 `True` 改为 `False`，最后一支只改变 `cls`：图中得到 `ExternKernelAlloc`，表示外部函数自己返回存储；输入和 choice 身份没有因此变成 template。
 
 若 `abi_compatible=True` 但 choice 没有 `op_overload`，代码在建立 FallbackKernel 之前触发断言，所以图里不会留下半成品 operation。这说明失败出口发生在 `inner` 建立之前。
 
-## MultiTemplateBuffer：operation 已存在，render 仍可延迟固定
+### 延迟选择：先把 MultiTemplateBuffer 放进图
 
 普通 selector 的薄入口还会补一个影响出口的默认参数：
 
@@ -108,9 +135,31 @@ def autotune_select_algorithm(*args, **kwargs):
     return _ALGORITHM_SELECTOR_CACHE(*args, **kwargs)
 ```
 
-当 selector 选择“先把多个候选保留进图”，底层 operation 是下面这个完整类：
+只有 `return_multi_template` 为真，同时 `max_autotune` 或 `max_autotune_gemm` 开启时，selector 才走延迟出口：
 
-本次对象的 `layout` 是 4×4 float32 输出，`inputs=[x,w]`，候选表有 Triton choice T 与 extern choice E；尚未附加 epilogue 时测得 `choice_timings={T:2.4ms,E:1.1ms}`，所以 `min_choice=E`。`finalize_as_triton_caller(T)` 会把 operation 固定为 T 并取得对应 render；`finalize_as_extern_caller(E)` 则把同一个图中 operation 改成 extern 调用。若 Scheduler 后来尝试融合 relu epilogue，它会重新比较“各候选 + relu”，而不是无条件沿用基础计时的 E。
+```python
+if return_multi_template and (config.max_autotune or config.max_autotune_gemm):
+    def get_timings():
+        timings = do_autotuning(precompile_fn)
+        min_extern_choice = float("inf")
+        for choice, timing in timings.items():
+            if isinstance(choice, ExternKernelCaller):
+                min_extern_choice = min(min_extern_choice, timing)
+
+        return {
+            choice: time
+            for choice, time in timings.items()
+            if time <= min_extern_choice or not isinstance(choice, ExternKernelCaller)
+        }
+
+    return ir.TensorBox.create(ir.MultiTemplateBuffer(layout, input_nodes, get_timings))
+```
+
+这里还没有选定 T 或 E。`get_timings` 被保存成回调；`MultiTemplateBuffer` 已登记为 operation，但 `make_kernel_render=None`。extern 候选保留耗时等于最快 extern 的项，通常是一项，并列最快时可能有多项；Triton 候选全部保留，供 Scheduler 后面比较。
+
+底层 operation 是下面这个完整类：
+
+本次对象的 `layout` 是 4×4 float32，`inputs=[A,B]`。第一次读取 `choice_timings` 才执行计时回调并缓存结果；`get_min_choice()` 只返回基础耗时最小项，不改变图中 operation。
 
 ```python
 class MultiTemplateBuffer(TritonTemplateBuffer):
@@ -177,6 +226,74 @@ class MultiTemplateBuffer(TritonTemplateBuffer):
 | 离开 context | 同一缓存 | 恢复 `None` | 临时测试没有篡改最终状态 |
 | `finalize_as_triton_caller` 后 | 同一缓存 | triton_32 render | 后续 codegen 使用最终 render |
 
+### Scheduler 怎样把延迟选择收束成最终 operation
+
+若没有值得保留的 epilogue 融合，`finalize_multi_template_buffers()` 读取基础最小项：
+
+```python
+min_node_unfused, _ = multi_node.get_min_choice()
+
+if isinstance(min_node_unfused, TritonTemplateCallerBase):
+    node.node.finalize_as_triton_caller(min_node_unfused)
+    continue
+
+out_tensorbox = min_node_unfused.output_node()
+out_buffer = out_tensorbox.data.data
+out_buffer.layout = multi_node.layout
+replace_operation_buffer(multi_node, out_buffer)
+```
+
+两类胜者的处理不同：
+
+- Triton 胜出时，原来的 `MultiTemplateBuffer` 保留在图中，只把胜者的 render 永久装入 `make_kernel_render`。
+- extern 胜出时，先调用 E 的 `output_node()` 建立具体 `ExternKernel`，再用它替换图中的 `MultiTemplateBuffer`。替换函数把旧 buffer 和 operation 的名字移交给新节点，并同步 Scheduler 的节点与输出用户。
+
+以旧节点名 `buf0`、新 extern 构造时暂得名 `buf1` 为例：
+
+```text
+替换前：GraphLowering.operations = [MultiTemplateBuffer(name=buf0)]
+        下游 relu 读取 buf0
+
+E.output_node()：新建 ExternKernel(name=buf1)，两个 operation 暂时都已登记
+
+replace_operation_buffer：从索引表删掉 buf1
+                          把 extern 的 buffer 名和 operation 名改成旧节点的名字
+                          在 buffers/operations 原位置用 extern 替掉 MultiTemplateBuffer
+
+替换后：GraphLowering.operations = [ExternKernel(name=buf0)]
+        Scheduler 为 extern 重建节点，并把旧输出的 users 交给新输出
+        下游仍通过 buf0 读取同一逻辑结果
+```
+
+上面的名字移交直接来自替换函数的这些语句：
+
+```python
+del V.graph.name_to_buffer[replaced_buf_name]
+new_node.name = orig_buf_name
+del V.graph.name_to_op[replaced_op_name]
+new_node.operation_name = orig_op_name
+
+orig = V.graph.buffers.index(orig_node)
+V.graph.buffers.remove(new_node)
+V.graph.buffers[orig] = new_node
+
+orig = V.graph.operations.index(orig_node)
+V.graph.operations.remove(new_node)
+V.graph.operations[orig] = new_node
+```
+
+若 Scheduler 正在考虑把 `relu` 融入矩阵乘，它会临时把每个 Triton caller 的 render 装进 `MultiTemplateBuffer`，实测“T+relu”。临时测试退出后恢复旧 render。判定条件直接比较 `min_ms_fused` 与 `ms1 + ms2`：
+
+```python
+if min_ms_fused < (ms1 + ms2) and ms_fused_choice is not None:
+    node1.node.finalize_as_triton_caller(ms_fused_choice)
+    return True
+else:
+    return False
+```
+
+`ms1` 是最快基础候选，`ms2` 是单独 relu，`min_ms_fused` 是测得的最快融合结果。条件成立才永久固定该 Triton render 并允许融合；否则拒绝这次融合，之后仍由基础最小项完成收束。本节假定计时表至少有一个有效候选；空表传到 `get_min_choice()` 会使 `min(...)` 无法给出胜者。
+
 独立实验 [`22_multi_template_state.py`](../../../experiments/22_multi_template_state.py) 直接调用当前产品类的 `choice_timings` 和 `get_min_choice`，验证计时函数只执行一次：第一次与第二次均选择 `triton_32, 5.0`，计数仍为 1。实验没有伪造 Triton caller，所以不把 `swap/finalize` 声称为本机运行；那两条状态由上面的当前源码顺序支持。
 
 ### K01 理解验收
@@ -189,7 +306,7 @@ class MultiTemplateBuffer(TritonTemplateBuffer):
 
 不会。`autotune_select_algorithm` 只在 kwargs 缺少该键时填默认值。显式 False 保留下来，selector 按这次调用的要求处理。
 
-K01 到此完成：caller、具体 operation 和“已入图但 render 未固定”的 operation 已经分开。下一知识点 K02 从 `make_fallback(histc)` 开始，追踪 packed operation 与嵌套输出树。
+因此 K01 的完整交接是：Lowering 把候选表交给 selector；selector 或立即让胜者建图，或先建立 `MultiTemplateBuffer`；Scheduler 再把延迟状态固定成 Triton render 或替换成 extern operation。下一节追踪没有专用 Lowering 的 operator 怎样通过 fallback 留在同一张图里。
 
 ## K02：fallback 保留一次调用，再把 packed 返回值拆成图内引用
 
@@ -254,13 +371,29 @@ def make_fallback(op, layout_constraint=None, warn=True):
         raise RuntimeError(f"Unsupported fallback {op} with type {type(op)}")
 ```
 
-`histc` 传入的是 overload packet，因此循环把它的 overload 分别登记。登记同时调用 `add_needs_realized_inputs`：外部 operator 运行时需要真实 tensor，不能接收一条尚未执行的 Pointwise 规则。
+`aten.histc` 是一组同名重载的 packet，`aten.histc.default` 是其中一个具体 overload。这里传入 packet，因此循环把每个具体 overload 分别登记。登记同时调用 `add_needs_realized_inputs`：外部 operator 运行时需要真实 tensor，不能接收一条尚未执行的 Pointwise 规则。
 
 ### create 先用 fake 值确定接口，再建立 packed operation
 
-处理器命中以后进入 `FallbackKernel.create`。以下是完整方法；`process_kernel` 的内部参数扁平化属于这个类的共享前置机制，本篇关注它交回的五项数据怎样被 create 消费。
+处理器命中以后进入 `FallbackKernel.create`。这里的 `packed` 是代表“一次完整 operator 调用及其返回对象”的 operation；返回对象既可能直接是 Tensor，也可能是 tuple/list/dict。`MultiOutput` 不会再次调用 operator；它保存 `input=packed` 和一条取值路径，Codegen 据此从 packed 返回值中取出一个 Tensor。它自己的构造器会登记 buffer 和 operation，但 `should_allocate()` 返回 False，因为实际存储来自 packed 调用的返回值。
 
-继续代入 `histc(x,bins=4,min=0,max=4)`：kernel 是 `aten.histc.default`，`unflattened_args=(x,)`，kwargs 含三个标量；x 已物化为输入 TensorBox。`process_kernel` 用对应 FakeTensor 得到 shape `[4]`、float32 输出，`tensor_args=[x]`，没有 mutated args 或 alias names，output_view 描述“packed 返回的第 0 项就是唯一 tensor”。create 因而登记一个 FallbackKernel operation，再建立一个 MultiOutput 指向它的第 0 项。
+`process_kernel` 完成三件前置工作：把 TensorBox 参数换成对应的 fake 值；用 fake 参数调用 kernel 一次，得到描述返回接口的 `example_output`；同时拆出运行时调用需要的 `tensor_args`、`non_tensor_args` 和重建原参数结构的 `unflatten_args`。它不计算本次真实输入的结果。
+
+`FallbackKernel.create` 先建立 packed，再为每个 Tensor 叶子建立 `MultiOutput`。`fallback_handler` 最后用 `TensorBox.create` 包装这些 IRNode，才形成 Lowering 交回父图的 tensor 值：
+
+```python
+def handler(*args, **kwargs):
+    def wrap_tensors(x):
+        return TensorBox.create(x) if isinstance(x, ir.IRNode) else x
+
+    return pytree.tree_map(
+        wrap_tensors, FallbackKernel.create(kernel, *args, **kwargs)
+    )
+```
+
+以下是 `FallbackKernel.create` 的完整方法；`process_kernel` 的内部参数扁平化属于这个类的共享前置机制，本篇关注它交回的五项数据怎样被 create 消费。
+
+继续代入 `histc(x,bins=4,min=0,max=4)`：kernel 是 `aten.histc.default`，原始位置参数是 `(x,)`，kwargs 含三个标量；x 已物化为输入 TensorBox。`process_kernel` 用对应 FakeTensor 得到 shape `[4]`、float32 的 `example_output`，并交回运行时调用所需的 `tensor_args=[x]`、非 tensor 参数和参数重建信息。create 因而登记一个 FallbackKernel operation，再建立一个 `indices=[]` 的 MultiOutput 指向根返回值。
 
 ```python
 @classmethod
@@ -355,7 +488,8 @@ def create(cls, kernel, *args, **kwargs):
 | fake 调用后 | Tensor `[4]` / 尚无 | 尚未建 packed |
 | 选择 layout | 非 None | `FallbackKernel(MultiOutputLayout)` |
 | `generate_output` 根节点 | Tensor / `[]` | `MultiOutput(layout=[4], input=packed, indices=[])` |
-| 返回 | 单个 MultiOutput | `TensorBox → StorageBox → MultiOutput` 供父图引用 |
+| `create` 返回 | 单个 MultiOutput | 取根返回值的图内引用 |
+| handler 包装 | 同一个 MultiOutput / `[]` | `TensorBox → StorageBox → MultiOutput` 交回父图 |
 
 空 `indices=[]` 表示 operator 的根返回值本身就是 Tensor，不需要先取 tuple 下标。实验 07 实际观察到 operations 为 `[FallbackKernel, MultiOutput]`，运行数值为 `[1,2,0,1]`。
 
@@ -369,7 +503,7 @@ FallbackKernel(buf0)
 └─ MultiOutput(buf2, indices=[(tuple,1)])  -> indices [1,2,0]
 ```
 
-递归时根节点是 tuple：第 0 项追加 `(tuple,0)`，第 1 项追加 `(tuple,1)`；两项都是 Tensor，于是各自建立 `MultiOutput`，但它们的 `input` 都是同一个 packed operation。生成程序因此调用一次 sort，再按路径取得两项，而不是生成两次 sort 调用。
+递归时根节点是 tuple：第 0 项追加 `(tuple,0)`，第 1 项追加 `(tuple,1)`；两项都是 Tensor，于是各自建立 `MultiOutput`，但它们的 `input` 都是同一个 packed operation。packed 节点生成一次 sort 调用；两个 `MultiOutput.codegen()` 分别把同一返回值的 tuple 第 0、1 项绑定为自己的名字。
 
 ### K02 理解验收
 
@@ -379,15 +513,25 @@ FallbackKernel(buf0)
 
 问题：若 fake 返回一个当前不支持的字符串，失败前是否已经可能建立 packed operation？
 
-是。代码先根据非 None 输出建立 `FallbackKernel(MultiOutputLayout)`，随后 `generate_output` 才走到最后一个分支并因字符串不是 None 而断言失败。调用者不会得到 outputs，但与 `make_fallback` 的非法输入类型不同，这个失败发生在 packed 构造之后。
+按这个方法内部的语句顺序，代码先构造 `FallbackKernel(MultiOutputLayout)`，随后 `generate_output` 才因字符串不是 None 而断言失败。调用者不会得到 outputs；本文没有展开外围异常处理，因此不能继续断言该临时登记是否会留在一次失败编译的最终图状态中。
 
 K02 到此完成。下一知识点 K03 打开 `_has_aliased_buffers` 与 `Conditional`，追踪两支子图从 Lowering 到统一父输出的全部状态。
 
 ## K03：cond 先完成两支 Lowering，再承诺一个统一父接口
 
-父图后续只看见一组结果，因此 true/false 两支必须交出相同数量、形状、步长、设备、类型和起点的值。编译期并不执行 predicate 来删掉另一支：两支都先 Lower，运行时 wrapper 才按 predicate 选择其中一支。
+父图后续只看见一组结果，因此设计上需要 true/false 两支交出相同的输出接口，并禁止分支输出互相 alias。当前实现完整比较两支输出的数量、size、stride、device、dtype 和 offset；alias 部分却只实际检查 true 分支，后面的源码会逐句看到这个边界。编译期并不执行 predicate 来删掉另一支：两支都先 Lower，运行时 wrapper 才按 predicate 选择其中一支。
 
-### alias 检查比较的是底层 IRNode 身份
+`Subgraph` 是这段实现保存分支的容器：`graph_module` 是尚未 Lower 的 FX `GraphModule`，也就是可执行的 FX 图及其 Python 模块外壳；`graph` 初始为 None。第一次使用时，`make_subgraph` 为它建立独立的 `GraphLowering`，`run()` 把该分支的 FX 节点 Lower 成子图 operations，并把返回的 IRNode 列表留在 `graph_outputs`。`V.set_graph_handler(subgraph.graph)` 会在代码块内把“当前登记目标”切到这张子图，退出代码块后再恢复父图。
+
+```python
+@dataclasses.dataclass
+class Subgraph(IRNode):
+    name: str
+    graph_module: torch.fx.GraphModule
+    graph: Optional[GraphLowering] = None
+```
+
+### alias 辅助函数比较的是 IRNode 对象身份
 
 在 `Conditional` 之前，产品先定义这个完整辅助函数：
 
@@ -403,7 +547,7 @@ def _has_aliased_buffers(buffers: Sequence[IRNode]) -> bool:
     return len(OrderedSet(id(buffer) for buffer in buffers)) < len(buffers)
 ```
 
-例如输出 `[a,a]` 的 id 列表是 `[17,17]`，去重后只有一项，返回 True；`[a,b]` 是 `[17,29]`，数量不变，返回 False。若两项是包在 `ReinterpretView` 中的同一 a，`unwrap_view()` 后仍能识别共享。
+例如输出 `[a,a]` 的 id 列表是 `[17,17]`，去重后只有一项，返回 True；`[a,b]` 是 `[17,29]`，数量不变，返回 False。若两项是包在 `ReinterpretView` 中的同一 a，`unwrap_view()` 后仍能识别共享。它依赖“同一 buffer 由同一 IRNode 对象表示”的假设，不是一项能识别所有运行时共享存储的通用 alias 分析。
 
 ### Conditional 完整实现
 
@@ -444,7 +588,7 @@ class Conditional(ExternKernel):
             inputs=inputs,  # type: ignore[list-item]
         )
 
-        # 教学：只有合同检查完成并调用构造器后，才把父节点登记为 buffer/operation。
+        # 教学：ExternKernel 的通用初始化只保存公共字段；这两句才把父节点登记进当前图。
         self.name = V.graph.register_buffer(self)
         V.graph.register_operation(self)
 
@@ -480,7 +624,6 @@ class Conditional(ExternKernel):
         false_outputs = false_fn.graph.graph_outputs  # type: ignore[union-attr]
 
         for name, outputs in (("true_fn", true_outputs), ("false_fn", false_outputs)):
-            # 教学：保留当前实现事实——两轮都把 true_outputs 传给辅助函数。
             if _has_aliased_buffers(true_outputs):
                 raise AssertionError(
                     "Output aliasing is currently not supported in compiled torch.cond. "
@@ -542,6 +685,21 @@ class Conditional(ExternKernel):
         wrapper.codegen_conditional(self)
 ```
 
+Python wrapper 展开这项调用时，生成的关键控制结构是：
+
+```python
+predicate = conditional.predicate.codegen_reference()
+if not isinstance(conditional.predicate, ShapeAsConstantBuffer):
+    predicate = f"{predicate}.item()"
+
+self.writeline(f"if {predicate}:")
+self.codegen_subgraph(conditional.true_subgraph, outer_inputs, outer_outputs)
+self.writeline("else:")
+self.codegen_subgraph(conditional.false_subgraph, outer_inputs, outer_outputs)
+```
+
+因此两张子图都在编译期建立，但生成程序的一次运行只进入 predicate 对应的一个分支；该分支把结果写入同一组 `outer_outputs`。
+
 ### 用 add/sub 两支推进状态
 
 实验 07 的请求是：predicate 为 true 时返回 `x+1`，false 时返回 `x-1`，`x=[2,4]`。
@@ -555,13 +713,15 @@ class Conditional(ExternKernel):
 | 调用构造器 | 作为 true_subgraph 保存 | 作为 false_subgraph 保存 | 新增 `Conditional(buf0)` |
 | 建立输出 | 提供 layout 模板 | 运行时备选值 | 新增 `MultiOutput(buf1,[(list,0)])` |
 
-编译一次后，以 true 和 false 分别运行，得到 `[3,5]` 与 `[1,3]`。这证明运行时确实选择不同子图；编译轨迹只在第一次编译时出现两支 Lowering。
+编译一次后，以 true 和 false 分别运行，得到 `[3,5]` 与 `[1,3]`。编译期建立两张子图；生成的 wrapper 在运行时读取 predicate，只调用被选中的子图。
 
 ### 失败发生在哪个状态
 
 若 false branch 返回同 shape、dtype、device 但 stride 不同的 view，代码在逐项 `get_stride()` 断言失败。此时两张子 GraphLowering 都已经存在，各自 operation 也已经建立；父 `Conditional` 尚未调用构造器，因此父图没有 Conditional/MultiOutput 半成品。
 
-两支还必须满足源码实现的 alias 检查，避免父输出槽位无法唯一代表实际 storage。正常阅读路径只依赖已经明确的出口：接口检查全部通过才建立父 Conditional；任一检查失败，都不会留下父节点半成品。
+当前源码的 alias 循环有一个需要按实际语句理解的边界：循环变量 `outputs` 依次是 true 和 false 输出，但判断始终调用 `_has_aliased_buffers(true_outputs)`。因此 true 分支 alias 会在第一轮被拒绝；只有 false 分支 alias 时，这段代码不会拒绝它。第二轮也不会单独触发 alias 异常：true 有 alias 时第一轮已经抛出，true 无 alias 时第二轮仍然为假。接口属性检查则确实逐项比较 true 与 false。
+
+父节点的建立边界不受这个细节影响：两张子图先完成 Lowering；当前实现执行完 alias 与接口检查后才构造 `Conditional`。在此之前失败，不会留下父 `Conditional` 或它的 `MultiOutput`。
 
 ### K03 理解验收
 
@@ -581,7 +741,7 @@ K03 到此完成。下一知识点 K04 使用同样方法展开 WhileLoop，并�
 
 ### WhileLoop 完整实现
 
-本次循环的 carried inputs 是 `i=0` 与 `x=[1,2]`，没有 additional inputs；cond 子图返回 bool 标量 `i<2`，body 返回 `i+1` 与 `x+1`。两项 body 输出的 shape、stride、device、dtype 分别与下一轮的 i、x 输入一致。编译期先用 fake inputs Lower cond/body 并检查这组对应关系，再登记 WhileLoop 与两个 MultiOutput。若初始 i 已为 2，循环零次，最终 x 仍可能直接引用 graph input；因此对应输出 storage 会加入 never_reuse_buffers。
+本次循环的 carried inputs 是 `i=0` 与 `x=[1,2]`，没有 additional inputs；cond 子图返回 bool 标量 `i<2`，body 返回 `i+1` 与 `x+1`。`carried_inputs` 每轮都会被 body 输出按位置替换；`additional_inputs` 同样传给 cond 和 body，但每轮保持不变。两项 body 输出的 shape、stride、device、dtype 分别与下一轮的 i、x 输入一致。编译期先用 fake inputs Lower cond/body 并检查这组对应关系，再登记 WhileLoop 与两个 MultiOutput。若初始 i 已为 2，循环零次，最终 x 仍可能直接引用 graph input；因此对应输出的 buffer 名会加入 `never_reuse_buffers`。
 
 ```python
 @dataclasses.dataclass
@@ -654,7 +814,7 @@ class WhileLoop(ExternKernel):
             )
 
         # make sure cond_fn returns a boolean scalar Tensor
-        # 教学：cond 必须恰好交回一项、dtype bool、size 维数为 0。
+        # 教学：cond 必须恰好交回一项、dtype bool、size 列表为空，即零维标量。
         assert len(cond_outputs) == 1, cond_outputs
         assert cond_outputs[0].get_dtype() == torch.bool, cond_outputs
         assert len(cond_outputs[0].get_size()) == 0, cond_outputs
@@ -719,9 +879,13 @@ class WhileLoop(ExternKernel):
         wrapper.codegen_while_loop(self)
 ```
 
+这里有两份同位置的输入。`fx_all_inputs` 是父 FX 节点中的输入节点，当前 `WhileLoop.create` 原样把它传给 `make_subgraph(..., example_inputs=...)`；`fake_all_inputs` 是逐个读取 `node.meta["val"]` 得到的 FakeTensor，随后作为参数传给子图的 `run()`。cond 和 body 都按 `carried + additional` 的相同顺序接收这组参数。
+
+这与上一节 `Conditional.create` 不完全相同：Conditional 把 `fake_operands` 同时传给 `make_subgraph` 和 `run`，WhileLoop 则把 FX 节点传给前者、FakeTensor 传给后者。这是当前两段源码的实际差异；本篇不从这两处调用推断差异的设计原因。两条路径真正执行子图 Lowering 时，`run(...)` 收到的都是 FakeTensor。
+
 ### 三轮与零轮使用同一份已编译循环
 
-独立实验 [`24_while_loop_state.py`](../../../experiments/24_while_loop_state.py) 编译下面的关系：
+下面改用终止条件 `i<3` 展示三轮。独立实验 [`24_while_loop_state.py`](../../../experiments/24_while_loop_state.py) 编译下面的关系：
 
 ```text
 carried = (i, x)
@@ -740,7 +904,34 @@ body(i,x): (i+1, x+2)
 
 同一编译函数传入 `i=3,x=[1,2]`，第一次 cond 就为 false，结果保持 `(3,[1,2])`。编译轨迹实际包含 cond 子图、body 子图、父 `WhileLoop` 和两个 `MultiOutput`；两项 carried 都来自图输入，因此这两个输出名都进入 `never_reuse_buffers`。
 
+实验的最小观测是：
+
+```text
+输入 (i=0, x=[1,2]) → 输出 (i=3, x=[7,8])
+输入 (i=3, x=[1,2]) → 输出 (i=3, x=[1,2])
+父图 operation：WhileLoop + 两个 MultiOutput
+子图：一张 cond GraphLowering，一张 body GraphLowering
+```
+
 这里需要区分两个时间：编译期 body 用 fake 输入运行一次来建立 IR 和验证接口；运行期 body 可执行零次、一次或多次。`never_reuse_buffers` 保护的正是运行期零次这一可能性。
+
+加入只读参数后，位置关系是：
+
+```text
+carried    = (i, x)
+additional = (limit, step)
+
+cond(i, x, limit, step): i < limit
+body(i, x, limit, step): (i + 1, x + step)
+
+本轮输入：(0, [1,2], 2, 3)
+body 输出：(1, [4,5])
+下一轮输入：(1, [4,5], 2, 3)
+```
+
+下一轮只替换 carried 槽位 i、x；limit、step 仍取父节点传入的原值。body 只返回两项 carried，因此父 `WhileLoop` 最终也只有 i、x 两个 `MultiOutput`，不会把 additional inputs 追加到输出。
+
+例如零轮时输出 `buf_out` 实际仍指向调用者传入的 x。若存储规划又把 `buf_out` 的空间借给后续临时值并写入 0，写坏的就是调用者仍可见的 x。把这个输出名加入 `never_reuse_buffers`，就是禁止这种复用。
 
 ### 合同失败怎样截断构造
 
@@ -753,10 +944,10 @@ body(i,x): (i+1, x+2)
 
 问题：为什么仅在 carried input 是 `graph_inputs` 成员时，把对应输出加入 `never_reuse_buffers`？
 
-零轮循环返回原 carried。若它来自调用者，输出可能仍与调用者可见存储同一身份；复用该输出空间可能覆盖外部数据。内部临时 carried 的存储不具有这项调用者可见身份，因而这段规则不一律禁止其复用。
+零轮循环返回原 carried。若它来自调用者，输出可能仍与调用者可见存储同一身份；复用该输出空间可能覆盖外部数据。对于不是 graph input 的内部 carried，这段零轮规则不会把对应输出加入 `never_reuse_buffers`；它是否受其他 alias 或生命周期规则限制，不由这里的条件分支决定。
 
 问题：body 的输出 shape、stride、dtype 都相同，但 device 改了，是否可以等下一轮再搬回？
 
 不可以。当前 create 要求 `op.device == bo.device == device`，没有插入搬运的分支；断言发生在父 WhileLoop 构造前。要支持搬回需要另一项明确实现，不能从这段代码推断存在。
 
-K04 到此完成。四个知识点共同说明：候选、fallback 与控制流虽然都绕开普通 Loops，但它们分别通过具体 operation、packed return 路径或稳定子图接口留在同一 Lowering 图中。
+K04 到此完成。候选和 fallback 通过具体 operation 或 packed return 留在父 Lowering 图中；控制流也在父图留下 `Conditional` 或 `WhileLoop` operation，而分支、cond 和 body 的 operation 分别保存在各自的子 `GraphLowering` 中，供父 operation 在生成代码时引用。

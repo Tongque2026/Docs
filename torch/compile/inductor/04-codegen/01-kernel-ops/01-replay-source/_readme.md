@@ -1,5 +1,16 @@
 # Q411 LoopBody 捕获与重放核心源码备课记录
 
+## 第六轮：隔离读者按首次执行顺序回修
+
+- 第一名冷读者只读正文，报告 `/work/learning/1021/56sol/inductor-fresh-reader-review/121_LOOPBODY_REPLAY_COLD_REVIEW_1.md`，评级 B。它指出字段状态未在长源码前建立、局部 staticmethod 中 `self.body` 的闭包来源未解释、scan callable 的身份不清、实验结果无法从给定输入推算。
+- 正文增加 LoopBody 字段与生命周期表；区分外层 block self、CaptureIndexing 实例 self 和 staticmethod 捕获的外层 self；明确 combine_fn 保存在普通 Python shim 闭包中；补齐 pointwise/reduction 输入、算式和结果；分别说明动态上下文恢复与捕获/重放对象状态不回滚的边界。
+- 第二名冷读者报告 `/work/learning/1021/56sol/inductor-fresh-reader-review/124_LOOPBODY_REPLAY_COLD_REVIEW_2.md`，评级 B。最早断点是完整源码先定义闭包、后创建 tracer，读者首次遇到 `tracer.create_proxy` 时尚未建立实际执行时序。
+- 正文保持产品源码原顺序，在代码前新增定义期与执行期：空 graph、ops placeholder、`CaptureIndexing(proxy_ops)` 的 `_inner`、SimplifyIndexing 包装、执行 callable 与 output 的先后关系。
+- 第三名冷读者报告 `/work/learning/1021/56sol/inductor-fresh-reader-review/125_LOOPBODY_REPLAY_COLD_REVIEW_3.md`，评级 B。它已完成两道迁移题，剩余断点是 SimplifyIndexing/IndexPropagation 契约解释迟到，以及只有 shim `.clone` 接口而没有复制侧调用。
+- 正文将两个包装器的输入、动作、输出移到首次出现之前，并加入 `_init_with_copy` 遍历 root/subblocks/submodules、以新 LoopBody 调用 clone 的实际代码。
+- 第四名全新读者报告 `/work/learning/1021/56sol/inductor-fresh-reader-review/126_LOOPBODY_REPLAY_COLD_REVIEW_4.md`，评级 A，无首次理解断点；能够从捕获走到重放，推演 `x0 → 2*x0+1`，并从复制侧追踪 masked shim 重新绑定。
+- 2026-10-22 重跑 `python3 experiments/12_codegen_virtualized_ops.py` 通过：pointwise `[0.0,10.0,4.0]`，reduction `[8256.0,24640.0]`；产物更新为 `experiments/artifacts/codegen_virtualized_ops.txt`。运行证据保留在作者记录，不加入读者主线。
+
 ## 读者、层次与出口
 
 - 读者已从 Q41 理解 callable、FX 小图、索引表、当前 ops handler 与重放用途；尚不知道捕获时怎样截获每类内存/复合操作、重放时怎样代入索引并把当前 handler 传给 placeholder。
@@ -53,7 +64,7 @@
 
 ## 当前恢复点
 
-K01–K04 均完成，Q411 叶子完成。根队列转 Q421。
+K01–K04 均完成，Q411 已通过第六轮隔离冷读 A。根队列转 Q421。
 
 ## 第五轮叶子验收
 

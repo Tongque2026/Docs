@@ -111,3 +111,4 @@ Q30 的六个知识点均已完成并在第五轮重新复核；根队列转同�
 - 综合：`op0→op1→extern mm→op2` 使用同一组 buffer 贯通四项职责，最终得到 `CPU group→flush→extern→CPU group→final flush`；available/completed 明确是生成状态，不是运行完成。
 - 事实：实验 08–11 支持实际依赖、节点、候选和 dispatch 状态；template 尝试实际得到 ExternKernelOut，因此 template 分派只按当前源码陈述，没有伪装成实测。
 - 理解：只凭正文可判断增加 b 输出、增加 a 的旁路 user、把 op2 换到另一 device 时，哪些依赖、生存期、融合与分派决定改变。实际读者反馈仍为空。
+

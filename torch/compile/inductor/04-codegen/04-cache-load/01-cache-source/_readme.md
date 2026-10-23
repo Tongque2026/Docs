@@ -73,3 +73,22 @@
 - **作者迁移 5**：hit 仍执行 post_compile，因为 tracing strides、cudagraph BoxedBool 和 input realignment 属于当前进程/本次输入合同，不是磁盘 artifact 的持久状态。
 
 实际读者反馈仍未取得；以上只登记作者复读。
+
+## 第六轮隔离冷读回修
+
+每轮只将本篇 `README.md` 交给一名 `fork_turns=none` 的全新读者；禁止读取作者
+记录、其他教程、源码、实验、旧报告或聊天。提示只限定读前背景，不能用于补正文。
+
+- `140_CACHE_SOURCE_COLD_REVIEW_1.md`（B）：把 `FxGraphCache.load` 的
+  check/key/lookup/hit/miss/bypass/post-compile 总控状态机移到篇首；把静态
+  metadata、动态符号身份和本次 hint 分为三类；前置连续 run1/run2 跨进程案例；
+  解释 HOO 当前为何采用逐类支持前的保守 bypass，而不是只复述检查结果；同步收紧
+  后文“shape 已进 hash”的表述。
+- `141_CACHE_SOURCE_COLD_REVIEW_2.md`（A）：全新读者可独立复述并迁移完整主线，
+  hit/miss/bypass、两次 guard、local/remote、artifact 恢复、保存容错、HOO 与
+  post-compile 均闭合。随后修正一项真实控制流：local 写和 remote put 在同一
+  `try`，local 先失败时不会继续 remote；同时收紧篇首损坏候选、H0 来源、规范化
+  符号身份和 remote 单值边界。
+
+修改后 2 个 Python fence 均可解析；实验 15 重跑通过：run1 miss=1、run2 hit=1、
+cond bypass=1，数值结果保持正确。

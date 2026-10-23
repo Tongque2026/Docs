@@ -4,9 +4,31 @@
 
 Q33 已经给出融合条件，本篇打开控制循环。融合并非“一次扫描所有 pair 后结束”：一轮中的 merge 会改变节点组，下一轮可能出现只有新组才能满足的候选。
 
+源码会同时谈“原 operation”和“当前组”。二者先固定如下：
+
+| 本篇名称 | 具体含义 |
+| --- | --- |
+| 原 operation | Lowering 交出的一个计算节点，例如 `op0`；融合后名字仍用于追踪成员 |
+| 当前组 | 此刻作为一个整体参加下一次判断的调度节点；开始时通常只有一个 operation，合并后可成为 `FusedSchedulerNode(op0,op1)` |
+| buffer | operation 读写的有名结果，例如 `buf0`；operation 名和 buffer 名是两套名字 |
+| `ancestors` | 当前 operation 必须排在其后的全部上游 operation 名；若 `op1` 读取 `op0` 的结果，则 `op1.ancestors` 含 `op0` |
+| `unmet_dependencies` | 当前组仍需由组外生产者满足的读取或顺序要求；内部生产者合并进来后，相应要求可被满足 |
+| 旧候选端点 | 一轮开始时保存的两个节点；处理到它时，二者可能已经分别属于更大的当前组 |
+
+以 `op0` 写 `buf0[c0]`、`op1` 读同一位置为例：
+
+```text
+原 operation：op0 ──buf0[c0]──> op1
+祖先关系：op0 ∈ op1.ancestors
+当前组开始为：{op0}、{op1}
+融合后为：{op0,op1}
+```
+
+`SchedulerNode` 表示一个普通当前组，`FusedSchedulerNode` 表示已经含多个 operation 的当前组。`ExternKernelSchedulerNode` 是由外部 kernel 完成的组；template、foreach 和 `GroupedSchedulerNode` 各有专门接口约束，遇到对应门时再说明。
+
 ## K01：一轮节点数不再减少时，融合达到固定点
 
-首段输入 `nodes: List[BaseSchedulerNode]` 是当前调度节点列表。以 `[op0,op1]` 为例，op0 写 buf0、op1 同位置读取 buf0；`old_len=2`。`fuse_nodes_once` 接受这对候选后返回含一个 `FusedSchedulerNode(op0,op1)` 的列表，`new_len=1`，所以本轮立即结束并返回这一项。若没有候选被接受，new_len 仍为 2，也立即结束。
+首段输入 `nodes: List[BaseSchedulerNode]` 是当前组列表。以 `[op0,op1]` 为例，op0 写 buf0、op1 同位置读取 buf0；`old_len=2`。`fuse_nodes_once` 处理完这一轮候选后返回含一个 `FusedSchedulerNode(op0,op1)` 的列表，`new_len=1`；控制回到外层，外层随即停止并返回这一项。若没有候选被接受，new_len 仍为 2，外层也停止。
 
 ```python
 def fuse_nodes(self, nodes: List[BaseSchedulerNode]) -> List[BaseSchedulerNode]:
@@ -36,7 +58,7 @@ def fuse_nodes(self, nodes: List[BaseSchedulerNode]) -> List[BaseSchedulerNode]:
     return nodes
 ```
 
-`range(10)` 是硬上限，防止融合启发式不断重复；它不是“必须执行十轮”。常见结束有三种：
+`range(10)` 限制重新建立候选表和运行启发式的轮数，控制编译开销；它不是“必须执行十轮”。常见结束有三种：
 
 | 一轮前后 | 判断 | 下一步 |
 | --- | --- | --- |
@@ -67,7 +89,17 @@ K01 到此完成。下一知识点 K02 逐句展开 `get_possible_fusions`：共
 
 ### 候选发现只比较可能有关的节点
 
-先代入 branched 案例的入口状态：`nodes=[op0,op1,op2,op3,op4]`；op0 写 buf0，op1/op2 都读 buf0，op3/op4 都读 buf1；`aggressive_fusion=False`。按已使用的 buffer 分组后，buf0 组含 op0/op1/op2，buf1 组含 op3/op4；`seen` 与 `possible_fusions` 起初都为空。下面循环会在每组内枚举 pair，同一 pair 若因多个共享名字再次出现就被 `seen` 跳过。
+先代入 branched 案例的入口状态。实验捕获到的五个节点如下；`c0` 的范围都是 8：
+
+| 节点 | 精确读取 | 精确写入 | `ancestors` | `used_buffer_names()` |
+| --- | --- | --- | --- | --- |
+| op0 | `arg0_1[c0]` | `buf0[c0]` | `{}` | `{arg0_1,buf0}` |
+| op1 | `buf0[c0]` | `buf1[c0]` | `{op0}` | `{buf0,buf1}` |
+| op2 | `buf1[c0]` | `buf2[c0]` | `{op0,op1}` | `{buf1,buf2}` |
+| op3 | `buf0[c0]` | `buf3[c0]` | `{op0}` | `{buf0,buf3}` |
+| op4 | `buf3[c0]` | `buf4[c0]` | `{op0,op3}` | `{buf3,buf4}` |
+
+`used_buffer_names()` 是读名与写名的并集，所以 buf0 组是 op0/op1/op3，buf1 组是 op1/op2，buf3 组是 op3/op4。组内两两比较会产生纵向 pair，也会产生 op1/op3 这类共同读取 buf0 的横向 pair。`seen` 与 `possible_fusions` 起初都为空；同一 pair 若因多个共享名字再次出现就被 `seen` 跳过。
 
 ```python
 def get_possible_fusions(
@@ -122,7 +154,7 @@ def get_possible_fusions(
     return possible_fusions
 ```
 
-默认路径按 `used_buffer_names()` 分组。两个节点若没有任何共同名字，根本不会进入 `check_all_pairs`；这是候选缩减，不等于已经证明它们不可由 backend 合并。`aggressive_fusion=True` 时，同一 loop `group` 的节点也会两两比较，允许继续检查没有共享 buffer 的横向机会。
+默认路径按 `used_buffer_names()` 分组。它包含当前组读取和写入的全部 buffer 名；`get_buffer_names()` 只取本组产生的 buffer，`read_writes.buffer_names()` 则从精确读写 Dep 中取名。两个节点若没有任何共同 used 名字，默认路径不会进入 `check_all_pairs`。`aggressive_fusion=True` 时，同一 loop `group` 的节点也会两两比较，让没有共享 buffer 的普通逐点节点继续接受 K03 的横向检查。
 
 若 A、B 同时共享 x、y，它们会在两个 grouping 中出现两次；`seen` 使第二次直接跳过。注意 key 有方向：`(A,B)` 与 `(B,A)` 不相等，但这里的组合循环只按列表先后产生正向 key；反向仅在第二项为 template/foreach 且正向失败时显式尝试。
 
@@ -196,7 +228,16 @@ def score_fusion(
     )
 ```
 
-列表以 `reverse=True` 排序，所以 tuple 从左到右越大越先：先看 template 条件，再看两节点是否同为/同不为 reduction，随后看可省字节，最后偏好原顺序更近的 pair。
+列表以 `reverse=True` 排序，所以 tuple 从左到右越大越先。前两项只有在 `memory_score>0` 时才能为 true。第一项的实际结果如下：
+
+| `epilogue_fusion_first` | node1 是 template | 第一项 |
+| --- | --- | --- |
+| true | 是 | true |
+| true | 否 | false |
+| false | 是 | false |
+| false | 否 | true |
+
+因此它表达“node1 的 template 身份是否与当前配置偏好一致”，并非 template 永远优先。第二项在两节点 reduction 身份相同时为 true。随后才比较可省字节和原顺序距离。
 
 ### 共同精确依赖怎样变成字节数
 
@@ -249,7 +290,7 @@ def score_fusion_memory(
 
 方法比较的是完整 Dep 相等性，不只是 buffer 名。实验的 8 个 float32 同位置依赖给出 `8×4=32` 字节，因此 vertical/horizontal 候选 score 第三项为 32。shifted-index 两节点虽涉及同名 buffer，MemoryDep 索引不同，不形成共同精确依赖，memory score 不会凭名字得到 32。
 
-这里保留一个当前实现细节：`node2_dep_len` 的 reads 部分写的是 `len(node1.read_writes.reads)`，不是 node2 reads。教程按当前源码解释这个启发式分支选择，不自动改成看起来更对称的写法。无论走“小集合遍历”还是集合交集分支，最终都只累计两边相等的 Dep。
+`dep_size_hint` 对可估大小且不含 unbacked symbol 的 Dep 返回 `numbytes_hint()`；无法取得符号信息的特殊 Dep 返回 0。结果写入 cache，后续相同 Dep 直接复用。当前源码中 `node2_dep_len` 的 reads 部分写的是 `len(node1.read_writes.reads)`；这个数只影响选择“小集合遍历”还是“集合交集”策略，两个分支最终都只累计两边相等的 Dep。
 
 ```python
 def score_fusion_key(
@@ -274,7 +315,7 @@ def score_fusion_key(
 (op0,op3) score=(True,True,32,-3)
 ```
 
-前四项的前三个分量相同或前两类相同，距离 -1 优先于 -2、-3。Python 稳定排序保留同分项原有发现顺序，所以前三项按 grouping/check 顺序出现。priority 在本 CPU 案例均为 0，没有提前淘汰任何一项。
+前三个 pair 的四项分数完全相同，距离 -1 又优先于 -2、-3。`buffer_names_grouping` 按遍历节点时首次遇到 buffer 的顺序保存 key：先遇到 arg0_1、buf0，随后才遇到 buf1、buf2、buf3、buf4；只有 buf0、buf1、buf3 产生 pair。buf0 组先发现 `(op0,op1)`，buf1 组再发现 `(op1,op2)`，buf3 组随后发现 `(op3,op4)`。Python 稳定排序保持这个同分顺序。priority 在本 CPU 案例均为 0，没有提前淘汰任何一项。
 
 ### K02 理解验收
 
@@ -284,7 +325,7 @@ def score_fusion_key(
 
 K02 到此完成。下一知识点 K03 逐句展开 `can_fuse/can_fuse_vertical`，把 vertical、shifted-index、extern 和 max-size 分别定位到具体拒绝门。
 
-## K03：静态合法性先排除类型和接口，再区分纵向与横向
+## K03：静态门与 backend 门依次决定一对当前组能否合并
 
 第一次阅读下面长函数只走 vertical 正例：node1=op0，写 `buf0[c0]`，范围 8；node2=op1，读 `buf0[c0]` 并写输出，范围 8。两者同为 CPU 普通 SchedulerNode，成员总数 2 未超过限制；op0 是 op1 的祖先，读写索引完全一致，backend 允许相同循环范围融合。沿这组值，类型、设备、大小、共有数据和纵向依赖检查都会通过，函数返回 true。后面的 shifted、extern、max-size 三例再分别改动一个条件观察早退位置。
 
@@ -410,7 +451,15 @@ def can_fuse(self, node1: BaseSchedulerNode, node2: BaseSchedulerNode) -> bool:
 
 门次决定“最先看到的拒绝原因”。实验的 `mm→sin` 在 extern 类型门就返回，尚未计算共享数据；`max_fusion_size=1` 的 pointwise pair 先通过类型、设备和共享检查，才在成员总数门拒绝。
 
-shifted-index 两节点有共同 buffer 名，但精确 Dep 不相等。metric 未启用时实际 WhyNoFuse 为 `no shared data`；启用对应 metric 且 common names 非空时，会先记录细分原因并报告 `no shared data due to indexing mismatch`。正文不能把可选诊断字符串写成所有配置的固定结果。
+shifted-index 两节点有共同 buffer 名，但精确 Dep 不相等。metric 未启用时 WhyNoFuse 记录 `no shared data`；启用对应 metric 且 common names 非空时，它先记录细分原因，再记录 `no shared data due to indexing mismatch`。
+
+上面的类型、方向、device、共享、成员数和依赖判断都只读当前组状态。任一早退都不会修改 `fused_nodes` 或 `name_to_fused_node`；真正的组替换只发生在 K04 的 `backend.fuse` 之后。
+
+template 只能位于 pair 的第一项，后面接它的 epilogue。若列表顺序得到 `(pointwise, template)`，正向检查会因 `node2.is_template()` 拒绝；K02 随后尝试反向 `(template, pointwise)`。反向 pair 仍需保证 pointwise 没有 alias/mutation、不是 reduction，并且启用了 epilogue fusion。
+
+`has_shared_data_after_reordering_loop` 只在精确 Dep 交集为零时提供一次补充判断：它检查两组的访问在允许调整逐点循环顺序后能否变成相同的精确访问。返回 true 只让 pair 越过 `no shared data` 门；纵向 pair 随后仍要由 `can_fuse_vertical` 对 producer write 与 consumer unmet dependency 逐项匹配。
+
+在 `aggressive_fusion=True` 下，两个同 loop group、无共享 buffer、都不是 reduction 的普通节点可以越过共享门。若它们没有祖先关系，就继续检查合并是否提高峰值内存，再交给 backend 的 horizontal 门。aggressive 只扩展候选与准入机会，不直接执行 merge。
 
 ### 纵向融合要求 consumer 的相关读取由 producer 写入满足
 
@@ -462,9 +511,23 @@ def can_fuse_vertical(
 
 `computed_deps` 是融合后能在同一 kernel 内直接满足的 consumer 依赖。若 consumer 仍读取 producer 的 buffer，但索引/依赖类型没匹配，`remaining_deps & node1_buf_names` 立即拒绝；若剩余依赖来自别的 producer，则只在那个 producer 必须经过 node1 的祖先链时拒绝，避免把中间节点夹进不合法顺序。
 
-### 精确读写匹配
+### 普通读取与 weak 顺序要求怎样匹配写入
 
-这一段的正例设 `weak_dep=WeakDep(name="buf0", mutating_buf="buf0")`，node1 产生 buf0；node2 对 buf0 只有一次写入 `MemoryDep("buf0", c0, size=[8])`，同时读取的旧值也是 `MemoryDep("buf0", c0, size=[8])`。mutation 的真实名字仍是 buf0，所以过滤后 `relevant_reads` 恰有这一项，并与写入的 name、index、size 全部相同，返回 true。把读取索引改成 `c0+1`，最后一次比较就返回 false。
+普通 `MemoryDep` 表示“consumer 必须从这个 buffer 的这些位置取值”；`WeakDep` 只登记 mutation 前后的顺序要求，不携带一条可直接与 producer write 比较的普通读取。因此 `can_fuse_vertical` 先用 `fusable_read_and_write` 匹配普通读取，再单独处理 weak dependency。
+
+weak 正例中，node1 是旧值读取者，同时产生 `weak_dep.name="buf_old"`；node2 是后续 mutator，写入逻辑 mutation buffer `buf_mut`。具体状态为：
+
+```text
+mutation_real_name["buf_mut"] = "arg0"
+node1.reads  = { MemoryDep("arg0", c0, size=[8]) }
+node1 outputs 包含 "buf_old"
+node2.writes = { MemoryDep("buf_mut", c0, size=[8]) }
+weak_dep     = WeakDep(name="buf_old", mutating_buf="buf_mut")
+```
+
+第一道检查确认 weak dependency 等待的是 node1 产生的 `buf_old`。随后源码找到 node2 对 `buf_mut` 的唯一写入，通过 `mutation_real_name` 找回被修改前的真实名字 `arg0`，再从 **node1 的 reads** 中筛出对 `arg0` 的读取。正例只有一项 relevant read；它的位置、范围与 node2 写回相同，所以返回 true。把这项读取改成 `arg0[c0+1]` 就会失败。
+
+完整函数还有一个必须按当前实现保留的空集合出口：若 node1 没有任何名为 `arg0` 的 read，`relevant_reads=[]`，Python 的 `all([])` 返回 true。源码没有在此处额外要求“至少找到一项读取”。因此本函数的准确规则是：找到的每一项 relevant read 都必须与写入位置和范围相同；零项时该条件也通过。正文不把正例中的“一项旧值读取”推广成源码未检查的必要条件。
 
 ```python
 def fusable_weak_dep(
@@ -566,7 +629,9 @@ K03 到此完成。下一知识点 K04 展开一轮执行：旧候选映射到�
 
 ### 收益门的完整实现
 
-先走最常见的 CPU 普通节点路径：node1/node2 都不是 template 或 foreach，`benchmark_fusion=False`。于是 `is_multi_template=False`，函数在第一个收益判断直接返回 true，不会构造计时表。随后再读 GPU 测量分支时，可代入 `choice_timings={未融合两项: 2.4 ms, 融合项: 1.1 ms}`；只有融合项没有编译失败或寄存器溢出且 1.1 小于 2.4，才接受。
+先走最常见的 CPU 普通节点路径：node1/node2 都不是 template 或 foreach，`benchmark_fusion=False`。于是 `is_multi_template=False`，函数在第一个收益判断直接返回 true，不会构造计时表。
+
+普通 GPU 分支分别测得 `ms1`、`ms2` 和 `ms_fused`。例如 `ms1=1.4 ms`、`ms2=1.0 ms`、`ms_fused=1.1 ms`，比较的是 `1.1 < 1.4+1.0`。multi-template 分支的数据不同：`choice_timings` 保存每个 template choice **未融合时** 的耗时；函数切换到某个 Triton choice 后，另行调用 `benchmark_fused_nodes` 测出该 choice 的融合耗时，再选融合耗时最小且快于 `ms1+ms2` 的 choice。
 
 ```python
 def speedup_by_fusion(
@@ -774,7 +839,24 @@ def fuse_nodes_once(
 
 ### cycle 检查的完整实现
 
-这项检查处理的是“旧候选映射到融合组后，新组内部的边会不会绕回候选”。进入源码前先固定集合含义：`combined_operations` 是 node1 与 node2 的全部原 operation 名；`combined_ancestors` 是两组已有祖先的并集；`visited` 起初为空。`found_path` 只继续展开已经融合的第三方组：若该组的某个原 operation 依赖候选中的 operation，而它又是 node1/node2 的祖先，合并候选便会形成回路，返回 true；若第三方组的全部 operation 已经都在祖先集合中，就无需继续追踪。下面的 DFS 正是在 `name_to_fused_node` 中沿这两类关系展开。
+这项检查处理的是“旧候选映射到融合组后，两边与第三方融合组之间会不会互相依赖”。先看一个可以手算的状态：
+
+```text
+原有边：X ─> A       B ─> Y
+当前组：{A}、{B}、{X,Y}
+本次候选：合并 A 与 B
+```
+
+`X→A` 表示 A 依赖 X，所以候选 A+B 的祖先集合含 X。第三方当前组 `{X,Y}` 又包含 Y，而 Y 依赖候选中的 B。若把 A、B 合成 `{A,B}`，组间关系会变成：
+
+```text
+{X,Y} ──X→A──> {A,B}
+{A,B} ──B→Y──> {X,Y}
+```
+
+这就是环。代入函数：`combined_names={A,B}`，`combined_ancestors={X}`；从 X 通过 `name_to_fused_node` 找到第三方融合组 `{X,Y}`。它的 operation 集合并非 `{X}` 的子集，而且它的 `ancestors` 含 B，于是 `combined_names & node.ancestors={B}`，检查返回 true。
+
+源码中的 `found_path` 只展开已经融合的第三方组。若该组全部 operation 本来就都属于候选祖先，合并没有引入新的跨组成员，可以停止追踪；否则继续检查它是否依赖候选成员，或递归展开它带来的其他祖先组。
 
 ```python
 def will_fusion_create_cycle(
@@ -824,7 +906,7 @@ def will_fusion_create_cycle(
     return cycle
 ```
 
-单个未融合节点沿用 Q321 已算好的 ancestors，不会凭空引入新祖先；需要 DFS 的是已经合并过的组。`combined_names` 是本次两组内全部原 operation，`combined_ancestors` 是两组祖先并集去掉组内成员。若某个现有融合祖先又含指向 `combined_names` 的祖先关系，合并会闭合回路，返回 True。`visited` 防止在融合组图中重复递归。
+单个未融合节点沿用 Q321 已算好的 ancestors；能把原本分开的 X、Y 带进同一个检查对象的是已经合并过的第三方组。`combined_names` 是本次两组内全部原 operation，`combined_ancestors` 是两组祖先并集去掉组内成员。`visited` 防止在融合组图中重复递归。
 
 ### branched 案例的一轮四次 merge
 
@@ -840,11 +922,23 @@ def will_fusion_create_cycle(
 
 这里第四次不是把原始 op1 与 op3 合并，而是把当时的两个大组合并。每次成功后，组内所有原名都更新到新组，所以最后一个旧候选安全地变成“同组对自身”，不会重复 merge。
 
+backend 返回的新组不只是成员名单。实验捕获到 `op0+op1→op0_op1` 后，新组同时带有：成员 `{op0,op1}`、buffers `{buf0,buf1}`、精确 reads/writes、对组外仍未满足的 dependencies、合并后的 ancestors、device、loop group、`min_order/max_order`，以及 template/foreach/reduction、alias/mutation 等组级查询结果。下一条旧候选 `(op1,op2)` 映射成 `(op0_op1,op2)` 后，`can_fuse` 正是读取这些聚合状态重新判断，而不是沿用原来 op1 的结论。这个具体新组的对外读取为 `arg0_1[c0]`，unmet dependencies 已为空。
+
 本例关闭 benchmark 且运行在 CPU，收益门直接允许；实际记录没有命中 cycle。若 cycle 检查或收益门拒绝，循环只是 `continue` 或跳过 if 块，`fused_nodes` 与 name mapping 都不改变，后面的候选仍可继续检查。
 
 ### 一轮出口为何还要排序与裁边
 
-`fused_nodes` 的删除和追加顺序不等于合法执行顺序。方法先按 `min_order` 恢复稳定基线，再调用 Q321 的拓扑排序满足组间依赖。最后 `prune_redundant_deps(nodes)` 让每个当前组删除已经由同组内部满足、或可由当前融合映射证明冗余的依赖。出口因此是一份当前组列表，而不是 backend `fuse` 的原始返回集合。
+`fused_nodes` 的删除和追加顺序不等于合法执行顺序。方法先按 `min_order` 恢复稳定基线，再调用 Q321 的拓扑排序满足组间依赖。
+
+裁边可以用 vertical 例子直接观察。融合前 op1 的 unmet dependency 是“读取 `buf0[c0]`”，它由组外 op0 满足；融合后 op0 与 op1 已在同组，这项要求已由组内成员满足，不应继续作为组间入边。实验捕获的新组因此为：
+
+```text
+融合前：op1.unmet = {read buf0[c0]}
+融合后：op0_op1.unmet = {}
+对外读取仍为：{read arg0_1[c0]}
+```
+
+`prune_redundant_deps(nodes)` 清理的就是这类已经内部满足或可由当前融合映射证明冗余的组间要求。出口因此是一份重新拓扑排序且只保留对外依赖的当前组列表。
 
 branched 从 5 变 1，外层 K01 立即因 `new_len==1` 停止。若本轮只变成 3 项，下一轮会以这三项重新建立共享分组、priority 和 score；旧候选表不会跨轮复用。
 
@@ -854,4 +948,4 @@ branched 从 5 变 1，外层 K01 立即因 `new_len==1` 停止。若本轮只�
 
 若 benchmark 测得 `ms1=2.0`、`ms2=3.0`、`ms_fused=5.0`，严格小于条件不成立，融合拒绝；相等并不算收益。若普通 CPU 案例配置 benchmark=True，当前实现仍直接允许，因为 CPU benchmark fusion 尚不支持。
 
-至此，一对节点从候选生成、合法性检查、环检查和收益判断走到 backend 合并；合并后的节点列表再进入下一轮，直到节点数不再减少。
+至此，一对节点从候选生成、合法性检查、环检查和收益判断走到 backend 合并；合并后的节点列表再进入下一轮，直到某轮节点数不再减少、只剩一个组，或达到十轮上限。

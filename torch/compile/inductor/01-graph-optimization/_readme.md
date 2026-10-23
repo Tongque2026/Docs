@@ -54,3 +54,4 @@ Q10 第二轮回修完成。根队列转同层 Q20，不提前进入 Q11。
 - 只凭正文可答：stable sort 后若不 recompile，Graph 对象顺序可以正确，但 `GraphModule.forward` 仍可能执行旧代码；若不更新 meta，后续又可能用旧 shape/dtype/stride 作决定。
 - 综合迁移：若 post-grad mutation 图中的函数式 add 命中一项 replacement，阶段职责先保证它可以按纯计算匹配；matcher 改相应边；不变量维护恢复图、meta 与 forward；显式 copy_ 仍负责写回，除非规则明确且安全地连同它一起改写。
 - 上述是作者仅依据正文的复读。实际读者反馈仍为空，不报告读者已经理解。
+

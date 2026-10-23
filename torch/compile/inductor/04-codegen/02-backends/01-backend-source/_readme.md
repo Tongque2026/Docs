@@ -11,14 +11,15 @@
 
 | 平台 | 声明 | 作用 |
 | --- | --- | --- |
-| CPU `CppKernel` | `set_ranges`、`load`、`store`、`store_reduction` | 建立迭代/规约变量并把线性 index 变成指针访问 |
+| CPU `CppKernel` | `set_ranges`、`load`、`store`、`reduction`、`store_reduction` | 建立迭代/规约变量，把线性 index 变成指针访问，并组织 accumulator 的初始化、更新和最终写 |
 | CPU `CppKernelProxy` | `codegen_functions`、`codegen_nodes`、`codegen_loops` | 建 scalar 底稿，选择 1D/2D vector 与 tail，把 SchedulerNode 变成最终 loop nest |
 | Triton `TritonKernel` | `codegen_range_tree`、`indexing` | 分派范围树并将 SymPy index 变成 Triton offset/mask |
-| Triton `TritonKernel` | `load`、`store`、`store_reduction` | 生成带 eviction/cache/mask/broadcast/atomic 条件的访存 |
+| Triton `BlockPtrOptions` | `create`、`format`、`boundary_check`、`advance_roffset` | 把 block 匹配结果整理为 `make_block_ptr` 参数、边界维和规约步进 |
+| Triton `TritonKernel` | `load`、`store`、`store_reduction`、`codegen_block_ptr` | 生成带 eviction/cache/mask/broadcast/atomic 条件的访存，并落实 block pointer 的 boundary/padding/advance |
 | Triton `TritonKernel` | `codegen_body`、`codegen_kernel` | 拼接索引、计算、suffix 与完整 decorator/signature/body |
 | Triton `TritonKernel` range helpers | `iteration_ranges_ranges_code`、`iteration_ranges_scalar_code`、`iteration_ranges_get_pid`、`_has_constant_mask`、`filter_masks`、`iteration_ranges_codegen_header` | 实际生成 arange/scalar、program id、offset 与可省略/必需 mask |
 
-共 20 个方法。`TritonKernel.indexing` 约 336 行、`codegen_kernel` 约 182 行，`CppKernelProxy.codegen_functions` 约 160 行，仍须完整保留，不能用分支摘要替代；长实现按连续机制分段恢复状态。研究已确认：只讲 `CppKernel.load/store` 无法解释 Q42 实测的 16+3，只讲 `codegen_range_tree` 也无法解释 pid/offset/mask，因此 proxy 三方法与六个 range helper 都属于本叶子声明范围。
+共 26 个方法。`TritonKernel.indexing` 约 336 行、`codegen_kernel` 约 182 行，`CppKernelProxy.codegen_functions` 约 160 行，仍须完整保留，不能用分支摘要替代；长实现按连续机制分段恢复状态。研究已确认：只讲 `CppKernel.load/store` 无法解释 CPU 规约累计或 Q42 实测的 16+3，只讲 `codegen_range_tree` 也无法解释 pid/offset/mask 与 block pointer 的最终语句，因此 `CppKernel.reduction`、`BlockPtrOptions` 四个转换方法、`TritonKernel.codegen_block_ptr`、proxy 三方法与六个 range helper 都属于本叶子声明范围。
 
 ## 篇内知识点队列
 
@@ -29,7 +30,7 @@
 | K03 | 分段讲完整 Triton indexing：precomputed size、simplification、mask、indirect、block pointer、dense/reshape/broadcast 等主要出口 | 多组符号索引推演 | 完成，已复读 |
 | K04 | 完整讲 load/store/store_reduction 的 dtype、mask、eviction/cache、atomic、broadcast与失败/断言 | 源码分支 + 测试定位 | 完成，已复读 |
 | K05 | 连接 codegen_body/kernel 的参数、decorator、heuristic、代码段顺序与 wrapper 消费；完成声明与理解验收 | N=19 Triton 假定产物 | 完成，已复读 |
-| K06 | 完整推演 CppKernelProxy 从 scalar 底稿到 1D/2D vector、masked/scalar tail 与 loop 输出，并完成 20/20 AST 验收 | 实验 13 + cpp.py | 完成，已复读 |
+| K06 | 完整推演 CppKernelProxy 从 scalar 底稿到 1D/2D vector、masked/scalar tail 与 loop 输出，并完成 26/26 AST 验收 | 实验 13 + cpp.py | 完成，已复读 |
 
 ## 覆盖与证据原则
 
@@ -41,11 +42,11 @@
 
 ## 当前恢复点
 
-Q421 六个知识点均已完成并复读。声明范围的 20 个方法全部与当前产品源码 AST 等价；正文另外完成 CPU 1D/2D tail、Triton ordinary/block-pointer/atomic、loop/persistent reduction 的状态推演。根队列下一项为 Q431。
+Q421 六个知识点均已完成并复读。声明范围的 26 个方法全部与当前产品源码 AST 等价；正文另外完成 CPU 1D/2D tail、Triton ordinary/block-pointer/atomic、loop/persistent reduction 的状态推演。根队列下一项为 Q431。
 
 ## 第五轮事实验收
 
-- 源码范围：从 Markdown 的 Python fence 提取函数，与 commit `8332c5622aabd9535969e9a8d0ed60e4a90e4402` 的 `CppKernel`、`CppKernelProxy`、`TritonKernel` 对照，20/20 AST 相同。教学注释不改变语义；曾发现 `indexing` 的 docstring 空白不同导致 19/20，已恢复产品原文后达到 20/20。
+- 源码范围：从 Markdown 的 Python fence 提取函数，与 commit `8332c5622aabd9535969e9a8d0ed60e4a90e4402` 的 `CppKernel`、`CppKernelProxy`、`BlockPtrOptions`、`TritonKernel` 对照，26/26 AST 相同。教学注释不改变语义；第六轮把 `CppKernel.reduction`、`BlockPtrOptions` 四个转换方法和 `TritonKernel.codegen_block_ptr` 纳入范围后重新执行了全部对照。
 - CPU 实验：`PYTHONPATH=/work/pytorch python3 experiments/13_backend_models.py` 通过，N=19 结果与 eager 一致；既有生成产物显示 16 元素 vector 主循环与 3 元素 tail。它支持当前机器的 CPU 路径，不证明其他 ISA 都采用 16。
 - Triton 公式实验：同一脚本用 N=19、XBLOCK=8 得到 pid 三组 0..7、8..15、16..23，mask 后覆盖恰为 0..18。当前环境没有 CUDA/Triton，未声称实际编译或运行 GPU kernel；decorator、block pointer 和 eviction 结论来自当前源码。
 - 结构检查：源码前先建立范围树、offset/mask、代码缓冲区与 scalar 底稿的用途；长函数后均有具体状态和条件对照，不以 AST 或实验成功替代理解验收。
@@ -61,3 +62,46 @@ Q421 六个知识点均已完成并复读。声明范围的 20 个方法全部�
 5. 18×18、factor=16 的 2D masked tiling 分成 16×16、16×2、2×16、2×2，后三块分别携带 inner、outer、双 tail size，因此没有重复或遗漏。
 
 实际读者反馈仍未取得；这里登记的是作者复读，不能表述为读者已理解。
+
+## 第六轮隔离冷读回修
+
+本轮每次只把当前 `README.md` 交给一名 `fork_turns=none` 的新读者；读者不得
+读取作者记录、其他教程、源码、实验、旧报告或聊天。提示中列出的认知背景只
+限定读前已知内容，不允许读者用任务说明或问题暗示补全正文。
+
+- `127_BACKEND_SOURCE_COLD_REVIEW_1.md`（B）：补齐 CPU `args/CSE/buffers`
+  所有权、N=19 block pointer 最终出口和 proxy 候选失败路径。
+- `128_BACKEND_SOURCE_COLD_REVIEW_2.md`（A，但事实范围仍有缺口）：补入完整
+  `CppKernel.reduction` 与 `TilingSelect` 控制条件。
+- `129_BACKEND_SOURCE_COLD_REVIEW_3.md`（B）：补入 prefix/body/suffix 的 loop
+  消费者、CPU 2×128 vector sum 产物和完整 `codegen_block_ptr`。
+- `130_BACKEND_SOURCE_COLD_REVIEW_4.md`（B）：补入 reduction projection 的产生
+  与消费、loop 递归绑定、K05 案例一致性和 1D 异常时状态。
+- `131_BACKEND_SOURCE_COLD_REVIEW_5.md`（B）：继续补入 vector accumulator 的
+  初始化/投影、`BlockPtrOptions.create/format/boundary_check/advance_roffset`
+  完整源码与 N=19、2×128 状态，并按源码顺序说明 2D 生成异常前后的 loop tree。
+- `132_BACKEND_SOURCE_COLD_REVIEW_6.md`（B）：补全 2×128 block pointer 从
+  `create` 到 boundary/format/advance 的逐维联算；删除正文入口对 Q42/Q411
+  编号的依赖；修正 r header 与 `indexing_code` 的归属；明确 CPU sum 各代码区
+  的实值，并把 scalar 后备限定在选择失败和 tail 情况。
+- `133_BACKEND_SOURCE_COLD_REVIEW_7.md`（B+）：补出 `Kernel/CppKernel`
+  初始化与 args 共享、CSE/代码区私有边界；从 `(19,1)`、`(2,128)` 建立 x/r
+  range tree；修正 pointwise `numels=[19,1] → size_hints=[32,1] → [32]`；
+  补明 `get_load_buffer` 三路和 `store_reduction` 异常时的手动状态边界。
+- `134_BACKEND_SOURCE_COLD_REVIEW_8.md`（B）：补出首次状态表前的 args 所有权、
+  range-tree 一般构造和 active 过滤规则、最大 block 常量与 boundary 手算、
+  `get_load_buffer` 精确三路条件。
+- `135_BACKEND_SOURCE_COLD_REVIEW_9.md`（B）：发现真正剩余的主链缺口是 Triton
+  reduction producer；补入 2×128 non-persistent sum 从 body accumulator、每轮
+  compute combine、suffix 横向 reduction 到 `store_reduction` value 的全链，并
+  对照 persistent、max、argreduce 和 Welford 的结构差异。
+- `136_BACKEND_SOURCE_COLD_REVIEW_10.md`（B）：结构链已闭合，但案例没有把输入值
+  代入 lane accumulator；补入两行 0..255 在 RBLOCK=64 下的两轮逐 lane 状态、
+  suffix 横向和 8128/24512、最终输出位置，并与 persistent 一次横向规约并排。
+- `137_BACKEND_SOURCE_COLD_REVIEW_11.md`（A）：全新读者独立重算 CPU 16+3、
+  Triton N=19、2×128 non-persistent/persistent sum、block pointer、访存与 proxy
+  正常/异常路径；本文承诺的两条主线均可首次顺读迁移。通用 ND matcher 仍是
+  最难段，但不阻断普通路径和两个核心案例。
+
+修改后重新做声明范围核对，26/26 AST 等价。实验 13 重新运行通过：CPU N=19
+结果与 eager 相同；Triton 公式覆盖恰为 0..18，CUDA/Triton 仍未执行。

@@ -63,3 +63,22 @@
 - **作者迁移 4**：函数额外返回 first 时，不能保留覆盖 buf0 的 inplace ReuseLine；group names、live range 和 allocation tree 都必须随输出合同重建。
 
 以上为作者只依据正文完成的复读，不代表已经取得实际读者反馈。
+
+## 第六轮隔离冷读回修
+
+每轮只把本篇 `README.md` 交给一名 `fork_turns=none` 的新读者；禁止读取作者
+记录、其他教程、源码、实验、旧报告或聊天。提示只限定读前背景，不能替正文传递
+知识。
+
+- `138_PLANNER_SOURCE_COLD_REVIEW_1.md`（B）：删除开头对 Q43 的依赖，先建立
+  Buffer/planning line 与 A→C storage 接管；明确默认 LIFO 与 pool planner 是生成
+  入口二选一的路径；一次性给出两次 mm 的四个 buffer、调用、reuse、free、output
+  完整时间线；补入 `MemoryPlanningState` 字段初态、四种 `memory_pool` 配置表和
+  Temporal/Spatial 节点语法；把“七个 pass”校正为五个顶层步骤加两个内部子步骤。
+- `139_PLANNER_SOURCE_COLD_REVIEW_2.md`（A）：全新读者可独立复述默认 LIFO 与
+  pool 两条路径，完成 fixed two-mm、四种 pool 配置、Temporal/Spatial、首末用和
+  output 保活迁移。随后修掉非阻断摩擦：首次即说明 planning line 是生成期对象及
+  ReuseLine 两种来源，标明独立最小案例，补半开边界语义并修正结尾两路径起手式。
+
+修改后检查 10 个 Python fence 均可解析；实验 14 重跑，默认与 pool 结果均
+`matches_eager=True`，生成顺序仍与正文固定时间线一致。

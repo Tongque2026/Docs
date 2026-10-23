@@ -232,3 +232,4 @@ mm      → ExternKernelOut buf1(size=[1,2])    operations=[ComputedBuffer, Exte
 | View/ReinterpretView | 新 size、reindex 或固定 stride/offset、共享 data | 读取原 storage 的坐标关系，通常不新增 operation |
 
 这些对象先交给[存储与数据版本](../03-storage-layout/README.md)。可继续组合的规则仍由后继 loader 引用；图输出、外部调用或其他物化条件会让规则进入 `ComputedBuffer` 并登记 operation。Scheduler 只读取已经登记的 operations，并在分析或生成时重放其中的计算/索引规则；共享原 storage 的 view 没有独立 operation，也不会单独成为调度节点。
+

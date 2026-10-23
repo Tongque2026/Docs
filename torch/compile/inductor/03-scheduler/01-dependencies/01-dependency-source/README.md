@@ -2,7 +2,14 @@
 
 [返回依赖篇](../README.md) · [返回 Scheduler](../../README.md) · [返回总览](../../../README.md)
 
-Q31 已经展示最终依赖图，本篇从实现重新建立它。第一步不是马上连接 producer 和 consumer，而是把每项 Lowering operation 包成 scheduler node，并为该节点装上一份读写清单。
+Q31 已经展示最终依赖图，本篇从实现重新建立它。输入是 Lowering 交出的 operation 列表；出口是每个 scheduler node 的读写清单、尚未满足的依赖、每个结果的 users，以及 mutation 的版本关系。拓扑排序、死代码删除和最后使用位置随后读取这些信息。
+
+贯穿全文的几个对象先固定用途：
+
+- `ReadWrites` 保存一项工作的完整访问事实：`reads`、`writes`、不直接访问 buffer 的 `index_exprs`，以及解释索引符号所需的 `range_vars/var_ranges`。
+- `MemoryDep(name,index,...)` 表示按索引访问某个 buffer；`StarDep(name)` 只要求这个名字代表的整项结果已经完成；`WeakDep(reader_output,mutating_buf=...)` 只安排先后，不读取 `reader_output` 的数值。
+- `unmet_dependencies` 从完整 reads 开始，再删掉 graph input 和常量等调度开始前已经可用的名字。它回答的是“当前节点还要等哪些内部结果”，不是完整访问清单。
+- scheduler wrapper 把不同种类的 operation 接到统一调度接口。wrapper 不改变计算含义，只统一提供名字、输出、读写和 users 等信息。
 
 ## K01：operation 类型决定包装节点和读写来源
 
@@ -83,6 +90,22 @@ def _compute_attrs(
         )
 ```
 
+no-op 与 extern wrapper 的构造路径更短：二者都直接采用 operation 自报的 `get_read_writes()`，区别是 no-op 后续不生成普通 kernel，extern 后续生成已有函数调用。
+
+```python
+class ExternKernelSchedulerNode(BaseSchedulerNode):
+    def __init__(self, scheduler, node):
+        super().__init__(scheduler)
+        self._init_from_node(node)
+        self.set_read_writes(node.get_read_writes())
+
+class NopKernelSchedulerNode(BaseSchedulerNode):
+    def __init__(self, scheduler, node):
+        super().__init__(scheduler)
+        self._init_from_node(node)
+        self.set_read_writes(node.get_read_writes())
+```
+
 读写安装不是简单赋字段。`BaseSchedulerNode` 立即生成一份初始未满足集合，再裁掉已经存在的图输入和常量：
 
 ```python
@@ -122,6 +145,8 @@ unmet_dependencies = {}
 | reduction ComputedBuffer | SchedulerNode | 三条 arg0_1 MemoryDep | 空 |
 | mm ExternKernelOut | ExternKernelSchedulerNode | 两条输入 StarDep | 空 |
 | sin ComputedBuffer | SchedulerNode | 一条 buf0 MemoryDep | buf0 MemoryDep |
+
+另外两条路径可用同一规则判断。假设 no-op 自报 `reads={StarDep(buf0)}`、不写新 buffer，它的 wrapper 仍保留这项 read；若 buf0 是内部结果，unmet 也保留 buf0。假设 template 自报读取 graph input x 和内部临时量 buf2，`SchedulerNode` 通过 template 的 `extract_read_writes()` 得到两项 read，裁剪后只剩 buf2。决定 unmet 的是名字是否已经 available，而不是 wrapper 是否生成普通 kernel。
 
 ### K01 理解验收
 
@@ -248,7 +273,7 @@ def extract_read_writes(
 
 slow path 依赖当前 `V.graph.sizevars` 来规范化索引。它必须在合法 GraphLowering 上下文运行；把函数孤立拿到模块外调用并不是产品路径。
 
-fast path 的循环不是“只重放普通 load/store”。它逐类读取 `LoopBody.memory_usage`，再调用与 slow path 相同的记录器接口：
+`LoopBody.memory_usage` 是 tracing LoopBody 时保存的访问事件分类表。每项事件保存 buffer 名、索引表达式的名字，以及 store 的 mode；fast path 不重新执行计算，只逐类重放这张表。它不只处理普通 load/store：
 
 | 已保存的使用类型 | 重放动作 | 对 `ReadWrites` 的影响 |
 | --- | --- | --- |
@@ -262,11 +287,70 @@ fast path 的循环不是“只重放普通 load/store”。它逐类读取 `Loo
 
 其中 `None` 是因为依赖提取只需要“访问哪个名字、哪个位置、采用哪类写法”，不需要保存当时计算出的数值。若一条 `STORE` 的 `mode` 是原子更新，调度看到的仍是一项写；原子操作怎样生成指令属于后端代码生成，不在这里展开。
 
+这些动作怎样变成最终依赖，由同一个记录器完成：
+
+```python
+def load(self, name, index):
+    self._reads.add(MemoryDep(name, *self.canonicalize(index)))
+
+def load_seed(self, name, index):
+    assert isinstance(index, int)
+    return self.load(name, sympy.Integer(index))
+
+def store(self, name, index, value, mode=None):
+    self._writes.add(
+        MemoryDep(name, *self.canonicalize(index), mode=mode)
+    )
+
+def bucketize(self, values, offsets_name, offsets_size, indexing_dtype, right):
+    self._reads.add(StarDep(offsets_name))
+```
+
+所以 `STORE(out,tmp1,mode="atomic_add")` 最终产生的 write 是 `MemoryDep(out,tmp1,...,mode="atomic_add")`；mode 不是只在调用途中出现。`LOAD_SEED(seed,index=4)` 先要求索引能转成 Python `int`，再产生常量位置的 `MemoryDep(seed,4,var_names=(),size=())`；若保存的表达式不能转成整数，fast path 在 `int(...)` 处失败。`BUCKETIZE(offsets,...)` 不建立某个具体位置的 MemoryDep，而是建立 `StarDep(offsets)`，要求整个边界数组已经可用。
+
 间接索引还多一步名称对齐。假设 LoopBody 保存的访问式为 `indirect0 + d0`，`indirect_vars=[indirect0]`；fast path 先建立 `indirect0 -> tmp0`，再得到 `tmp0+d0`。slow path tracing 临时值时也采用 `tmp0` 命名，因此两条路径不会仅因内部符号名字不同而得到不可比较的依赖。若有两个间接变量，就按保存顺序成为 `tmp0、tmp1`，而不是都映到同一个符号。
+
+例如事件表含 `LOAD(x,index0)`、`STORE(out,index1,mode="atomic_add")`，并且：
+
+```text
+index0 = indirect0 + d0
+index1 = indirect1
+indirect_vars = [indirect0, indirect1]
+```
+
+代入当前循环符号后，记录器收到 `load(x,tmp0+d0)` 和 `store(out,tmp1,mode="atomic_add")`。出口中的读依赖使用索引 `tmp0+d0`，写依赖使用 `tmp1` 并保留 `atomic_add` mode。名称替换改变的是内部临时符号，不能把两个间接位置合并；mode 传递保留写入种类，不能把原子更新误记成普通覆盖。
 
 ### `[2,3]` 规约为何最后只有变量 `c0`
 
-实验 08 中，Scheduler 从 `ComputedBuffer.simplify_and_reorder()` 得到 pointwise size `[2]`；长度 3 的 reduction 在更早的 LoopBody 建立过程中已针对当前静态规模展开成三次读取。调用本函数时的前缀实际产生 `c0`，范围为 2。
+前面的 `(2,1,3)` 只是说明 size-1 维怎样 squeeze。现在回到另一项实际案例：Python 请求对 2×3 输入按行求和。实验 08 中，Scheduler 从 `ComputedBuffer.simplify_and_reorder()` 得到 `argsizes=([2],[])`：第一组 `[2]` 是输出位置，第二组为空，说明当前 LoopBody 已没有单独的 reduction 循环变量。长度 3 的规约在更早建立 LoopBody 时已展开成三次读取。
+
+进入 fast path 前，实际保存状态是：
+
+```text
+memory_usage[LOAD] = [
+  (arg0_1, index0),
+  (arg0_1, index1),
+  (arg0_1, index2),
+]
+memory_usage[STORE] = [(buf0, index3, mode=None)]
+indexing_exprs = {
+  index0: 3*z0,
+  index1: 3*z0 + 1,
+  index2: 3*z0 + 2,
+  index3: z0,
+}
+```
+
+`index_vars_squeeze([2],[])` 建立当前符号 `c0`，`indexing_from_args` 把旧表达式中的 z0 换成 c0，得到：
+
+```text
+index0 -> 3*c0
+index1 -> 3*c0 + 1
+index2 -> 3*c0 + 2
+index3 -> c0
+```
+
+随后三次 `inner.load(...)` 让 `_reads` 从空集合依次变成一、二、三项；一次 `inner.store(...)` 把 `buf0[c0]` 加入 `_writes`。本例的输出事件是普通 `STORE`，不是 `STORE_REDUCTION`，因为静态三项规约已经展开在三个 load 中。
 
 LoopBody 中的三个 load 索引名代入后分别成为：
 
@@ -291,11 +375,33 @@ var_ranges = {c0: 2}
 
 代入 `c0=0` 得到输入位置 0、1、2 和输出位置 0；代入 `c0=1` 得到输入位置 3、4、5 和输出位置 1。依赖记录因此同时表达“读哪个 buffer”和“本循环怎样覆盖它的位置”。
 
+若没有现成 LoopBody，同一访问可写成普通 callable：
+
+```python
+def row_sum(c):
+    a = ops.load("arg0_1", 3 * c)
+    b = ops.load("arg0_1", 3 * c + 1)
+    d = ops.load("arg0_1", 3 * c + 2)
+    ops.store("buf0", c, a + b + d)
+```
+
+slow path 在记录 handler 下执行它，四次 ops 调用形成同样的三项 reads 和一项 write。两条路径共享出口，但 fast path 的输入是事件表，slow path 的输入是会发出 ops 的 callable。
+
 注意，Python 请求里有 reduction 轴，不代表这里一定出现第二个符号变量。当前实际 LoopBody 已把三个固定项展开；实验输出中的三条 MemoryDep 是目标机制的直接证据，不能凭 `sum(dim=1)` 名称杜撰一个运行时 reduction 变量。
 
 ### normalize 改变表示，不改变访问集合的含义
 
 当 `normalize=False`，返回原始 `range_vars`，便于后面比较和调整循环顺序。当 `normalize=True`，记录器可能合并循环，函数把 `range_vars` 置空，依赖自身仍携带规范化后的 `var_names/size`。这不是删除访问，只是选择一份更容易比较的索引表示。
+
+记录器的 `canonicalize` 在 normalize 打开时调用 `V.graph.sizevars._simplify_loops(...)`，取得新的循环尺寸和 reindex，再用规范前缀 `c0、c1...` 改写 index；关闭时只简化原范围并删除 index 没有使用的尾部变量。也就是说，`V.graph.sizevars` 的参与发生在依赖构造器内部，而不是 `extract_read_writes` 外层。
+
+```text
+normalize=False：外层 ReadWrites.range_vars 保存原符号，如 [d0,d1]。
+normalize=True ：外层 ReadWrites.range_vars 固定为空；每项 MemoryDep 自己仍保存
+                 规范化后的 name、index、var_names 和 size。
+```
+
+因此消费者不能在 `normalize=True` 时从外层字段恢复原循环数，但仍可从每项依赖判断它访问哪个名字和哪些位置。
 
 ### K02 理解验收
 
@@ -526,9 +632,11 @@ def compute_dependencies(self) -> None:
 
 ## K03：同一 storage 的名字必须看到同一份 users
 
-`name_to_users` 的值不是普通集合，而是 `DedupList`：它保留插入顺序、拒绝相同 `NodeUser`，并允许 mutation 循环在遍历旧 users 时追加 weak user。alias 预处理进一步让不同名字指向同一个 `DedupList` 对象。
+每个内部结果已有自己的 producer，例如 buf0 是 op0 的输出；本节不重新寻找 producer，而是反向记录“哪些节点会使用这个结果”。`NodeUser(node,can_inplace,is_weak)` 保存消费者节点、它是否可能原地复用该结果，以及这条关系是否只用于排序。`name_to_users[buffer_name]` 就是按结果名字查消费者的临时表，最后复制到对应 `SchedulerBuffer.users`。
 
-假设开始时 `base` 已有 reader A，`view` 已有 reader B，随后发现两者 alias：
+同一块 storage 可能同时叫 `base` 和 `view`。从任一名字登记的 reader 都会影响这块 storage 的生命周期和 mutation 顺序，因此这些名字不能各自维护互不相干的 users 表。`name_to_users` 的值使用 `DedupList`：它保留插入顺序、拒绝相同 `NodeUser`，并允许 mutation 循环在遍历旧 users 时追加 weak user。alias 预处理进一步让不同名字指向同一个 `DedupList` 对象。
+
+下面先人为给两张待合并的表各放一个 reader，只为说明 `DedupList.__add__` 怎样保留双方条目；在 `compute_dependencies` 的真实顺序中，alias 预处理早于后面的普通 reader 登记。假设合并时 `base` 的表含 A、`view` 的表含 B：
 
 ```text
 name_to_users[base] -> list1=[A]
@@ -561,7 +669,17 @@ users[buf1] = [OUTPUT(weak=False,inplace=False)]
 
 ### unbacked symbol 走单独的来源表
 
-设数据相关操作 op0 首次产生符号长度 `u0`，它的输出是 buf0，于是来源表记录 `u0→op0`。后续 op1 的尺寸表达式使用 u0，Scheduler 就给 op1 增加 `StarDep(buf0)`：op1 必须等 op0 整体产生这个运行时长度。若 u0 直接来自 graph input，表中记录 `u0→None`，因为输入在调度开始前已经可用，不需要建立可释放的内部 buffer 依赖。多个 MultiOutput 都携带 u0 时，源码选择第一次登记的 operation 作为统一来源；这就是这里的 canonical origin，而不是任选一个新定义。
+unbacked symbol 是运行时数据决定的整数，例如“过滤后实际留下多少项”形成的长度 u0。它不是一次对 buf0 某个位置的读取，无法用 `MemoryDep(buf0,index)` 描述；使用者需要的是“先让产生 u0 的工作整体完成”。
+
+```text
+op0 运行后得到数据结果 buf0，并定义长度 u0
+                         |
+                         | 来源表 u0 -> op0
+                         v
+op1 的输出 shape 使用 u0 → 为 op1 增加 StarDep(buf0)
+```
+
+若 u0 直接来自 graph input，表中记录 `u0→None`，因为输入在调度开始前已经可用，不需要建立可释放的内部 buffer 依赖。多个 MultiOutput 都携带 u0 时，源码选择第一次登记的 operation 作为统一来源；这就是这里的 canonical origin，而不是任选一个新定义。
 
 ### K03 理解验收
 
@@ -611,7 +729,37 @@ mutation 先把 op1 追加到 alt_name 的 users，再遍历同一 `items`。列
 
 ### 两次 mutation 的版本链
 
-若后面 buf2 再次 mutation 原名 arg0_1，`rename(arg0_1)` 先递归得到 buf1；新关系写成：
+在第一次 mutation 与第二次 mutation 之间加入一名 reader，才能同时看到 prior writer 和 old readers 怎样变化：
+
+```text
+op1：buf1 mutation arg0_1          # 第一次写 x
+op2：读 arg0_1，写 mid             # 逻辑上读取第一次写后的 x
+op3：buf2 mutation arg0_1          # 第二次写 x
+```
+
+第一次 mutation 完成后：
+
+```text
+mutation_renames = {arg0_1: buf1}
+mutation_real_name = {buf1: arg0_1}
+```
+
+处理 op2 的普通 read 时，`add_user` 内部先执行 `rename(arg0_1)`，所以 op2 登记到 `name_to_users[buf1]`；随后 `update_mutated_names` 又把 op2 自己的 read 从 arg0_1 改成 buf1。它等待的是第一次 mutation 产生的新版本，而不是最初输入。
+
+处理 op3 的 mutation 输出时，状态依次变化：
+
+```text
+1. alt_name = rename(arg0_1) = buf1
+2. add_user(buf1, op3)
+3. op3 增加 StarDep(buf1)              # 等第一次 writer op1
+4. 遍历 name_to_users[buf1]
+   - 跳过 op3 自己
+   - 发现旧 reader op2，其输出为 mid
+   - op3 增加 WeakDep(mid, mutating_buf=buf2)
+5. prune 后：StarDep(buf1) 与 WeakDep(mid,...) 都指向内部结果，均留在 unmet
+```
+
+此时 op3 还没有宣布 buf2 是最新版本。它先用上述依赖保证 op1、op2 都已完成，然后才更新版本表：
 
 ```text
 mutation_renames[arg0_1] = buf2
@@ -619,11 +767,26 @@ mutation_renames[buf1]   = buf2
 mutation_real_name[buf2] = mutation_real_name.get(buf1,buf1) = arg0_1
 ```
 
-再往后的 read 通过 `node.update_mutated_names` 改写到 buf2，而生成阶段仍知道 buf2 最终写回真实 arg0_1。
+第二次 mutation 后，新的普通 reader 若仍写着 arg0_1，`rename` 和 `update_mutated_names` 都把它接到 buf2。本函数只负责保存 `mutation_real_name[buf2]=arg0_1`；后续 `process_weak_deps` 用它把 weak dependency 的 mutating buffer 还原成真实名字，代码生成的 buffer-name 映射也用它把最新逻辑版本对应回调用者输入 x。
+
+若两次 mutation 之间没有 op2，第二次 mutator仍有 `StarDep(buf1)` 等第一次 writer，但没有针对中间 reader 的 `WeakDep`。这正是 prior writer 与 old readers 两类约束的区别。
 
 ### K04 理解验收
 
-两个旧 readers A、B 都读 arg0_1 时，它们彼此没有先后关系；mutator 遍历两名 user，分别从其输出建立 WeakDep，因此必须晚于 A、B。这个约束没有强行规定 A 与 B 谁先执行。
+两个旧 readers A、B 都读 arg0_1，A 的 `get_buffer_names()` 为 `{a0}`，B 的为 `{b0}` 时，mutator 最终得到：
+
+```text
+reads = 原有数值读取
+      + StarDep(arg0_1)
+      + WeakDep(a0, mutating_buf=mut)
+      + WeakDep(b0, mutating_buf=mut)
+unmet = WeakDep(a0, mutating_buf=mut)
+      + WeakDep(b0, mutating_buf=mut)
+users[a0] 追加 mutator(is_weak=True)
+users[b0] 追加 mutator(is_weak=True)
+```
+
+`StarDep(arg0_1)` 因 graph input 已可用而从 unmet 裁掉；a0、b0 是内部结果，所以两条 WeakDep 保留。A、B 彼此没有先后关系，但 mutator 必须晚于两者。源码对每名旧 reader 遍历 `get_buffer_names()`；若一名 reader 对应多个 buffer 名，就逐名建立 WeakDep，而不是假设每名 reader 永远只有一个输出。
 
 若 input mutation 的结果不在 Python 返回 tuple 中，末尾仍遍历 `mutation_renames`，为 graph input 原名加入 OUTPUT 并记录 `mutated_input_idxs`。外部可见副作用本身就是保活理由。
 

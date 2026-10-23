@@ -113,6 +113,14 @@ def template_mm(x, weight):
     return torch.relu(torch.mm(x, weight))
 
 
+def nop_empty():
+    return torch.empty_strided((2, 3), (3, 1))
+
+
+def nop_empty_debug():
+    return torch.empty_strided((3, 2), (2, 1))
+
+
 class FrozenTemplateModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -181,12 +189,31 @@ with config.patch({"force_disable_caches": True}), patches[0], patches[1], patch
             frozen_template_module, backend="inductor", fullgraph=True
         )(frozen_template_x)
 
+    case_name = "nop_empty"
+    nop_result = torch.compile(
+        nop_empty, backend="inductor", fullgraph=True
+    )()
+
+    case_name = "nop_debug_sync"
+    try:
+        with config.patch({"triton.debug_sync_kernel": True}):
+            torch.compile(
+                nop_empty_debug, backend="inductor", fullgraph=True
+            )()
+    except Exception as error:
+        nop_debug_sync_error = f"{type(error).__name__}: {error}".replace("\n", "\\n")
+        events.append(f"[nop_debug_sync] error={nop_debug_sync_error}")
+    else:
+        nop_debug_sync_error = ""
+
 torch.testing.assert_close(pointwise_result, (x + 1) * 2)
 torch.testing.assert_close(mixed_result[0], x + 1)
 torch.testing.assert_close(mixed_result[1], torch.sin(torch.mm(matrix, weight)))
 torch.testing.assert_close(
     dependent_mixed_result, torch.sin(torch.mm(matrix + 1, weight))
 )
+assert list(nop_result.shape) == [2, 3]
+assert "device" in nop_debug_sync_error
 torch.testing.assert_close(fallback_result, torch.histc(hist_input, bins=4, min=0, max=4))
 torch.testing.assert_close(template_result, torch.relu(torch.mm(template_x, template_weight)))
 torch.testing.assert_close(
@@ -202,6 +229,8 @@ events.extend(
         f"fallback_result={fallback_result.tolist()}",
         f"template_shape={list(template_result.shape)}",
         f"frozen_template_shape={list(frozen_template_result.shape)}",
+        f"nop_shape={list(nop_result.shape)}",
+        f"nop_debug_sync_error={nop_debug_sync_error}",
     ]
 )
 summary = "\n".join(events) + "\n"

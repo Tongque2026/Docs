@@ -6,13 +6,52 @@
 输入不适用的机器码误当成命中。本叶子把这两个问题分开：hash details 找“同类编译
 请求”，每个候选保存的 guards 再判断“当前符号值能否使用这一版本”。
 
+先看真实入口 `FxGraphCache.load` 的完整控制顺序。后文各节只是在展开这张图中的
+一段，不会改变它们的先后关系：
+
+```text
+输入：compile_fx_fn、gm、example_inputs、fx_kwargs、inputs_to_check、local/remote
+  |
+  ├─ 前置检查或 key 序列化无法安全完成
+  |      -> bypass：直接 compile，不查找、不保存
+  |
+  └─ 形成 key
+         -> 依次检查 local 候选，再检查至多一个 remote 候选
+              |
+              ├─ 某候选 guard 对本次整数 hints 为真
+              |      -> 恢复 wrapper callable
+              |      -> 用真实 SymInt 再求 guard，安装到当前 ShapeEnv
+              |      -> hit
+              |
+              └─ 损坏候选逐个跳过，最终无可用候选；或 artifact 以 OSError 加载失败
+                     -> miss：调用 compile_fx_fn
+                     -> 保存去掉 callable 的 metadata 副本
+
+hit / miss / bypass
+  -> 共同执行 post_compile（当前输入 stride、cudagraph、realign）
+  -> 返回当前进程可调用的 CompiledFxGraph
+```
+
+因此 bypass 与 miss 不同：miss 已经有安全 key，只是没有可用候选；bypass 连安全查找
+的前提都不成立。hit 也不是直接返回磁盘对象，必须先恢复当前进程的 callable，再走
+共同后处理。
+
+贯穿全文的跨进程案例也先走完一次。run1 传入同一份规范化图和动态输入，形成 key K；
+本地 K 目录为空，所以 compile 得到 graph B，并从编译后的 ShapeEnv 为当前
+`s0=16` 生成候选 guard H0，将
+`current_callable` 清空后的副本保存为 K/H0；run1 保留原 B 的 callable，经过
+post-compile 后执行。run2 是新进程，同一图细节再次形成 K；它读取 H0，用本次整数
+hint 验证 guard，按 artifact key 加载本进程的 wrapper `module.call`，再以真实 SymInt
+求 guard 并安装到当前 ShapeEnv，经过 post-compile 后返回可调用 graph。若 run2 的
+hint 不满足 H0，它继续其他叶子；全部拒绝才重新编译并保存新叶子。
+
 ## K01：把会改变代码生成的信息变成稳定 hash details
 
 以 `relu(x+1)*2` 为例，FX 图结构相同仍不足以决定缓存安全。key 对象还保存：
 
 ```text
-gm                         FX GraphModule
-example_inputs             dtype/device/shape/stride 等输入信息
+gm                         FX GraphModule 的规范化结构与属性
+example_inputs             dtype/device、静态 shape/stride、动态维的符号身份
 fx_kwargs                  排序后的编译参数，排除不稳定 graph_id
 inputs_to_check            需要 alignment 检查的输入位置
 deterministic settings     是否启用确定性算法及填充行为
@@ -21,6 +60,17 @@ torch_version              当前源码/版本 hash
 system_info                系统与编译器环境
 inductor_config            可移植配置快照
 ```
+
+输入维度要分成三类信息：
+
+| 信息 | 例子 | 进入 key 还是 guard |
+| --- | --- | --- |
+| 静态 tensor metadata | float32、CPU、静态维 32、stride 1 | 进入 key；改变后通常是另一类请求 |
+| 动态维的符号身份 | 规范化图中的 `s0` | 规范化后的名字进入 key，使同一动态图归到一起 |
+| 本次运行的整数 hint | 这次 `s0=16`，下次 `s0=19` | 不进入 SymInt 的 key reducer；用于逐候选求 guard |
+
+所以 `s0` 的 hint 从 16 变成 19 时 key 可以不变，却可能从“16 的倍数版本”切到
+尾部版本。若符号身份或静态 metadata 改变，则不能套用这条结论。
 
 kwargs 先按名字排序；值若是 set，再排序后放入 `OrderedSetHolder`。因此调用者仅改变
 字典插入顺序或 set 遍历顺序，不会无意义地改变 key；真正的配置值改变仍进入序列化结果。
@@ -65,7 +115,8 @@ FxGraphHashDetails
 ### K01 条件推演
 
 1. x 的具体数据从随机值 A 换成 B，但它只是运行时输入 FakeTensor：metadata 不含数值，
-   key 不因数据内容改变；dtype、device、shape/stride 改变则可能改变 key。
+   key 不因数据内容改变；dtype、device、静态 shape/stride 改变则可能改变 key。动态维
+   当前 hint 改变按第 3 项处理，不能笼统算作“shape 改变就换 key”。
 2. GraphModule 属性中的常量从 1 改成 2：真 Tensor reducer 包含 values，key 改变。
 3. backed `s0` 的 hint 从 16 改成 19：SymInt reducer仍只写 `"s0"`，key 可以不变；
    `s0 % 16 == 0` 候选的 guard 对 19 为假，查找继续其他候选或 miss。
@@ -963,7 +1014,8 @@ current_callable = module.call    current_callable = None
 
 保存前重新筛出 backed SymInt，调用 `get_pruned_guards(symints)`，只保留与这些输入符号
 相关的 guards，再由 `produce_guards_expression` 生成可跨进程保存的表达式。Tensor 的
-shape 已进入 graph hash details；这里关注会选择不同 compiled version 的符号条件。
+静态 tensor metadata 与动态维的符号身份已进入 graph hash details；本次动态 hint
+没有作为 SymInt key 内容，这里保存的 guard 正是用来选择不同 compiled version。
 
 假设编译 s0=32 时留下 `s0%16==0` 与无关的 s1 条件，而输入列表只含 s0：pruned
 结果只为当前候选保存 s0 条件。以后同 key、s0=19 的 lookup 会拒绝它，并可保存另一
@@ -982,13 +1034,17 @@ shape 已进入 graph hash details；这里关注会选择不同 compiled versio
   `put(key,cache_data)`。当前 remote 接口按 graph key 保存/取得一个值，不像本地目录
   明确遍历多个叶子。
 
-两处可以同时保存。远端写入并不替换本地分支；它们共享 graph key 与序列化内容。
+两处配置都启用且前面的步骤不失败时，可以保存同一份 bytes。它们共享 graph key 与
+序列化内容；本文只承诺一次 remote lookup 至多返回一个 candidate，不推断远端服务
+如何覆盖同 key 的旧值。
 
 ### 写失败与编译失败属于不同出口
 
-local mkdir/write 或 remote put 的异常在外层 try 中被记录为 cache write error；已经
-完成的 `compiled_graph` 仍由 `load` 返回。反之，`compile_fx_fn` 自身失败并不在
-`_save_graph` 的容错范围内，不能被描述成“缓存写失败但本次仍成功”。
+local mkdir/write 与后面的 remote put 位于同一个 `try`。任一步异常都会记录 cache
+write error，已经完成的 `compiled_graph` 仍由 `load` 返回；但两边不是完全独立：
+local 分支先抛异常时，控制流直接进入 `except`，本次不会继续执行后面的 remote put。
+反过来，remote put 失败不会回滚已经成功写入的 local leaf。`compile_fx_fn` 自身失败
+不在 `_save_graph` 的容错范围内，不能被描述成“缓存写失败但本次仍成功”。
 
 ### K04 状态推演
 
@@ -1007,8 +1063,9 @@ local mkdir/write 或 remote put 的异常在外层 try 中被记录为 cache wr
 ```
 
 本地 key 目录包含 H0、H1；下次按 guard 选择。若 H1 写盘失败，当前 B 仍运行，但下一
-进程只能看到 H0，对 19 再次 miss。若 remote put 失败而 local H1 成功，local lookup
-仍可命中；反过来也一样由实际启用的候选源决定。
+进程只能看到 H0，对 19 再次 miss。若 remote put 失败而 local H1 已成功，local lookup
+仍可命中；若 local 写先失败，同一个 `try` 不会继续 remote put，因此两个后端都没有
+得到 H1，下一进程仍需重新编译。
 
 K04 到此完成。K05 打开 `load` 的统一控制流、bypass 检查、post-compile 与
 `CompiledFxGraph` boxed callable，把 run1/run2/cond 三条路径走到同一返回口。
@@ -1101,6 +1158,14 @@ class CompiledFxGraph:
 constant folding、没有 ShapeEnv、图中含 HigherOrderOperator、通过 getattr 取得
 torchbind ScriptObject。它们抛 `BypassFxGraphCache`，不是返回 lookup miss。
 
+HigherOrderOperator 的绕过是当前实现的保守边界，而不是已经证明“它永远不能缓存”。
+以 `torch.cond` 为例，一个节点除普通 tensor 参数外还携带 true/false 分支图；其他
+HigherOrderOperator 还可能携带子图、Python callable 或专用状态。普通路径的统一合同
+只验证外层 GraphModule details、输入 SymInt guards 和一个 wrapper artifact。当前源码
+没有为每一种 HOO 分别证明这些额外结构怎样稳定进入 key、怎样设 guard、怎样在新进程
+恢复，所以 `_check_can_cache` 看到任意 HOO 都先 bypass，并注明以后应逐类支持。这是
+根据当前检查范围作出的保守处理，不表示分支图本身无法编译。
+
 实验 15 的 `torch.cond` 图含 HigherOrderOperator，因此状态是 bypass=1、miss=0、hit=0；
 异常被 `load` 捕获后仍调用 `compile_fx_fn`，结果 `[3,5]` 正常。
 
@@ -1175,3 +1240,5 @@ cond: check 发现 HigherOrderOperator
   均照常发生。
 
 至此，生成源码、模块加载、FX Graph Cache 的候选选择和 `CompiledFxGraph` 的恢复已经连成一次完整路径。
+
+

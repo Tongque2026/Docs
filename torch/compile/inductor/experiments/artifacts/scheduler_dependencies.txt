@@ -1,3 +1,7 @@
+loop_body_argsizes=([2], [])
+memory_usage[LOAD]=[('arg0_1', 'index0', None), ('arg0_1', 'index1', None), ('arg0_1', 'index2', None)]
+memory_usage[STORE]=[('buf0', 'index3', None)]
+indexing_exprs={'index0': 3*z0, 'index1': 3*z0 + 1, 'index2': 3*z0 + 2, 'index3': z0}
 
 [ordinary_reduction] before compute_dependencies
 op0: scheduler_type=SchedulerNode; ir_type=ComputedBuffer; outputs=['buf0 aliases=[] mutations=[]']; reads=['MemoryDep(name=arg0_1, index=3*c0, ranges={c0: 2})', 'MemoryDep(name=arg0_1, index=3*c0 + 1, ranges={c0: 2})', 'MemoryDep(name=arg0_1, index=3*c0 + 2, ranges={c0: 2})']; writes=['MemoryDep(name=buf0, index=c0, ranges={c0: 2})']; unmet=[]

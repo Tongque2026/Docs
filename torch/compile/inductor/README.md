@@ -339,3 +339,4 @@ Codegen   → 生成完成转置读取、add、relu、sum 的 CPU kernel，再�
 4. [Codegen：怎样生成 kernel、wrapper 并加载](04-codegen/README.md)
 
 读完这四篇，你应能拿到一张简单 FX 图，指出每个节点引用谁、说明四阶段增加或改变了什么，并判断“一个 kernel”究竟在哪一层形成。
+

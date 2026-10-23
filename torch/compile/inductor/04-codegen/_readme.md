@@ -141,3 +141,4 @@ Q40 的六个知识点均已完成并在第五轮重新复核；第 1 层结束�
 - 综合：`mm→relu→mm→sin` 用 S0/S1 区分四个逻辑 buf 与两次真实分配，贯通 extern/kernel、last usage、复用、返回和 callable；额外返回不同中间值时能推出不同复用限制。
 - 事实：CPU、wrapper 与 cache 三路径来自实际运行；Triton 只作当前源码公式推演，template 只按当前源码陈述，没有越过证据边界。
 - 理解：只凭正文可判断 19→16、返回 activated、返回 relu 前 first、cache guard 失败分别改变哪项职责及原因。实际读者反馈仍为空。
+

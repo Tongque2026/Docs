@@ -142,3 +142,4 @@ PatternMatcherPass.apply(gm)
 若把共享例中 pattern 的 `_users=MULTIPLE` 去掉，结果不再是“替换后删不掉 add”，而是在结构匹配时就因 add 有两个 users 被拒绝。user 约束决定能否形成 Match；`erase_nodes` 决定替换后哪些旧节点还能删除，这是两个不同时间点。
 
 若把 `copy_` 移到 mul 之后，add 和 mul 会落在同一 region，mutation-region 这道门不再构成拒绝理由；是否应用还要继续看结构与 dtype。这个判断来自检查顺序和节点状态，不能只看整张图里“出现过 copy_”。
+

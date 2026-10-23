@@ -4,6 +4,19 @@
 
 Q311 建成的依赖边还不是最终节点列表。Scheduler 必须先保证每个 producer 位于 consumer 之前；随后才能从尾部删除无用链、递推祖先并判断各 buffer 的最后使用位置。
 
+本文沿用四类状态：
+
+| 状态 | 含义 | 本文怎样使用 |
+| --- | --- | --- |
+| `node.unmet_dependencies` | 当前节点仍需等待的 producer 名；这是从 consumer 指向 producer 的正向依赖 | DFS 排序、祖先闭包 |
+| `buffer.users` | 哪些节点消费这个结果；这是从 producer 结果指向 consumers 的反向关系 | DCE 判断结果是否仍活 |
+| `removed_operations/removed_buffers` | DCE 已判定不再执行或不再保留的名字 | 裁 WeakDep；后续 codegen 和内存规划跳过删除项 |
+| `node.last_usage` | 按最终调度顺序看，本节点是哪些名字的最晚接触者 | 后续累计可释放候选；真正 free/reuse 仍由内存规划决定 |
+
+`get_buffer_names()` 返回一个 scheduler node 产生的 buffer 名，用于把依赖名找到 producer；`get_outputs()` 返回带 users 的 `SchedulerBuffer` 对象。`NodeUser` 是一条反向使用记录，`OutputNode` 是代表“结果要离开编译函数”的虚拟 user。`WeakDep` 只安排 mutation 晚于旧 reader，不传递数值；MemoryDep/StarDep 则代表真实数据或整项结果需要。
+
+`BaseSchedulerNode` 表示一项待调度 operation；它的 `read_writes.reads/writes` 是完整访问集合。`FusedSchedulerNode` 把多个原节点按 `snodes` 顺序装成一个调度节点。`name_to_buf[name].defining_op` 从内部 buffer 名回到生产它的 operation。`mutation_real_name[logical_version]=original_name` 则把 mutation 产生的逻辑版本名还原为最初被写回的名字。
+
 这些方法在构造 Scheduler 时不是任意排列。当前实现先执行：
 
 ```text
@@ -19,9 +32,16 @@ compute_dependencies
 
 第一次排序为反向 DCE 提供“consumer 一定在 producer 后面”的前提；DCE 删除旧 reader 后立刻裁掉相应 WeakDep，祖先集合才不会包含已经消失的节点。组合节点改变节点集合后再次排序，随后才进入融合。`compute_last_usage` 放在融合和分组处理之后，所以它既能处理普通节点，也能处理 `FusedSchedulerNode` 的外层与组内生命周期。
 
+| 方法 | 前置状态 | 写入/返回 | 紧接着的消费者 |
+| --- | --- | --- | --- |
+| `topological_sort_schedule` | 无环依赖图、每个集合内 buffer 名有唯一 producer | producer 在 consumer 前的节点列表 | 反向 DCE；组合后第二次排序服务融合 |
+| `dead_node_elimination` | 已拓扑排序的 nodes 与完整 users | 幸存 nodes、removed sets，并裁失效 WeakDep | ancestors、codegen/内存规划的删除过滤 |
+| `compute_ancestors` | DCE 后的拓扑序 | ancestors 与初始 min/max order | 后续融合合法性和顺序跨度判断 |
+| `compute_last_usage` | 融合完成后的最终节点序 | 外层及 fused 内部 last_usage | Scheduler 的可释放候选累计；Q431 展开最终 free/reuse |
+
 ## K01：拓扑排序只固定必要先后，不强造兄弟关系
 
-当前方法接收一份候选节点列表。它先建立“每个输出 buffer 名→生产节点”，再按候选顺序深度优先访问；访问 consumer 时，递归放入其尚未满足依赖的 producer。
+当前方法使用深度优先搜索，不使用入度或 ready queue。它接收一份候选节点列表，先建立“每个输出 buffer 名→生产节点”，再按候选顺序深度优先访问；访问 consumer 时，递归放入其尚未满足依赖的 producer。下面跟踪的是递归调用栈、`seen` 和 `result`。
 
 以输入 `nodes=[op2,op1,op0]` 为例：`op0` 写 buf0，op1 和 op2 都读 buf0。类型标注 `List[BaseSchedulerNode]` 就是这三项组成的 Python 列表。`name_to_node={buf0:op0,...}`；`seen` 和 `result` 起初为空。访问 op2 时先递归访问 unmet 指向的 op0，于是 result 先加入 op0，再加入 op2；之后 op1 加入，最终为 `[op0,op2,op1]`。
 
@@ -85,6 +105,18 @@ op0 写 buf0
 
 一个节点有多条 unmet dep 时，方法按 `dep.name` 排序后递归，使同一节点内部 producer 访问顺序稳定。但顶层兄弟仍按传入 `nodes` 顺序访问。稳定性来自两处明确顺序，不等于图上新增了依赖边。
 
+### 这个方法要求输入已经是无环依赖图
+
+`seen` 在递归 producer 之前写入，它的用途是去重，不是检测递归栈中的环。若错误输入为 A 等 B、B 又等 A：
+
+```text
+visit(A)：seen={A}，递归 B
+visit(B)：seen={A,B}，再次看到 A 时直接返回
+append(B)，再 append(A)
+```
+
+方法会返回 `[B,A]`，却不会报告 A↔B 的矛盾，也不可能同时满足两条边。因此这里的前置条件是 Q311 建出的依赖关系为 DAG；环诊断不在本方法中完成。类似地，`name_to_node[name]=node` 假定集合内每个 buffer 名只有一个 producer；若两个节点报告同名输出，后者会覆盖前者，当前方法也不验证这种非法输入。
+
 ### mutation 的 WeakDep 在这里真正变成先后顺序
 
 沿用 Q311 的旧读案例：
@@ -109,7 +141,7 @@ op1.unmet 中发现 WeakDep(buf0)
 
 ### K01 理解验收
 
-若 op3 同时读取 buf1、buf2，传入 `[op3,op2,op1,op0]`，访问 op3 时会按依赖名递归两条支路；无论先访问哪支，op0 都只追加一次，op1/op2 都在 op3 前。op1 与 op2 的相对次序仍由依赖名排序决定，不表示它们互相依赖。
+若 op3 同时读取 buf1、buf2，传入 `[op3,op2,op1,op0]`，访问 op3 时会按依赖名递归两条支路；无论先访问哪支，op0 都只追加一次，op1/op2 都在 op3 前。在这个“op3 首次触发两支递归”的案例中，op1 与 op2 的相对次序由依赖名排序决定；若某支已被更早的顶层 `visit` 访问，顶层候选顺序也会影响最终兄弟顺序。两种顺序都不表示兄弟之间新增了依赖。
 
 若 dep 指向 graph input `arg0_1`，它不在 `name_to_node`，方法直接 continue；这不是忽略真实读取，而是本次排序集合中没有需要放到前面的 producer node。
 
@@ -118,6 +150,17 @@ K01 到此完成。下一知识点 K02 从拓扑序尾部反向检查 users，�
 ## K02：反向删除让“consumer 已死”逐级传播到 producer
 
 拓扑序保证 producer 在前、consumer 在后。因此 DCE 反向遍历时，检查某个 producer 之前，它的所有 consumer 已经决定保留或删除；被删除 consumer 的名字已进入 `removed_operations`。
+
+DCE 并不直接从图输出重新做一次可达性搜索。Q311 已经把每个图输出编码成 `OutputNode` user，也把普通消费者写进 `buffer.users`。这里逐个输出判断：
+
+```text
+有效强 user：保活这个 buffer
+weak user：只为 mutation 排序，不单独保活
+已删除 operation 对应的 user：不再保活
+users=[]：all([]) 为 True，因此该 buffer 没有活消费者
+```
+
+只要一项输出有有效强 user，`active_buffers=True`，无副作用 operation 就仍要执行；所有输出都死且 operation 无副作用时才能删除。副作用是另一类活性根：即使没有活输出，operation 仍保留。
 
 ### WeakDep 的裁剪方法
 
@@ -242,6 +285,8 @@ K02 到此完成。下一知识点 K03 用拓扑序递推直接与间接 ancesto
 
 ## K03：拓扑序让祖先集合可以从前向后一次算完
 
+这里处理的是全体幸存 scheduler nodes，不是 K01 接收任意局部子集的通用排序接口。`set_read_writes` 已从 unmet 中裁掉 graph inputs/constants；DCE 又裁掉指向已删除旧 reader 的 WeakDep。剩余每条 unmet 都应能在 `self.name_to_buf` 找到内部 buffer，其 defining operation 也应位于当前拓扑序更早位置。`compute_ancestors` 不再检查这个契约：若调用方留下集合外 producer 或缺失名字，会在 `name_to_buf` 或 `name_to_ancestors` 查找时失败。
+
 进入源码前先用分叉图代入：`self.nodes=[op0,op1,op2]`，op0 无未满足依赖，op1/op2 的 `unmet_dependencies` 都只有 `buf0`，而 `name_to_buf[buf0].defining_op=op0`。因此处理 op0 后保存 `{}`；处理 op1 或 op2 时，先加入直接祖先 op0，再并入 op0 已保存的空集合，结果都是 `{op0}`。
 
 ```python
@@ -294,7 +339,19 @@ OrderedSet 去掉重复 op0，同时保持首次插入顺序。集合表达“�
 
 ### min/max order 先初始化成同一个位置
 
-对 `[op0,op1,op2]`，初值分别为 `[0,0]`、`[1,1]`、`[2,2]`。此时每个 scheduler node 尚未表示跨多个原节点的融合组，所以最早与最晚原始顺序相同。后续融合使用和扩展这类顺序范围，判断候选跨度；本方法只建立可靠基线。
+对 `[op0,op1,op2,op3]`，初值分别为 `[0,0]`、`[1,1]`、`[2,2]`、`[3,3]`。此时每个 scheduler node 尚未表示跨多个原节点的融合组，所以最早与最晚原始顺序相同。
+
+若后续把 op1 与 op3 组成一个 group，`init_group_node` 取组内最小和最大值，得到 `[1,3]`。融合启发式据此计算两个候选区间的距离，例如当前实现的 peak-memory 检查使用：
+
+```python
+proximity_score = max(
+    abs(node1.min_order - node2.max_order),
+    abs(node2.min_order - node1.max_order),
+)
+return proximity_score > 64
+```
+
+它用原顺序跨度阻止距离过远、可能拉长 live interval 的融合。融合节点建立后也按 `min_order` 排回候选列表，再做一次拓扑排序。本文解释初值、group 的 `[min,max]` 合并以及这个距离消费者；其他融合合法性在 Q331 展开。
 
 ### K03 理解验收
 
@@ -307,6 +364,27 @@ K03 到此完成。下一知识点 K04 从图输出建立 future set，反向计
 ## K04：反向 future 集合把末次使用归给最晚的实际 consumer
 
 ### 普通节点先把逻辑版本映回真实存储
+
+`used_or_aliased_buffer_names()` 从本节点全部 reads 和 writes 的名字开始，再沿每个 buffer 的 `get_inputs_that_alias_output()` 递归加入被别名输出引用的输入名：
+
+```python
+def used_or_aliased_buffer_names(self):
+    used_names = OrderedSet()
+    deps = [
+        dep.name
+        for dep in itertools.chain(self.read_writes.reads, self.read_writes.writes)
+    ]
+    while deps:
+        dep = deps.pop()
+        used_names.add(dep)
+        if V.graph.name_to_buffer.get(dep):
+            for alias in V.graph.name_to_buffer[dep].get_inputs_that_alias_output():
+                if alias not in used_names:
+                    deps.append(alias)
+    return used_names
+```
+
+因此“使用”在这里包括读、写以及通过 view/alias 间接接触的输入。例如节点读取 view_v，而 `view_v.get_inputs_that_alias_output()` 返回 base，集合会同时包含 view_v 与 base。普通 alias 名不会在这里强行折成一个名字；算法把别名链涉及的名字都纳入生命周期判断。`mutation_real_name` 做的是另一件事：把 `buf1、buf2` 这类连续写回产生的逻辑版本映回原输入名。
 
 先代入 mutation 例的 op1：`used_or_aliased_buffer_names()` 得到 `{buf1,arg1_1}`，`mutation_real_name={buf1:arg0_1}`，更晚节点已经使用的 `future_used_buffers` 为空。映射后当前使用集合变为 `{arg0_1,arg1_1}`，与 future 作差仍是这两项，所以它们都进入 op1.last_usage。
 
@@ -322,7 +400,7 @@ def set_last_usage(
     self.last_usage = used_buffers - future_used_buffers
 ```
 
-`last_usage` 不是“本节点用到的所有 buffer”，而是其中尚未在更晚节点出现的部分。映回 real name 后，同一物理存储的多个 mutation 版本不会被误当成可分别释放的独立空间。
+`last_usage` 不是“本节点用到的所有 buffer”，而是其中尚未在更晚节点出现的部分。若 `mutation_real_name={buf1:arg0_1,buf2:arg0_1}`，节点使用 buf2 时先改写为 arg0_1；两次 mutation 的逻辑版本因此参与同一原输入名的 future/last-usage 判断。普通 alias 则通过上面的递归把相关名字都加入集合，而不是依靠这张 mutation 表。
 
 ### Scheduler 从图输出开始反向推进
 
@@ -369,6 +447,8 @@ buf0 被 op1、op2 共同读取，反向先遇到更后的 op2，所以末次使
 
 旧读案例中 `mutation_real_name={buf1:arg0_1}`。op1 的使用集合包含逻辑输出 buf1，映射后变成 arg0_1；最终实验记录 `op1.last_usage=[arg0_1,arg1_1]`，不是 `[buf1,arg1_1]`。这防止后续阶段把代表调用者输入更新的 buf1 当作普通临时 storage 处理。
 
+若随后 buf2 再次写回同一输入，Q311 建表时会继续保存 `mutation_real_name[buf2]=arg0_1`。反向扫描看到较后的 buf2 和较早的 buf1 时，两者规范化后都是 arg0_1：较后节点先把 arg0_1 加入 future，较早节点便不会再次把它列入 last_usage。
+
 ### fused 节点要计算两种尺度
 
 ```python
@@ -388,7 +468,7 @@ def set_last_usage(
         future_used_buffers.update(node.last_usage)
 ```
 
-外层 `self.last_usage` 服务 kernel 之间的释放/复用判断；各 `snode.last_usage` 服务同一个融合 kernel 内部的优化。组内从空集合开始，是因为这里重新计算局部顺序，而不是继承外部后来还会使用哪些名字。
+外层 `self.last_usage` 处理融合 kernel 与其他 kernel 之间的边界，使用全局 future。各 `snode.last_usage` 只回答“在这个融合 kernel 内，哪一个原节点最后接触该名字”，所以从空集合按组内顺序重新计算；若把外部 future 带进来，一个稍后 kernel 仍使用的名字会从所有内部 snode 的局部结果中消失，组内优化便无法知道本 kernel 内最后接触它的位置。外层结果已经负责保证它不能在 kernel 之间过早释放。
 
 这仍不证明 wrapper 已释放某个地址。Scheduler 后续还要累计可释放名字、处理 alias/mutation/must-keep，并由 wrapper 内存规划生成实际 free/reuse 代码；该实现归 Q431。
 
@@ -546,4 +626,4 @@ def compute_last_usage(self) -> None:
         future_used_buffers.update(node.last_usage)
 ```
 
-这一区域把前文分段解释的方法按实际调用顺序接回完整流程。
+这一区域按类和产品声明位置核对七个方法；实际调用顺序以篇首流程图为准，两种顺序用途不同。

@@ -296,3 +296,4 @@ unused tensor 仍建立 InputBuffer、两张 tensor 输入表和接口名，只�
 若动态输入的两个维度在 ShapeEnv 中是同一个符号 `s0`，复用 ShapeEnv 的分支把二者转换成同一 SymPy 表达式，而不是独立创造两个变量。实验已覆盖一个 unbacked `u0` 被保留；两个位置复用同符号的判断来自同一转换源码。
 
 本叶子交出的 TensorBox 和标量表达式将由 Q212 的算子分派读取；输入 mutation 的最终处理则到 Q213 的 output 合同再完成。
+

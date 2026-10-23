@@ -396,3 +396,4 @@ device 比较位于 storage 豁免之前。设旧 a.fake 为 CPU `[4,3]`，重�
 再假设只把 add 的一个独占 fake 输出换成另一份独占 storage，而 shape、layout、stride、offset、device 均相同。旧 storage 计数为 1、新 storage 未出现，比较会判相同，传播停止。若旧 storage 同时被 view 节点共享，计数不再为 1，结果会判不同并继续传播。
 
 到这里，Q13 的两个实现叶子已经接起来：稳定排序保证“先上游后 user”，FakeTensorUpdater 在这条顺序上只刷新受影响的抽象属性。下一项按广度优先队列进入 GraphLowering 的节点解释入口。
+

@@ -97,52 +97,52 @@ Q00 Inductor 单图编译主干
 
 | 顺序·编号 | 层次/父项 | 目标 | 前置 | 正文/记录 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| 1·Q00 | 0/无 | 解释单图输入输出及四阶段协作 | 基础 torch.compile | `README.md` / 本文件 | 本层完成（第二轮回修） |
-| 2·Q10 | 1/Q00 | 图优化内部直接职责协作 | Q00 | `01-graph-optimization/` | 本层完成（第二轮回修） |
-| 3·Q20 | 1/Q00 | Lowering 内部直接职责协作 | Q00,Q10 | `02-lowering/` | 本层完成（第五轮复核） |
-| 4·Q30 | 1/Q00 | Scheduler 内部直接职责协作 | Q00,Q20 | `03-scheduler/` | 本层完成（第五轮复核） |
-| 5·Q40 | 1/Q00 | Codegen 与加载直接职责协作 | Q00,Q30 | `04-codegen/` | 本层完成（第五轮复核） |
-| 6·Q11 | 2/Q10 | 三个 FX pass 处理阶段及训练/推理差异 | Q10 | `01-graph-optimization/01-pass-stages/` | 本层完成（第五轮复核） |
-| 7·Q12 | 2/Q10 | pattern matcher 完整替换机制 | Q10,Q11 | `01-graph-optimization/02-pattern-matching/` | 本层完成（第五轮复核） |
-| 8·Q13 | 2/Q10 | 图元信息、排序和合法性维护 | Q10,Q11 | `01-graph-optimization/03-graph-invariants/` | 本层完成（第五轮复核） |
-| 9·Q21 | 2/Q20 | GraphLowering 解释器完整节点交接 | Q20 | `02-lowering/01-graph-interpreter/` | 本层完成（第五轮复核） |
-| 10·Q22 | 2/Q20 | Pointwise/Reduction/View 的索引计算 | Q20,Q21 | `02-lowering/02-compute-ir/` | 本层完成（第五轮补缺后复核） |
-| 11·Q23 | 2/Q20 | realize、layout、alias、mutation | Q20,Q22 | `02-lowering/03-storage-layout/` | 本层完成（第五轮复核） |
-| 12·Q24 | 2/Q20 | template/extern/control-flow | Q20,Q21 | `02-lowering/04-special-calls/` | 本层完成（第五轮复核） |
-| 13·Q31 | 2/Q30 | Scheduler 节点与依赖构造 | Q30,Q23 | `03-scheduler/01-dependencies/` | 本层完成（第五轮复核） |
-| 14·Q32 | 2/Q30 | 排序、删除、修改和生存期 | Q30,Q31 | `03-scheduler/02-order-lifetime/` | 本层完成（第五轮复核） |
-| 15·Q33 | 2/Q30 | 融合判断与代价 | Q30,Q31 | `03-scheduler/03-fusion/` | 本层完成（第五轮复核） |
-| 16·Q34 | 2/Q30 | 后端分派与生成顺序 | Q30,Q31 | `03-scheduler/04-backend-dispatch/` | 本层完成（第五轮复核） |
-| 17·Q41 | 2/Q40 | ops 虚拟化和 kernel 表达 | Q40,Q34 | `04-codegen/01-kernel-ops/` | 本层完成（第五轮复核） |
-| 18·Q42 | 2/Q40 | CPU 与 GPU 后端比较 | Q40,Q41 | `04-codegen/02-backends/` | 本层完成（第五轮复核） |
-| 19·Q43 | 2/Q40 | wrapper 和内存计划 | Q40,Q34 | `04-codegen/03-wrapper-memory/` | 本层完成（第五轮补缺后复核） |
-| 20·Q44 | 2/Q40 | code cache、加载、运行 | Q40,Q43 | `04-codegen/04-cache-load/` | 本层完成（第五轮补缺后复核） |
-| 21·Q111 | 3/Q11 | 三个 recursive pass 入口的完整源码 | Q11 | `01-graph-optimization/01-pass-stages/01-recursive-entry/` | 叶子完成（第五轮复核） |
-| 22·Q121 | 3/Q12 | matcher 候选扫描与应用完整源码 | Q12 | `01-graph-optimization/02-pattern-matching/01-apply-source/` | 叶子完成（第五轮复核） |
-| 22b·Q122 | 3/Q12 | replacement graph 嵌入完整源码 | Q121 | `01-graph-optimization/02-pattern-matching/02-replace-source/` | 叶子完成（第五轮复核） |
-| 23·Q131 | 3/Q13 | stable topological sort 完整源码 | Q13 | `01-graph-optimization/03-graph-invariants/01-stable-sort-source/` | 叶子完成（第五轮复核） |
-| 23b·Q132 | 3/Q13 | FakeTensorUpdater 增量更新完整源码 | Q131 | `01-graph-optimization/03-graph-invariants/02-fake-meta-source/` | 叶子完成（第五轮复核） |
-| 24·Q211 | 3/Q21 | GraphLowering 输入登记完整源码 | Q21 | `02-lowering/01-graph-interpreter/01-node-entry-source/` | 叶子完成（第五轮复核） |
-| 24b·Q212 | 3/Q21 | GraphLowering 算子与常量分派完整源码 | Q211 | `02-lowering/01-graph-interpreter/02-dispatch-source/` | 叶子完成（第五轮复核） |
-| 24c·Q213 | 3/Q21 | GraphLowering 输出与输入 mutation 合同完整源码 | Q212 | `02-lowering/01-graph-interpreter/03-output-source/` | 叶子完成（第五轮补缺后复核） |
-| 24d·Q214 | 3/Q21 | GraphLowering `run_node` 外围收尾完整源码 | Q213 | `02-lowering/01-graph-interpreter/04-run-node-source/` | 叶子完成（第五轮复核） |
+| 1·Q00 | 0/无 | 解释单图输入输出及四阶段协作 | 基础 torch.compile | `README.md` / 本文件 | 第六轮隔离冷读 A |
+| 2·Q10 | 1/Q00 | 图优化内部直接职责协作 | Q00 | `01-graph-optimization/` | 第六轮隔离冷读 A |
+| 3·Q20 | 1/Q00 | Lowering 内部直接职责协作 | Q00,Q10 | `02-lowering/` | 第六轮隔离冷读 A |
+| 4·Q30 | 1/Q00 | Scheduler 内部直接职责协作 | Q00,Q20 | `03-scheduler/` | 第六轮隔离冷读 A |
+| 5·Q40 | 1/Q00 | Codegen 与加载直接职责协作 | Q00,Q30 | `04-codegen/` | 第六轮隔离冷读 A |
+| 6·Q11 | 2/Q10 | 三个 FX pass 处理阶段及训练/推理差异 | Q10 | `01-graph-optimization/01-pass-stages/` | 第六轮隔离冷读 A |
+| 7·Q12 | 2/Q10 | pattern matcher 完整替换机制 | Q10,Q11 | `01-graph-optimization/02-pattern-matching/` | 第六轮隔离冷读 A |
+| 8·Q13 | 2/Q10 | 图元信息、排序和合法性维护 | Q10,Q11 | `01-graph-optimization/03-graph-invariants/` | 第六轮隔离冷读 A |
+| 9·Q21 | 2/Q20 | GraphLowering 解释器完整节点交接 | Q20 | `02-lowering/01-graph-interpreter/` | 第六轮隔离冷读 A |
+| 10·Q22 | 2/Q20 | Pointwise/Reduction/View 的索引计算 | Q20,Q21 | `02-lowering/02-compute-ir/` | 第六轮隔离冷读 A |
+| 11·Q23 | 2/Q20 | realize、layout、alias、mutation | Q20,Q22 | `02-lowering/03-storage-layout/` | 第六轮隔离冷读 A |
+| 12·Q24 | 2/Q20 | template/extern/control-flow | Q20,Q21 | `02-lowering/04-special-calls/` | 第六轮隔离冷读 A |
+| 13·Q31 | 2/Q30 | Scheduler 节点与依赖构造 | Q30,Q23 | `03-scheduler/01-dependencies/` | 第六轮隔离冷读 A |
+| 14·Q32 | 2/Q30 | 排序、删除、修改和生存期 | Q30,Q31 | `03-scheduler/02-order-lifetime/` | 第六轮隔离冷读 A |
+| 15·Q33 | 2/Q30 | 融合判断与代价 | Q30,Q31 | `03-scheduler/03-fusion/` | 第六轮隔离冷读 A |
+| 16·Q34 | 2/Q30 | 后端分派与生成顺序 | Q30,Q31 | `03-scheduler/04-backend-dispatch/` | 第六轮隔离冷读 A |
+| 17·Q41 | 2/Q40 | ops 虚拟化和 kernel 表达 | Q40,Q34 | `04-codegen/01-kernel-ops/` | 第六轮隔离冷读 A |
+| 18·Q42 | 2/Q40 | CPU 与 GPU 后端比较 | Q40,Q41 | `04-codegen/02-backends/` | 第六轮隔离冷读 A |
+| 19·Q43 | 2/Q40 | wrapper 和内存计划 | Q40,Q34 | `04-codegen/03-wrapper-memory/` | 第六轮隔离冷读 A |
+| 20·Q44 | 2/Q40 | code cache、加载、运行 | Q40,Q43 | `04-codegen/04-cache-load/` | 第六轮隔离冷读 A |
+| 21·Q111 | 3/Q11 | 三个 recursive pass 入口的完整源码 | Q11 | `01-graph-optimization/01-pass-stages/01-recursive-entry/` | 第六轮隔离冷读 A |
+| 22·Q121 | 3/Q12 | matcher 候选扫描与应用完整源码 | Q12 | `01-graph-optimization/02-pattern-matching/01-apply-source/` | 第六轮隔离冷读 A |
+| 22b·Q122 | 3/Q12 | replacement graph 嵌入完整源码 | Q121 | `01-graph-optimization/02-pattern-matching/02-replace-source/` | 第六轮隔离冷读 A |
+| 23·Q131 | 3/Q13 | stable topological sort 完整源码 | Q13 | `01-graph-optimization/03-graph-invariants/01-stable-sort-source/` | 第六轮隔离冷读 A |
+| 23b·Q132 | 3/Q13 | FakeTensorUpdater 增量更新完整源码 | Q131 | `01-graph-optimization/03-graph-invariants/02-fake-meta-source/` | 第六轮隔离冷读 A |
+| 24·Q211 | 3/Q21 | GraphLowering 输入登记完整源码 | Q21 | `02-lowering/01-graph-interpreter/01-node-entry-source/` | 第六轮隔离冷读 A |
+| 24b·Q212 | 3/Q21 | GraphLowering 算子与常量分派完整源码 | Q211 | `02-lowering/01-graph-interpreter/02-dispatch-source/` | 第六轮隔离冷读 A |
+| 24c·Q213 | 3/Q21 | GraphLowering 输出与输入 mutation 合同完整源码 | Q212 | `02-lowering/01-graph-interpreter/03-output-source/` | 第六轮隔离冷读 A |
+| 24d·Q214 | 3/Q21 | GraphLowering `run_node` 外围收尾完整源码 | Q213 | `02-lowering/01-graph-interpreter/04-run-node-source/` | 第六轮隔离冷读 A |
 | 25·Q221 | 3/Q22 | Pointwise/Reduction/View 构造核心源码 | Q22 | `02-lowering/02-compute-ir/01-ir-construction-source/` | 叶子完成（第六轮隔离冷读 A） |
-| 26·Q231 | 3/Q23 | realize 与布局决定完整源码 | Q23 | `02-lowering/03-storage-layout/01-storage-source/` | 叶子完成（第五轮补缺后复核） |
-| 27·Q241 | 3/Q24 | 特殊调用分派核心源码 | Q24 | `02-lowering/04-special-calls/01-special-source/` | 叶子完成（第五轮复核） |
-| 28·Q311 | 3/Q31 | 依赖构造核心源码 | Q31 | `03-scheduler/01-dependencies/01-dependency-source/` | 叶子完成（第五轮补缺后复核） |
-| 29·Q321 | 3/Q32 | 排序与 last usage 核心源码 | Q32 | `03-scheduler/02-order-lifetime/01-order-source/` | 叶子完成（第五轮补缺后复核） |
-| 30·Q331 | 3/Q33 | 融合主循环完整源码 | Q33 | `03-scheduler/03-fusion/01-fusion-source/` | 叶子完成（第五轮补缺后复核） |
-| 31·Q341 | 3/Q34 | backend 分派循环完整源码 | Q34 | `03-scheduler/04-backend-dispatch/01-dispatch-source/` | 叶子完成（第五轮新建并复核） |
-| 32·Q411 | 3/Q41 | LoopBody 重放完整源码 | Q41 | `04-codegen/01-kernel-ops/01-replay-source/` | 叶子完成（第五轮新建并复核） |
-| 33·Q421 | 3/Q42 | CPU/Triton 索引生成核心源码 | Q42 | `04-codegen/02-backends/01-backend-source/` | 叶子完成（第五轮新建并复核） |
-| 34·Q431 | 3/Q43 | wrapper 复用规划完整源码 | Q43 | `04-codegen/03-wrapper-memory/01-planner-source/` | 叶子完成（第五轮新建并复核） |
-| 35·Q441 | 3/Q44 | FX Graph Cache 查找完整源码 | Q44 | `04-codegen/04-cache-load/01-cache-source/` | 叶子完成（第五轮新建并复核） |
+| 26·Q231 | 3/Q23 | realize 与布局决定完整源码 | Q23 | `02-lowering/03-storage-layout/01-storage-source/` | 叶子完成（第六轮隔离冷读 A） |
+| 27·Q241 | 3/Q24 | 特殊调用分派核心源码 | Q24 | `02-lowering/04-special-calls/01-special-source/` | 第六轮隔离冷读 A |
+| 28·Q311 | 3/Q31 | 依赖构造核心源码 | Q31 | `03-scheduler/01-dependencies/01-dependency-source/` | 第六轮隔离冷读 A |
+| 29·Q321 | 3/Q32 | 排序与 last usage 核心源码 | Q32 | `03-scheduler/02-order-lifetime/01-order-source/` | 第六轮隔离冷读 A |
+| 30·Q331 | 3/Q33 | 融合主循环完整源码 | Q33 | `03-scheduler/03-fusion/01-fusion-source/` | 第六轮隔离冷读 A |
+| 31·Q341 | 3/Q34 | backend 分派循环完整源码 | Q34 | `03-scheduler/04-backend-dispatch/01-dispatch-source/` | 第六轮隔离冷读 A |
+| 32·Q411 | 3/Q41 | LoopBody 重放完整源码 | Q41 | `04-codegen/01-kernel-ops/01-replay-source/` | 第六轮隔离冷读 A |
+| 33·Q421 | 3/Q42 | CPU/Triton 索引生成核心源码 | Q42 | `04-codegen/02-backends/01-backend-source/` | 第六轮隔离冷读 A |
+| 34·Q431 | 3/Q43 | wrapper 复用规划完整源码 | Q43 | `04-codegen/03-wrapper-memory/01-planner-source/` | 第六轮隔离冷读 A |
+| 35·Q441 | 3/Q44 | FX Graph Cache 查找完整源码 | Q44 | `04-codegen/04-cache-load/01-cache-source/` | 第六轮隔离冷读 A |
 
 第二轮整改前位置：原队列继续到了 Q221/K03c2，但“完成”主要依赖源码覆盖、实验和作者结论，未逐篇核对当前层完整案例、迁移推演及作者记录是否具备模块级计划。因此暂停 Q221，新反馈触发全系列回修。
 
 当前项：全系列完成审计；正式 BFS 队列已无待讲项。
 
-隔离冷读整改进度：深度 2 已完成到 Q44；深度 3 的 Q111、Q121、Q122、Q131、Q132、Q211、Q212、Q213、Q214、Q221 已于 2026-10-22 通过全新读者 A 级验收。下一篇按 BFS 顺序为 Q231（realize 与布局决定完整源码）。这里记录的是既有正文的逐篇读者验收，不改变正式讲解队列的模块层次。
+隔离冷读整改进度：深度 2 已完成到 Q44；深度 3 的 Q111、Q121、Q122、Q131、Q132、Q211、Q212、Q213、Q214、Q221、Q231、Q241、Q311、Q321、Q331、Q341、Q411、Q421、Q431、Q441 已于 2026-10-22 通过全新读者 A 级验收。逐篇隔离冷读队列已经走完，转入全系列完成审计。这里记录的是既有正文的逐篇读者验收，不改变正式讲解队列的模块层次。
 
 ## 2026-10-21 第五轮全系列完成审计
 
@@ -177,7 +177,25 @@ Q00 Inductor 单图编译主干
 5. 事实验收逐项说明源码、测试或独立实验分别证明什么；
 6. 理解验收由正文回答迁移题，答案必须包含对象、状态变化和因果，不能只复述类名。
 
-整改恢复点保持 Q241。先完成 Q241 的模块计划和声明范围，再按篇内首个未完成知识点继续；不会因 Q24 上层已完成而跳过叶子实现。
+Q441 已完成两轮隔离冷读，前置 cache 总控状态机，分清静态 metadata、符号身份与 hint，补齐连续 run1/run2、HOO 保守边界和 local/remote 保存控制流；全新读者评级 A，Python fence 与实验 15 重跑通过。逐篇整改队列走完，下一步执行全系列完成审计。
+
+## 2026-10-22 第六轮逐篇隔离冷读完成审计
+
+- **队列**：根队列 40 项（含增补叶子）全部标记“第六轮隔离冷读 A”；没有等待复测
+  或未完成项。
+- **文件配对**：教程树共有 40 个正式 `README.md`，每个目录都有相邻
+  `_readme.md`，正文与作者记录未混为同一文件。
+- **导航**：本地 Markdown 链接检查没有真实断链；三个正则命中分别来自代码中的
+  `(*args, **kwargs)` 和类型标注 `[obj]`，不是 Markdown 导航。
+- **末三篇事实复核**：Q421 声明范围 26/26 AST 且实验 13 通过；Q431 的 Python
+  fence 可解析且实验 14 默认/pool 都匹配 eager；Q441 的 Python fence 可解析且实验
+  15 得到 run1 miss、run2 hit、cond bypass，数值结果正确。
+- **理解复核**：逐篇使用不继承聊天的全新读者，只给单篇正文和固定读前背景；提示
+  信息不得补正文。最后三篇分别由报告 137、139、141 评为 A，前序篇的 A 状态已按
+  BFS 记录在队列表中。
+
+本轮整改目标完成。以后若出现真实读者的新断点，应把对应篇重新置为回修状态，沿同一
+“单篇冷读→主代理修改→新读者复测”流程继续，而不是用本次 A 级记录覆盖新反馈。
 
 ## 处理情况与案例覆盖
 
@@ -314,3 +332,4 @@ Q00 第二轮回修完成；全系列当前项转为同层 Q10。综合案例的
 - 已实施整改：把作者术语换成实际对象变化；在主要长源码块前增加一次确定调用的输入、集合、配置、分支和预期出口；恢复 planner 方法的类归属；将 AST 数量、写作取舍和证据审计移回作者记录；补齐动态符号、alignment、checkpoint 标签、device stream、缓存候选等消费者。
 - 最终全量复读：`/work/learning/1021/56sol/inductor-reader-review-final/`。同一位目标读者复读整改后的 40/40 篇，共检查 7010 个标题、自然段、表格行和代码块；去批注后与正式正文逐字节一致 40/40。该轮提出 21 个剩余断点。
 - 修订后复查：`/work/learning/1021/56sol/inductor-reader-review-final/FIX_RECHECK.md`。21/21 已实质修复，部分修复 0、未修复 0、remaining=0；全文正式 README 中“时点”“按语义时机”“语义时机”均为 0 处。
+

@@ -32,7 +32,13 @@ def node_text(node):
     return (
         f"{node.get_name()}:{type(node).__name__}"
         f"(members={members},origins={origins},"
-        f"group={getattr(node, 'group', None)})"
+        f"group={getattr(node, 'group', None)},"
+        f"buffers={sorted(node.get_buffer_names())},"
+        f"used={sorted(node.used_buffer_names())},"
+        f"reads={sorted(map(str, node.read_writes.reads))},"
+        f"writes={sorted(map(str, node.read_writes.writes))},"
+        f"unmet={sorted(map(str, node.unmet_dependencies))},"
+        f"ancestors={sorted(node.ancestors)})"
     )
 
 

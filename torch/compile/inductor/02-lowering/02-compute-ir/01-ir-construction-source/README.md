@@ -2233,3 +2233,4 @@ size-1 分支也维持同一原则。旧 `[2,1,3]` reshape 为 `[2,3]` 时，旧
 4. 若 old/new 总元素数不同，前面的 `resolve_negative_size` 已通过 `guard_equals` 拒绝；indexer 不负责偷偷截断或补元素。
 
 下一叶子继续解释这些延迟规则在什么消费者要求下物化，以及 layout 怎样最终决定。
+

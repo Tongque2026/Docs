@@ -1,6 +1,15 @@
 # realize 与布局决定源码叶子作者记录
 
-> 第五轮状态：叶子完成。第五轮修正正文末尾仍指向“待审计”的陈旧状态，并重新按物化、冻结、访问启发式、外部合同和 27 个方法验收。
+> 第六轮状态：通过隔离冷读 A 级验收。四名全新读者只读本篇 README，评级依次为 B、B、B、A；读者只批注，正文由主智能体逐轮整改。
+
+## 第六轮真实读者反馈与整改
+
+- 评审报告：`98_STORAGE_LAYOUT_COLD_REVIEW_1.md` 至 `101_STORAGE_LAYOUT_COLD_REVIEW_4.md`，保存在教程外的 `inductor-fresh-reader-review/`。
+- 第一轮发现 stride order `[0,1]` 的事实错误，以及 `pick_loop_order`、storage 解包、copy/view 转换和 padding 被留成黑盒；正文修正数值并补齐这些直接 helper 和多读取投票案例。
+- 第二轮发现 K04 主案例误写成裸 ComputedBuffer，并缺 Generic View 转换完整实现；改为真实 `TensorBox→StorageBox→ComputedBuffer` 入口，补入 channels-last 冻结、仿射索引证明和 rank-0 空序列行为。
+- 第三轮发现转换失败/递归 copy/NonOwning 路径的状态副作用被“成功或 copy”概括掩盖；正文补出底层冻结不回滚、旧 TensorBox.data 已改写、局部返回身份变化及仅 NotImplementedError 降级。
+- 源码复核另发现旧文虚构 `_stride_order` 延迟字段；当前实现实际在 FlexibleLayout 构造时立即算 stride，已按产品源码纠正，并补入 opcount、padding 开关和 symbolic hint 边界。
+- 第四位读者闭卷恢复全部 K 的主要输入、动作、副作用和出口，能够推演所有指定案例，评级 A。
 
 ## 本篇定位、读者与边界
 
@@ -31,7 +40,7 @@
 - 正文分开已存储对象的幂等出口和 Loops→ComputedBuffer 的登记出口，并保留 origin/traceback/origins 的状态转交。
 - 三种启发式分别给出条件与不动作出口；没有把 hint 或 reuse 写成无条件物化。
 - 延迟 add 的实际类型变化已有实验 18 支持；CPU exp/sigmoid 分支目前按源码推演，不登记为本轮运行实测。
-- 迁移题要求区分重复 realize、hint 不触发、reuse 不触发和非法 IR 失败；正文足以回答。实际读者反馈尚无。
+- 迁移题要求区分重复 realize、hint 不触发、reuse 不触发和非法 IR 失败；第六轮隔离读者已能闭卷回答。
 
 ## K02 事实与理解验收
 
@@ -39,7 +48,7 @@
 - 独立实验 21 对 `[2,3]` 直接调用产品接口，实际得到 default/fill-row/stride-order/same-order=`[3,1]`、fill-column=`[1,2]`、exact=`[10,2]`。
 - 同一实验确认 FixedLayout 上再次调用定向冻结触发 AssertionError；这证明接口前置条件，不外推 padding 行为。
 - 正文区分 fill order、stride order、same order、exact 数值合同，并说明 NonOwning/MultiOutput 为什么跳过普通冻结。
-- 迁移题覆盖三维 fill order、参考顺序、二次冻结失败和非拥有 layout；正文足以回答。实际读者反馈尚无。
+- 迁移题覆盖三维 fill order、参考顺序、二次冻结失败和非拥有 layout；第六轮隔离读者已能闭卷回答。
 
 ## K03 事实与理解验收
 
@@ -47,7 +56,7 @@
 - 实验 21 使用真实 Pointwise/ComputedBuffer/MemoryDep，覆盖行读、列读、广播和无读取：fill order 分别为 `[1,0]`、`[0,1]`、`[1,0]`、None。
 - 正文从四个具体 index 算到 stride hints 和最终 stride，区分“相对访问偏好”与“照抄输入 stride 数值”。
 - 明确 StarDep 排除、reduction vars 置 0、Scan/Sort reindex 和已固定 layout 不动作四个条件。
-- 迁移题覆盖 FixedLayout 优先、仅 StarDep、成比例 stride 和 Scan/Sort；正文足以回答。实际读者反馈尚无。
+- 迁移题覆盖 FixedLayout 优先、仅 StarDep、成比例 stride 和 Scan/Sort；第六轮隔离读者已能闭卷回答。
 
 ## K04 事实与理解验收
 
@@ -55,7 +64,7 @@
 - 实验 21 覆盖零元素、Flexible 原地冻结、Fixed 已满足、Fixed 不满足复制、size-1 exact 无关差异五条真实 IR 路径。
 - MutationLayout 与 Generic BaseView 分支按当前源码解释，明确 view 转换后仍需递归检查；本轮不冒充运行实测。
 - 正文区分“copy 分支”与“最终独立 copy kernel”，并保留 Flexible size-1 歧义时复用当前 order 的产品注释。
-- 迁移题覆盖有效 exact 差异、view 转换后不满足和零元素短路；正文足以回答。实际读者反馈尚无。
+- 迁移题覆盖有效 exact 差异、view 转换后不满足和零元素短路；第六轮隔离读者已能闭卷回答。
 
 ## 整篇严格审计
 
@@ -72,7 +81,7 @@
 
 ## 当前点
 
-## 第五轮叶子验收
+## 第五轮叶子验收（第六轮冷读前的作者复核）
 
 - **完整源码**：StorageBox、FlexibleLayout、Buffer、ComputedBuffer、ExternKernel 五个类中的 27 个声明方法逐项 AST 等价；各类内保持产品方法顺序。
 - **分支与出口**：已存储/延迟 realize、三种启发式，普通/定向/特殊 layout 冻结，有/无 MemoryDep、StarDep、Scan/Sort、FixedLayout，extern 的零元素/Flexible/Fixed/Mutation/View/copy 全覆盖。
@@ -81,4 +90,4 @@
 - **证据边界**：实验 18 支持实际类型变化，实验 21 支持真实 IR 接口；CPU heavy-op 启发式和未跑分支按源码推演，不把接口 probe 写成最终 kernel 形态。
 - **续写一致性**：正文末尾已改为审计完成并转 Q241，与本记录和根队列相同。
 
-Q231 第五轮叶子复核完成。根队列转 Q241：特殊调用分派核心源码。
+Q231 第六轮隔离冷读完成并通过 A 级验收。根队列转 Q241：特殊调用分派核心源码。

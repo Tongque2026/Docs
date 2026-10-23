@@ -4,8 +4,9 @@ from pathlib import Path
 from unittest import mock
 
 import torch
-from torch._inductor import config
+from torch._inductor import config, dependencies
 from torch._inductor.dependencies import MemoryDep
+from torch._inductor.loop_body import LoopBody, MemoryUsageType
 from torch._inductor.scheduler import Scheduler
 
 
@@ -14,6 +15,7 @@ OUT.mkdir(exist_ok=True)
 events = []
 case_name = ""
 original_compute_dependencies = Scheduler.compute_dependencies
+original_extract_read_writes = dependencies.extract_read_writes
 
 
 def dep_text(dep):
@@ -60,6 +62,24 @@ def observed_compute_dependencies(self):
             events.append(f"users[{output.get_name()}]={users}")
 
 
+def observed_extract_read_writes(fn, *argsizes, **kwargs):
+    if case_name == "ordinary_reduction" and isinstance(fn, LoopBody):
+        events.append(f"loop_body_argsizes={argsizes}")
+        for usage_type in MemoryUsageType:
+            entries = [
+                (
+                    entry.buffer_name,
+                    entry.index_name,
+                    getattr(entry, "mode", None),
+                )
+                for entry in fn.memory_usage[usage_type]
+            ]
+            if entries:
+                events.append(f"memory_usage[{usage_type.name}]={entries}")
+        events.append(f"indexing_exprs={fn.indexing_exprs}")
+    return original_extract_read_writes(fn, *argsizes, **kwargs)
+
+
 def ordinary(x):
     reduced = (x + 1).sum(dim=1)
     return reduced * 2
@@ -80,8 +100,12 @@ def read_after_mutation(x, y):
     return x * 2
 
 
-with config.patch({"force_disable_caches": True}), mock.patch.object(
-    Scheduler, "compute_dependencies", observed_compute_dependencies
+with (
+    config.patch({"force_disable_caches": True}),
+    mock.patch.object(Scheduler, "compute_dependencies", observed_compute_dependencies),
+    mock.patch.object(
+        dependencies, "extract_read_writes", observed_extract_read_writes
+    ),
 ):
     case_name = "ordinary_reduction"
     ordinary_result = torch.compile(

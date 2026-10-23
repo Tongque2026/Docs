@@ -882,3 +882,4 @@ product    = [[6,8], [3,6]]
 若在 relu 后新增对 x 的原地覆盖，K04 已将 a 登记为 x 的 reader；mutation 处理可以先保护 a 的旧读。若 relu 产生 s0 且 FX meta 声明同一 binding，K05 的覆盖检查通过；若 IR 遗漏 s0 定义，编译在这里以带新对象诊断的断言失败。
 
 Q214 至此达到叶子完成条件。下一项 Q221 打开 Pointwise、Reduction、View 的构造核心，解释 lowering 处理器怎样建立 `ranges`、indexing function 与 loader。
+

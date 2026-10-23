@@ -1,5 +1,16 @@
 # Q331 融合主循环源码备课记录
 
+## 第六轮：隔离冷读与源码一致性回修
+
+- 第一名无历史读者只读正文，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/113_FUSION_SOURCE_COLD_REVIEW_1.md`，评级 B。主循环成立，但对象关系、branched 初始读写、WeakDep 方向、loop reorder 契约、template/aggressive 分支、cycle 手算和 backend 新组交接均有实质缺口。
+- 实验 10 增加每个当前组的 buffers、used buffer、精确 reads/writes、unmet dependencies 和 ancestors 捕获，并重新运行通过。正文据此加入 branched 五节点状态表、vertical 融合前后 unmet dependency 和 backend 聚合组状态，不再从候选日志反推字段。
+- 正文开头先建立原 operation、buffer、当前组、ancestor、unmet dependency 与旧候选端点；修正 K01 的停止时点和十轮上限用途；补齐 score 第一项 truth table、三类 buffer-name 口径和同分候选发现顺序。
+- WeakDep 案例改为严格对应源码：weak name 是 node1 输出，mutating buffer 由 node2 写，real name 用于筛 node1 的旧值 reads。第二名读者报告 `/work/learning/1021/56sol/inductor-fresh-reader-review/117_FUSION_SOURCE_COLD_REVIEW_2.md` 进一步发现 `all([])==True`；正文现明确 relevant reads 为空时当前实现也放行，不再把正例的一项旧读误写成必要条件。
+- cycle 增加 `X→A`、`B→Y` 且第三方已融合为 `{X,Y}` 的完整手算：`combined_names={A,B}`、`combined_ancestors={X}`，沿 X 映射到 `{X,Y}` 后命中其 ancestor B。裁边增加 `op1.unmet={buf0}` 到融合组 unmet 为空的前后状态。
+- 第二名读者还发现 multi-template 示例把未融合 choice timing 与另测 fused timing 混写。正文现区分 `choice_timings[choice]`、单独测得的 `ms2` 与逐 choice 测得的 `ms_fused`；普通 GPU 例单独使用 `ms1/ms2/ms_fused`。
+- 第三名无历史读者只读修订稿，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/118_FUSION_SOURCE_COLD_REVIEW_3.md`，评级 A。读者能闭卷重建 branched grouping/score、template 翻向、aggressive 无共享路径、WeakDep 三个出口、cycle、旧候选映射、新组聚合与裁边、两种 timing 及三类外层停止。
+- 本轮事实证据为当前 Scheduler 源码与扩充后的实验 10；cycle、WeakDep 空集合和 multi-template 分支按当前源码推演，未冒充实验实测。Q331 隔离冷读闭环，整改队列进入 Q341。
+
 第五轮状态：旧恢复点 K04 已完成。补入原先缺失的 `speedup_by_fusion`、`fuse_nodes_once`、`will_fusion_create_cycle` 三段完整源码，修正七段 docstring 的 AST 差异，并完成 branched 当前组状态推演后，Q331 叶子复核完成；根队列转 Q341。
 
 ## 读者、层次与边界

@@ -1,6 +1,6 @@
 # Q241 特殊调用分派核心源码备课记录
 
-> 第五轮状态：叶子完成。重新按九项声明、caller/template/fallback/cond/while 五类状态、各条路径在哪一步失败以及证据边界验收。
+> 第六轮状态：经五位相互隔离的冷读者逐轮反馈与改写，最终达到 A 级验收。
 
 ## 读者、层次与边界
 
@@ -53,6 +53,13 @@
 - 源码：九项声明用于证明分支条件、对象字段、登记顺序和失败出口。最终用 AST 去除教学注释后逐声明核对等价与顺序。
 - 理解：每个 K 点至少含一个改变输入或条件的迁移题，并在本记录中仅依据正文作答。K01 未完成前不进入 K02。
 
+## 第六轮隔离冷读整改
+
+- 第一位读者评级 C：K01 缺 selector 到最终候选的闭环，extern 收束被写成不存在的 `finalize_as_extern_caller`；K03 将只检查 true 输出误写成两支检查。
+- 第二至第四位读者连续评级 B：依次补齐 extern 替换的名字与 users 交接、packed/MultiOutput 的包装层、Subgraph 首次定义、additional input 完整案例、wrapper 运行时分支证据，以及 FX node/FakeTensor 的源码差异。
+- 第五位全新读者只读最终 README，四项闭卷推演均通过，评级 A。其最后一条精修意见是：当前 alias 循环第二轮不可能单独抛错，正文已按真实控制流修正。
+- 完整报告保存为 `102_SPECIAL_CALLS_COLD_REVIEW_1.md` 至 `106_SPECIAL_CALLS_COLD_REVIEW_5.md`。所有读者均未读取本记录、其他教程、源码、实验、Git 或前轮报告，也未修改教程。
+
 ## 当前恢复点
 
 ## 第五轮叶子验收
@@ -63,7 +70,7 @@
 - **理解迁移**：正文能判断 get_min_choice 尚未安装 render、字符串 fallback leaf 失败前 packed 可能已建、cond stride 不同在父节点前失败、while graph input carried 的输出为何进入 never_reuse。
 - **当前限制与证据边界**：Conditional alias 循环实际始终检查 true_outputs；实验 07/22/23/24、源码失败分支和未运行 Triton 分别登记，不用 CPU 数值证明 GPU template。
 
-Q241 第五轮叶子复核完成。下一项按根广度优先队列转 Q311，进入依赖构造核心源码。
+Q241 第六轮隔离冷读 A 级验收完成。下一项按根广度优先队列转 Q311，进入依赖构造核心源码。
 ## 读者复读后的实现观察
 
-- 第二轮目标读者指出，正文中逐句审查 Conditional alias 循环的疑似不对称会打断正常数据流。该观察移入作者记录：当前循环变量会遍历 true/false outputs，但 `_has_aliased_buffers` 的实参保持 `true_outputs`。正式教程只解释经过当前检查后的稳定接口，不把疑似实现缺口扩写成 cond 必学合同。
+- 当前 Conditional alias 循环会遍历 true/false 名称，但 `_has_aliased_buffers` 的实参始终是 `true_outputs`。这不是旁支审计信息，而是决定 false-only alias 是否会被拒绝的当前实现行为，正式教程已直接说明。

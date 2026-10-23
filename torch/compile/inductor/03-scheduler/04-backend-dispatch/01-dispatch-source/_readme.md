@@ -1,5 +1,15 @@
 # Q341 backend 分派循环核心源码备课记录
 
+## 第六轮：隔离冷读与状态契约回修
+
+- 第一名无历史读者只读正文，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/119_BACKEND_DISPATCH_COLD_REVIEW_1.md`，评级 B。普通、extern、guard 和 flush 主线成立；template epilogue 已生成却未进入外层 available/completed 的契约没有闭合，nop 跳过 `device` 赋值后仍进入 debug-sync 分支则形成代码疑点。
+- 核对当前源码后，正文开头补齐四份状态及消费者：backend cache、current device、pending free、available/completed。`available_buffer_names` 在调度节点构造时供 `prune_deps` 使用；`completed_operations` 在后续 inplace 判断中过滤已处理使用者。它们是 Scheduler 外层记账，不是 backend 实际生成范围或设备完成事件。
+- template 段现说明两层状态：当前 C++ backend 对主模板和 epilogue 都 `mark_run()` 并生成同一 kernel；Python 局部 `node` 重绑定后，外层集合只登记主模板。少记 epilogue 使 completed 的后续过滤更保守，不会撤销 backend 已分配和生成的 epilogue。
+- 当前 `_codegen` 的 debug-sync 分支未排除 nop，却读取只在非 nop 条件块中赋值的 `device`。实验 11 新增 `empty_strided` 形成 NopKernelSchedulerNode：默认配置成功；以另一函数开启 `triton.debug_sync_kernel` 时捕获 `BackendCompilerFailed`，根因是 `UnboundLocalError: local variable 'device' referenced before assignment`。正文将其列为当前失败/疑点出口，没有编造外部安全前提。
+- foreach 与 nop 分别补齐到当前层出口：foreach 经 backend 类型门、combo 分派、集合更新和 ready 查询；nop 只 mark_run、无 kernel/wrapper 调用、更新集合并跳过 ready，debug-sync 例外单列。
+- 第二名无历史读者只读修订稿，报告为 `/work/learning/1021/56sol/inductor-fresh-reader-review/120_BACKEND_DISPATCH_COLD_REVIEW_2.md`，评级 A。读者能闭卷重建五路分派、边界 flush、guard、last usage、两层 template 状态、nop 失败、ready 与 final flush。
+- 实验 11 全部数值和状态断言通过；新增 nop 的默认 shape 与 debug-sync 错误均写入 artifact。Q341 隔离冷读闭环，整改队列进入 Q411。
+
 ## 读者、层次与出口
 
 - 读者已从 Q34 能按最终节点序列推算普通、extern、template、foreach、nop 的分派与 flush 边界；尚不知道这些判断如何由同一个循环、局部变量重绑定和共享状态集合实现。

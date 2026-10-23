@@ -2,11 +2,63 @@
 
 [返回 CPU/Triton 后端篇](../README.md) · [返回 Codegen](../../README.md) · [返回总览](../../../README.md)
 
-Q42 从生成结果比较了 CPU 16+3 与 Triton block/mask。本篇进入叶子实现，沿产品声明顺序保留核心源码，再用相同 N=19 pointwise 和 2×128 reduction 推演状态。先从 CPU 的共同标量 kernel 开始；向量候选选择在 K06 打开。
+前一篇已经看到两个生成结果：CPU 把 N=19 切成 16 个元素的向量主循环和
+3 个元素的尾部；Triton 用 `pid*XBLOCK+arange` 得到逻辑位置，再用 mask
+挡住 19 以外的位置。本篇从这些结果反查产生它们的实现，并继续使用 N=19
+逐点计算和 2×128 按行求和两个案例。正文先按当前产品文件中方法出现的顺序
+保留源码，再按真正的调用顺序解释；最后一节才打开 CPU 的向量候选选择。
+
+进入 backend 时，LoopBody 已经把原计算重放成 load、算术、reduction 和
+store 请求。两条 backend 路径接收这些请求，却把生成语句暂存在不同对象中。
+先固定后文会反复修改的状态：
+
+CPU 的 `args` 由 kernel group 持有并传给每个 `CppKernel`；每个 kernel 自己
+新建 CSE 和代码缓冲区。下面表格先列这些对象进入一次重放后的职责，表后再展示
+构造时的空状态怎样被第一次 load 改变。
+
+| CPU `CppKernel` 状态 | 初始用途 | 谁写入 | 最终消费者 |
+| --- | --- | --- | --- |
+| `args` | 逻辑 buffer 名到 C++ 参数名的映射 | `args.input/output` 首次见到名字时分配或复用 | kernel 函数签名和指针表达式 |
+| `cse` | 已生成表达式到临时变量的映射 | load、算术等调用 `cse.generate` | 后续表达式复用同一临时值 |
+| `loads`、`compute`、`stores` | 三个起初为空的代码缓冲区 | load、算术、普通写分别追加语句 | scalar/vector kernel printer 按执行顺序拼接 |
+| `reduction_prefix/suffix` | 规约循环前后的代码区 | 累计初始化与 `store_reduction` 等写入 | loop nest 把它们放在规约循环外侧 |
+| `call_ranges/itervars` | 尚未建立的循环范围与符号 | `set_ranges` 第一次调用建立 | LoopBody 重放和最终 C++ 循环 |
+| `loop_nest` | 尚未建立 | `CppKernelProxy` 先用 scalar kernel 建树，再把部分区域换成 vector kernel | `codegen_loops_impl` 打印最终循环 |
+
+`DeferredLine(buffer_name,text)` 是带 buffer 身份的待输出语句。若后续确认该 buffer 已删除，printer 可以跳过这行；否则它在相应代码区被拼入结果。
+
+这些 CPU 字段不是 LoopBody 临时造出来的。`CppKernel(args,num_threads)` 先调用
+共同的 `Kernel.__init__(args)`：它接收 kernel group 持有的 `KernelArgs`，建立
+空的 `loads/compute/stores` 和普通 `cse`。因此同一 group 生成 scalar、vector
+版本时可以沿用同一套参数命名，而每个 kernel 有自己的 CSE 与代码缓冲区。
+随后 `CppKernel.__init__` 再建立空的 range 状态、规约前后缓冲区和专门生成
+`tmp_acc...` 的 `reduction_cse`。最初处理一次 load 时，状态实际这样变化：
+
+```text
+进入 load 前：args 尚无 arg0_1；loads 为空；cse cache 为空
+args.input： arg0_1 -> in_ptr0
+cse.generate 的输入：表达式字符串 “in_ptr0[x0]”
+cse.generate 的结果：生成 “auto tmp0 = in_ptr0[x0];” 追加到 loads，并缓存表达式 -> tmp0
+离开 load：返回 tmp0；相同表达式再次出现时复用 tmp0，不重复写 loads
+```
+
+这里的参数映射属于传入的 `KernelArgs`；CSE、代码区和 accumulator cache 属于
+当前具体 kernel。向量版本不会复用 scalar 版本的临时表达式缓存，只会用共享的
+参数映射保证函数参数与访问表达式名称一致。
+
+| Triton `TritonKernel` 状态 | 初始用途 | 谁写入 | 最终消费者 |
+| --- | --- | --- | --- |
+| `range_trees` | x/y/r 各逻辑范围、program 维度和 block 维度 | kernel 构造阶段建立 | range header 与 indexing |
+| `indexing_code`、`loads`、`compute`、`stores`、`suffix` | 起初分开的五段代码 | range/index、load、算术、store、规约最终写分别追加 | `codegen_body` 按循环边界拼入 `body` |
+| `IndexingOptions` | 普通 pointer 的 offset、mask、broadcast 信息 | `indexing` 普通出口 | `tl.load/store/atomic` |
+| `BlockPtrOptions` | shape、stride、block shape、offset、boundary check | `indexing` 的 block-pointer 匹配出口 | `tl.make_block_ptr`、block-pointer load/store/advance |
+| `body` | 最终函数体缓冲区 | range header 与 `codegen_body` 写入 | `codegen_kernel` 加 decorator、签名后输出完整函数 |
+
+下面各节都沿“范围状态 → 地址选项 → 分段语句 → 完整 kernel”的顺序更新这些对象。
 
 ## K01：CppKernel 先建立循环变量，再把索引变成指针访问
 
-产品文件中四个目标方法的声明顺序是 `load→store→store_reduction→set_ranges`。执行时 `CppKernelProxy` 会先调用后声明的 `set_ranges`，再重放 LoopBody 触发前三者；声明顺序与运行顺序不是同一件事。
+产品文件中五个目标方法的声明顺序是 `load→store→reduction→store_reduction→set_ranges`。执行时 `CppKernelProxy` 会先调用后声明的 `set_ranges`，再重放 LoopBody 触发 load、reduction 和 store；声明顺序与运行顺序不是同一件事。
 
 首段代码使用 `sympy.Expr` 表示符号索引；在 N=19 的案例中，`name="arg0_1"`、`index=x0`，而 `x0` 的取值由稍后 `set_ranges([19],[])` 建立。`self.args.input(name)` 把逻辑名映射为 C++ 参数名 `in_ptr0`；`rename_indexing(x0)` 换成本 kernel 的循环变量；`load` 最终返回代表 `in_ptr0[x0]` 的临时表达式。`store` 以同样过程把 `name="buf0"` 映射为 `out_ptr0` 并写出赋值行。
 
@@ -38,6 +90,33 @@ def store(self, name, index, value, mode=None):
     else:
         raise NotImplementedError(f"store mode={mode}")
     self.stores.writeline(DeferredLine(name, line))
+
+def reduction(self, dtype, src_dtype, reduction_type, value):
+    argmax_or_argmin = reduction_type in {"argmax", "argmin"}
+    reduction_key = src_dtype, reduction_type, value
+    if reduction_key in self.reduction_cse.reduction_cache:
+        return self.reduction_cse.reduction_cache[reduction_key]
+
+    acc = self.reduction_cse.generate(
+        self.loads, f"reduction {reduction_key}", write=False
+    )
+    self.is_reduction = True
+    init_dtype = src_dtype if argmax_or_argmin else dtype
+    acc_type = reduction_acc_type(reduction_type, init_dtype)
+    self.reduction_prefix.writeline(
+        f"{acc_type} {acc} = {reduction_init(reduction_type, init_dtype)};"
+    )
+    assert self.reduction_depth is not None
+    index = self.itervars[self.reduction_depth]
+    for i in range(self.reduction_depth + 1, len(self.itervars)):
+        index = index * self.ranges[i] + self.itervars[i]
+    self.stores.writeline(
+        f"{acc} = {reduction_combine(reduction_type, acc, value, index)};"
+    )
+    self._gen_parallel_reduction_buffers(acc, acc_type, reduction_type, init_dtype)
+    result = reduction_project(reduction_type, acc)
+    self.reduction_cse.reduction_cache[reduction_key] = result
+    return result
 
 def store_reduction(self, name, index, value):
     index = self.rename_indexing(index)
@@ -105,7 +184,130 @@ reduction_depth=1
 return ([x0],[x1])
 ```
 
-load 索引 `128*x0+x1` 生成输入访问。规约累计语句由相邻 `reduction` 方法放在规约循环区域；本声明范围的 `store_reduction("buf0",x0,tmp_acc0)` 不写入普通 stores，而写到 `reduction_suffix`。这保证只有 x1 的 128 项累计完成后，才执行一次 `out_ptr0[x0]=tmp_acc0`。
+load 索引 `128*x0+x1` 生成输入访问。第一次 `reduction(sum,value)` 以 `(src_dtype,"sum",value)` 为 cache key，取得名为 `tmp_acc...` 的 accumulator；`reduction_prefix` 写入加法单位元初始化，普通 `stores` 区写入每个 x1 的 combine 更新。`reduction_depth=1` 使规约坐标从 `itervars[1]=x1` 开始；多维规约时后面的循环变量按各维 range 摊成一个 index，供 argmin/argmax 等需要位置的 combine 使用。相同 key 再次出现直接复用缓存结果。
+
+`reduction_project` 把 accumulator 转成 LoopBody 后续看到的规约结果，`store_reduction("buf0",x0,tmp_acc0)` 再把最终写放入 `reduction_suffix`。loop printer 因而按“prefix 初始化 → x1 循环中的 loads/compute/stores 累计 → suffix 写输出”的顺序组装，只有 128 项累计完成后才执行一次 `out_ptr0[x0]=tmp_acc0`。
+
+在这个纯 sum 案例中，各代码区的实值如下；`compute` 为空并不表示没有计算，
+因为 `CppKernel.reduction` 把 accumulator combine 追加到了 `stores`：
+
+| 代码区 | 本例中的语句 |
+| --- | --- |
+| `reduction_prefix` | 建立并以 0 初始化 scalar accumulator |
+| `loads` | 从 `in_ptr0[128*x0+x1]` 读取当前值 |
+| `compute` | 空；本例没有规约以外的逐元素算术 |
+| `stores` | 把当前读取值加到 accumulator |
+| `reduction_suffix` | 把最终 accumulator 写到 `out_ptr0[x0]` |
+
+这个顺序由 `codegen_loops_impl` 的两处消费代码落实。`loops[0]` 是当前层即将打印的第一个 loop，局部变量 `loop` 在 prefix 与 suffix 判断前都取自这里。第一次进入规约 loop 时先 splice prefix；`gen_loop` 打印规约循环并在最内层 splice loads/compute/stores；规约 loop 返回后再 splice suffix：
+
+```python
+if loops:
+    loop = loops[0]
+    if loop.is_reduction and not in_reduction:
+        reduction_prefix = get_reduction_code_buffer(loops)
+        code.splice(reduction_prefix)
+
+for loop in loops:
+    gen_loop(loop)
+
+if loops:
+    loop = loops[0]
+    if loop.is_reduction and not in_reduction:
+        code.splice(get_reduction_code_buffer(loops, "suffix"))
+```
+
+完整的递归关系是：`gen_loops` 接收同一层的 loop 列表；`gen_loop` 打印其中一项，若它有 `inner`，就把 `loop.inner` 作为下一层列表再次传给 `gen_loops`。`get_reduction_code_buffer` 从当前列表的 loop 取得它绑定的 kernel，再取该 kernel 的 prefix 或 suffix：
+
+```python
+def get_reduction_code_buffer(loops, buffer="prefix"):
+    assert buffer in ("prefix", "suffix", "local")
+    for loop in loops:
+        for kernel in loop.get_kernels():
+            if buffer == "local":
+                return kernel.local_reduction_init, kernel.local_reduction_stores
+            elif buffer == "suffix":
+                suffix = kernel.reduction_suffix
+                if loop.parallel:
+                    suffix = kernel.parallel_reduction_suffix + suffix
+                return suffix
+            else:
+                prefix = kernel.reduction_prefix
+                if loop.parallel:
+                    prefix = prefix + kernel.parallel_reduction_prefix
+                else:
+                    prefix = prefix + kernel.non_parallel_reduction_prefix
+                return prefix
+
+def gen_loop(loop):
+    loop_lines = loop.lines()
+    if loop_lines is None:
+        return
+    code.writelines(loop_lines)
+    with code.indent():
+        if loop.inner:
+            gen_loops(loop.inner, loop.is_reduction)
+        else:
+            gen_loop_kernel(loop)
+```
+
+对 `x0` 外层、`x1` 规约内层，打印 x0 后递归收到 `[x1_loop]`；这一次 `loops[0].is_reduction=True` 且上层传入的 `in_reduction=False`，所以在打印 x1 前放 prefix、打印 x1 后放 suffix。若规约内部还有下一层规约 loop，递归参数已经是 `in_reduction=True`，不会重复插入同一组 prefix/suffix。
+
+scalar `CppKernel.reduction(sum,...)` 的 `result = reduction_project("sum", acc)` 只返回 accumulator 名字，不另写代码；welford 才投影 `.mean/.m2/.weight`，argmin/argmax 才投影 `.index`：
+
+```python
+def reduction_project(reduction_type, acc):
+    if is_welford_reduction(reduction_type):
+        return f"{acc}.mean", f"{acc}.m2", f"{acc}.weight"
+    elif reduction_type in {"argmin", "argmax"}:
+        return f"{acc}.index"
+    return acc
+```
+
+vector kernel 多了一次横向投影。`CppVecKernel.reduction` 先创建 scalar/vector 两个 accumulator，并把两条初始化都写入 `reduction_prefix`；再把 vector combine 写入循环内 `stores`，把 vector→scalar combine 写入 `reduction_suffix`，最后返回 scalar acc 给随后调用的 `store_reduction`。两次向同一 suffix 追加的顺序就是“先 project，后写输出”：
+
+```python
+acc = self.reduction_cse.generate(
+    self.loads, f"reduction {reduction_key}", write=False
+)
+acc_vec = f"{acc}_vec"
+self.reduction_prefix.writeline(
+    f"{acc_type} {acc} = {reduction_init(reduction_type, init_dtype)};"
+)
+self.reduction_prefix.writeline(
+    f"{acc_type_vec} {acc_vec} = {self.reduction_init_vec(reduction_type, init_dtype)};"
+)
+
+self.stores.writeline(f"{acc_vec} = {combine};")
+
+if horizontal_reduction:
+    next_value = f"at::vec::vec_reduce_all<...>(..., {acc_vec})"
+    self.reduction_suffix.writeline(
+        f"{acc} = {reduction_combine(reduction_type, acc, next_value, src_dtype=src_dtype)};"
+    )
+    tmpvar = acc
+
+result = reduction_project(reduction_type, tmpvar)
+return result
+```
+
+实验 12 当前机器为 2×128 sum 选择了 16-lane vector 规约，生成代码把三个区域展开为：
+
+```cpp
+for (int64_t x0 = 0; x0 < 2; x0 += 1) {
+    float tmp_acc0 = 0;                         // reduction_prefix
+    Vectorized<float> tmp_acc0_vec = 0;
+    for (int64_t x1 = 0; x1 < 128; x1 += 16) {
+        auto tmp0 = loadu(in_ptr0 + x1 + 128*x0, 16);
+        auto tmp3 = tmp0 + 1.0f;
+        tmp_acc0_vec = tmp_acc0_vec + tmp3;     // stores 中的 combine
+    }
+    tmp_acc0 += vec_reduce_sum(tmp_acc0_vec);   // vector accumulator 投影
+    out_ptr0[x0] = tmp_acc0;                    // reduction_suffix
+}
+```
+
+这里用短名省略了生成文件中的类型转换和模板参数，但循环边界、初始化、逐块 combine、vector 投影和最终 store 与实际产物顺序一致。scalar 候选把内层步长改为 1、每次 combine 一个 value，并且 sum 的 `reduction_project` 不产生额外语句；prefix 与最终 store 的作用域不变。
 
 对 x0=1、x1=5，线性输入位置是 `128*1+5=133`；store 仍写输出位置 1。若误把 store_reduction 放在普通 store 区，它会在每个 x1 迭代中反复写尚未完成的累计值，破坏区域语义。
 
@@ -119,9 +321,49 @@ K01 到此完成。K02 将打开 Triton range tree，建立 pid、block、x/r ma
 
 ## K02：range tree 把逻辑范围分成 program offset、block lane 与 mask
 
-`TritonKernel.__init__` 建好 `range_trees` 后立即调用：
+Triton kernel 的 group 总会保留最后一个规约槽。逐点 N=19 传入
+`groups=(19,1)`；2×128 按行求和传入 `groups=(2,128)`。共同基类
+`SIMDKernel.__init__` 先把它们保存为 `numels`，再由
+`initialize_range_tree` 从后向前分配 `z/y/x/r` 前缀：最后一项是 r，前一项
+是 x。非规约 r=1 即使按构造字段标成 loop，也只是占位，不进入后续 active
+tree；真实规约 r=128 才参与 indexing。
 
-先走 N=19 的逐点例：只有一棵 x tree，`prefix="x"`、`is_loop=False`、`grid_dim=0`、`tensor_dim=0`、`numel=19`，当前 XBLOCK=8，kernel 不在规约中。下面循环因此立刻为 x tree 生成 `xoffset=program_id(0)*8`、`xindex=xoffset+arange(0,8)` 和 `xmask=xindex<19`；规约 rbase 分支不进入。
+构造规则可以直接写成下面这组状态变换。`n=len(numels)` 时取字符串
+`"zyxr"` 的最后 n 个前缀；r 没有 program grid 维，其他前缀在 `"xyz"`
+中取得 grid 维；r 只有在真实规约且没有采用 persistent reduction 时才是 loop：
+
+```text
+active_prefixes = "zyxr"[-len(numels):]
+for 每个 (i,prefix):
+    is_reduction = (prefix == "r")
+    grid_dim = None if is_reduction else "xyz".find(prefix)
+    tensor_dim = p 在本 kernel tensor 维序中的位置；没有则为 None
+    is_loop = is_reduction and not persistent_reduction
+    建 root(name=prefix+"index", numel=numels[i], 上述字段)
+```
+
+`active_range_trees()` 的实际过滤条件也很短：保留所有非 r tree；r tree 只在
+`inside_reduction=True` 时保留。因此 pointwise 的 r=1 root 虽存在，却不会
+参与 K03 的 active-tree mask/index 分析。多维 groups 也按同一规则，例如
+`(A,B,C,1)` 依次得到 z/y/x/r，而不是另猜一套前缀。
+
+| 案例 | entry | numel | `is_loop` | `grid_dim` | `tensor_dim` | 主符号 |
+| --- | --- | ---: | --- | --- | --- | --- |
+| N=19 pointwise | x | 19 | False | 0 | 0 | `xindex` |
+| N=19 pointwise | r 占位 | 1 | True | None | None | 不参与普通地址 |
+| 2×128 non-persistent sum | x | 2 | False | 0 | 0 | `xindex` |
+| 2×128 non-persistent sum | r | 128 | True | None | 1 | `rindex` |
+
+每个 root entry 保存 prefix、numel、program 维、tensor 维和是否在分块循环中；
+root 继续切分时产生的子 entry 以自己的迭代符号登记到
+`range_tree_nodes`，让 `indexing` 能从表达式中的 free symbol 找回所属 tree。
+构造完成后，`TritonKernel.__init__` 立即调用：
+
+先走 N=19 的逐点例：参与实际地址的是 x tree，`prefix="x"`、
+`is_loop=False`、`grid_dim=0`、`tensor_dim=0`、`numel=19`，当前
+XBLOCK=8，kernel 不在规约中。下面循环因此为 x tree 生成
+`xoffset=program_id(0)*8`、`xindex=xoffset+arange(0,8)` 和
+`xmask=xindex<19`；规约 rbase 分支不进入。
 
 ```python
 def codegen_range_tree(self):
@@ -238,7 +480,13 @@ xindex  = xoffset + tl.arange(0,XBLOCK)[形状标注]
 xmask   = xindex < xnumel
 ```
 
-pid=2 时 xoffset=16，lanes 是 16..23；xnumel=19，mask 为 `[T,T,T,F,F,F,F,F]`。`iteration_ranges_ranges_code` 根据 tensor_dim 追加 broadcast shape，使 x block 能与其他维对齐；index_dtype 不是 tl.int32 时，arange 与 pid 都显式 `.to(index_dtype)`。
+pid=2 时 xoffset=16，lanes 是 16..23；xnumel=19，mask 为
+`[T,T,T,F,F,F,F,F]`。`iteration_ranges_ranges_code` 根据 tensor_dim 追加
+broadcast shape，使不同轴能共同参与一次张量运算。例如二维 x/r block 中，
+x 是第 0 个 tensor 维，`xindex` 形如 `[XBLOCK,1]`；r 是第 1 个 tensor
+维，`rindex` 形如 `[1,RBLOCK]`。二者相加后广播为
+`[XBLOCK,RBLOCK]`。index_dtype 不是 tl.int32 时，arange 与 pid 都显式
+`.to(index_dtype)`。
 
 若 entry 没有 tensor_dim，header 不制造 arange，而用 `tl.full([1,...,1],xoffset,index_dtype)` 表达 scalar program 坐标。若 grid_dim=None，则无需 program offset：直接以 arange 作为 entry，并设 offset=0。
 
@@ -621,7 +869,10 @@ def indexing(
     return IndexingOptions(index_str, mask_vars, mask_str, expand_str, has_rindex, index)  # type: ignore[arg-type]
 ```
 
-这段长实现可以按返回对象的三种形态读：成功匹配时返回 `BlockPtrOptions`；普通整数和普通符号索引返回 `IndexingOptions`。三者都回答“地址怎样写、要合取哪些 mask”，但 block pointer 还携带多维 shape/stride/offset。
+这段长实现有三条返回路径：成功匹配 block pointer 时返回
+`BlockPtrOptions`；整数常量地址和普通符号地址都返回 `IndexingOptions`。
+因此对象类型只有两类，路径有三条。它们都回答“地址怎样写、要合取哪些
+mask”，但 block pointer 还携带多维 shape/stride/offset。
 
 ### 第一段：从 index 的符号决定基础 mask
 
@@ -674,6 +925,227 @@ offsets     = [xoffset]
 
 因此 `5*xindex+3*rindex+2` 可被拆成 x stride 5、r stride 3、常量偏移 2；`xindex*rindex` 不可走这条路径。匹配失败不是 codegen 失败，只是回退普通 pointer offset。
 
+`create` 接住的还只是匹配结果。它把这份结果整理成 Triton 真正需要的
+shape、stride、block shape、offset 和维序；后面三个方法分别负责写出
+`tl.make_block_ptr`、挑出需要边界检查的维，以及算出规约循环每轮应推进
+多少。下面四个方法合起来才是 `BlockPtrOptions` 从“匹配记录”到“可生成
+地址”的完整过程：
+
+```python
+@staticmethod
+def create(
+    *,
+    params: BlockParameters,
+    constant_offset: sympy.Expr,
+    range_trees: List[IterationRangesEntry],
+    mask_vars: OrderedSet[str],
+) -> BlockPtrOptions:
+    """Helper to create a  BlockPtrOptions instance"""
+    reshape_suffix = [f"{t.prefix.upper()}BLOCK" for t in range_trees]
+
+    # 输入 block 与输出 block 同阶时，stride=0 的维是广播维；去掉它可避免
+    # 无意义的 block-pointer 维，同时把 load 后 reshape 的该维写成 1。
+    drop_broadcasts = len(reshape_suffix) == len(params.strides)
+    broadcasting_dim = [s == 0 for s in params.strides]
+    for i, is_broadcasting in enumerate(broadcasting_dim):
+        if is_broadcasting and drop_broadcasts:
+            reshape_suffix[i] = "1"
+
+    if V.kernel.no_x_dim:
+        assert range_trees[0].prefix == "x"
+        reshape_suffix.pop(0)
+
+    if (
+        not V.kernel.inside_reduction
+        and len(params.strides) == len(V.kernel.numels) - 1
+        and V.kernel.numels[-1] != 1
+    ):
+        reshape_suffix.append("1")
+
+    def filter(it):
+        """Removes any broadcasting dims from a given sequence"""
+        assert len(it) == len(broadcasting_dim)
+        return [
+            item
+            for item, is_broadcasting in zip(it, broadcasting_dim)
+            if not is_broadcasting or not drop_broadcasts
+        ]
+
+    params = BlockParameters(
+        **{key: filter(val) for key, val in dataclasses.asdict(params).items()}
+    )
+
+    def lookup_size(exprs: Iterable[sympy.Expr]) -> List[sympy.Expr]:
+        return [V.graph.sizevars.lookup_precomputed_size(expr) for expr in exprs]
+
+    params.shape = lookup_size(params.shape)
+    params.strides = lookup_size(params.strides)
+    return BlockPtrOptions(
+        params=params,
+        constant_offset=V.graph.sizevars.lookup_precomputed_size(constant_offset),
+        order=list(reversed(range(len(params.shape)))),
+        mask_vars=mask_vars,
+        reshape_suffix=reshape_suffix,
+    )
+
+def format(self, name: str, roffset=True) -> str:
+    """
+        Codegen a call to tl.make_block_ptr()
+
+        Args:
+            name: variable name for pointer
+            roffset: should roffset be included in offsets=..., for use with tl.advance()
+
+        Returns:
+            "tl.make_block_ptr(...)"
+        """
+    f = V.kernel.index_to_str
+    offsets = [*self.offsets]
+    if not roffset:
+        offsets = [
+            self.replace_roffset(offset, sympy.Integer(0)) for offset in offsets
+        ]
+    args = [
+        f"{name} + ({f(self.constant_offset)})"
+        if self.constant_offset != 0
+        else name,
+        f"shape={f(self.shape)}",
+        f"strides={f(self.strides)}",
+        f"block_shape={f(self.block_shape)}",
+        f"order={f(self.order)}",
+        f"offsets={f(offsets)}",
+    ]
+    return f"tl.make_block_ptr({', '.join(args)})"
+
+@cache_on_self
+def boundary_check(self) -> List[int]:
+    """List of indices to pass to tl.load(boundary_check=...)"""
+    sizevars = V.graph.sizevars
+    block_to_max: Dict[sympy.Expr, Any] = {
+        block_size: TRITON_MAX_BLOCK[prefix_str[symt].upper()]
+        for symt, block_size in block_sizes.items()
+    }
+    return [
+        idx
+        for idx in range(len(self.shape))
+        if (
+            not sizevars.statically_known_equals(
+                self.strides[idx], sympy.Integer(0)
+            )
+            and not sizevars.statically_known_multiple_of(
+                self.shape[idx], self.block_shape[idx]
+            )
+            and not sizevars.statically_known_multiple_of(
+                self.shape[idx], sympy_subs(self.block_shape[idx], block_to_max)
+            )
+            and not (
+                V.kernel.no_x_dim
+                and self.block_shape[idx] == block_sizes[SymT.XBLOCK]
+            )
+        )
+    ]
+
+def advance_roffset(self):
+    """
+        Codegen string to pass to tl.advance(name, ...).
+
+        Advance is the difference between offsets in each loop iteration.
+        To compute it, we replace roffset with multiples of RBLOCK.
+        Since we expect roffset to vary in range(0, rnumel, RBLOCK), the first
+        iteration has roffset=0, while the second has roffset=RBLOCK.
+        """
+    rblock = block_sizes[SymT.RINDEX]
+    advance = [
+        self.replace_roffset(offset, rblock)
+        - self.replace_roffset(offset, sympy.Integer(0))
+        for offset in self.offsets
+    ]
+    return V.kernel.index_to_str(advance)
+```
+
+这里的边界判断逐维进行。当前常量表给 X 的最大 block 为 2048、R 为 65536。
+广播维不需要检查；shape 能静态证明是当前 block shape（或该 block 的最大
+可能大小）的整数倍，也不需要检查。N=19 既不能证明是 XBLOCK 的倍数，19 也
+不是 2048 的倍数，所以保留维 0；2×128 中，2/2048 与 128/65536 都不能整除，
+所以保留维 0、1。剩下的维才进入 `boundary_check=[...]`。规约循环则先让 `format(...,
+roffset=False)` 把 r offset 固定为 0，再用 `advance_roffset` 比较 r offset
+分别为 0 和 RBLOCK 时的差值。例如 offsets=`[xoffset, roffset]`，得到的
+推进量就是 `[0, RBLOCK]`。
+
+把最简单的 N=19、`index=3*xindex` 继续走到可消费对象。x tree 提供 numel=19、block size=XBLOCK、program offset=xoffset，匹配结果是：
+
+```text
+BlockPtrOptions
+  shape=[19]
+  strides=[3]
+  block_shape=[XBLOCK]
+  offsets=[xoffset]
+  constant_offset=0
+  order=[0]
+  reshape_suffix=[XBLOCK]
+```
+
+N=19 不能静态证明完整覆盖 XBLOCK，因此 boundary check 包含第 0 维。`format("in_ptr0")` 生成的核心表达式是：
+
+```text
+tl.make_block_ptr(
+    in_ptr0,
+    shape=[19], strides=[3], block_shape=[XBLOCK],
+    order=[0], offsets=[xoffset]
+)
+```
+
+K04 的 load 消费它后形成：
+
+```text
+tl.load(tl.make_block_ptr(...), boundary_check=[0])
+```
+
+若同一请求带有 `override_mask`、间接 tmp 索引、非 int32 index，或者配置关闭 block pointer，前面的资格判断不进入匹配，函数改为返回普通 `IndexingOptions(index_str="3*xindex", mask_str="xmask",...)`，load 随后生成 `tl.load(in_ptr0 + (3*xindex), xmask)`。这两个出口从同一个数学地址开始，区别是地址和边界条件采用哪种 Triton 表示。
+
+2×128 的 `128*xindex+rindex` 在 x、r 两棵 tree 都 active 且 block-pointer
+条件满足时，匹配阶段先交出：
+
+```text
+params.shape       = [2,128]
+params.strides     = [128,1]
+params.block_shape = [XBLOCK,RBLOCK]
+params.offsets     = [xoffset,roffset]
+constant_offset    = 0
+range_trees        = [x tree,r tree]
+```
+
+两项 stride 都不是 0，所以 `create` 不删除维；它从两棵 range tree 得到
+`reshape_suffix=[XBLOCK,RBLOCK]`，并把两个维的默认顺序反转成
+`order=[1,0]`。于是完整 options 是：
+
+```text
+shape=[2,128], strides=[128,1]
+block_shape=[XBLOCK,RBLOCK]
+offsets=[xoffset,roffset]
+order=[1,0], reshape_suffix=[XBLOCK,RBLOCK]
+```
+
+在这份符号 block shape 上，源码不能证明 2 是 XBLOCK 的整数倍，也不能证明
+128 是 RBLOCK（或其最大替代值）的整数倍，因此逐维筛选得到
+`boundary_check=[0,1]`。`format("in_ptr0",roffset=False)` 只把 offsets 中的
+r offset 换成 0，初始 pointer 因而是：
+
+```text
+tl.make_block_ptr(
+    in_ptr0,
+    shape=[2,128], strides=[128,1],
+    block_shape=[XBLOCK,RBLOCK], order=[1,0],
+    offsets=[xoffset,0]
+)
+```
+
+`advance_roffset` 分别代入 roffset=RBLOCK 和 roffset=0，逐维相减得到
+`[0,RBLOCK]`。所以 non-persistent r loop 的第一轮从 r=0 开始，每轮读取后
+沿 r 维推进一个 RBLOCK。若某个 shape 能被静态证明整除对应 block，那一维
+会从 boundary list 中删除；禁用 block pointer 时则回到显式 offset
+`128*xindex+rindex` 与 `xmask & rmask`。
+
 ### 第四段：普通 offset 的 constant、broadcast 和 mask 出口
 
 block pointer 未返回时先生成 `index_str`：
@@ -702,7 +1174,55 @@ K03 到此完成。K04 将打开 `load/store/store_reduction`，查看这些 opt
 
 ## K04：load/store 消费 indexing 结果并选择普通、block pointer 或 atomic 路径
 
-先代入 2×128 max 规约中的一次输入读取：`name="arg0_1"`，`index=128*xindex+rindex`，dtype=float32，当前位于 reduction loop，rindex/rmask 都存在；它不是间接索引、不是 inplace buffer，也没有 broadcast 或额外 `_load_mask`。`last_usage` 尚未到该输入，所以不使用 `evict_last`；`indexing(...,block_ptr=True)` 在这组普通地址上返回 offset 与 xmask/rmask，随后生成带默认 other 值的 `tl.load`。
+先代入 2×128 sum 规约中的一次输入读取：`name="arg0_1"`，`index=128*xindex+rindex`，dtype=float32，当前位于 non-persistent reduction loop，x/r 两棵 tree 均 active；它不是间接索引、不是 inplace buffer，也没有额外 `_load_mask`。block pointer 启用且资格条件满足时，K03 已得到 shape `[2,128]`、stride `[128,1]`、block shape `[XBLOCK,RBLOCK]` 的 `BlockPtrOptions`。`load` 会先建立 r offset 为 0 的 block pointer，以 boundary check 和 zero padding 处理尾块，在规约循环中读取并按 RBLOCK advance。若配置或附加 mask 禁止 block pointer，同一数学地址使用普通 offset `128*xindex+rindex`、`xmask & rmask` 和 `other=0.0`。max 规约需要负无穷等不同单位元时，下面用普通 offset 路径说明 `other` 的变化。
+
+`load` 和普通 `store` 都通过下面的方法把 `BlockPtrOptions` 变成最终 pointer、边界参数和可选 advance：
+
+普通 load 生成后还要选择代码区。直接索引通常进入 `loads`；依赖间接索引或
+临时 mask 的 load 必须等这些值算出，所以进入 `compute`；规约循环中完全不含
+rindex 的 load 可以提升到循环外，直接进入 `body`。这就是
+`get_load_buffer(indexing)` 的三条出口，后面的 `codegen_body` 会在对应位置消费。
+
+```text
+若 has_indirect 或 has_tmpmask：返回 compute
+否则若 inside_reduction、r tree 是 loop、并且地址不含 rindex：返回 body
+否则：返回 loads
+```
+
+```python
+def codegen_block_ptr(
+    self, name: str, var: str, indexing: BlockPtrOptions, other=""
+) -> Tuple[str, Optional[DeferredLine], str]:
+    advance_block_ptr = None
+    check = indexing.boundary_check()
+    if not check:
+        other = ""
+    elif other:
+        assert other == ", other=0.0"
+        other = f", boundary_check={check!r}, padding_option='zero'"
+    else:
+        other = f", boundary_check={check!r}"
+    if (
+        self.inside_reduction
+        and self.range_trees[-1].is_loop
+        and indexing.has_rindex()
+    ):
+        block_ptr = f"block_ptr{next(self.block_ptr_id)}"
+        self.body.writeline(
+            DeferredLine(
+                name, f"{block_ptr} = {indexing.format(var, roffset=False)}"
+            )
+        )
+        advance_block_ptr = DeferredLine(
+            name,
+            f"{block_ptr} = tl.advance({block_ptr}, {indexing.advance_roffset()})",
+        )
+    else:
+        block_ptr = indexing.format(var)
+    return block_ptr, advance_block_ptr, other
+```
+
+对 N=19 的 `3*xindex`，不在规约 loop 中，因此直接返回 `indexing.format(in_ptr0)`；boundary check `[0]` 被拼到 load。对 2×128 loop reduction，`roffset=False` 让初始 pointer 的 r offset 取 0，返回的 `DeferredLine` 在每轮 load 后执行 `tl.advance(block_ptr, [0,RBLOCK])`。sum 的普通越界值是 0，所以它被改写为 `boundary_check=...` 与 `padding_option='zero'`；若 shape 恰好整除 block、`boundary_check()` 为空，则不生成边界或 padding 参数。
 
 ```python
 def load(self, name: str, index: sympy.Expr):
@@ -932,6 +1452,59 @@ block pointer，也会改走普通 `IndexingOptions`。未知 mode 不猜测语�
 对应行还能由后续阶段一并跳过。block pointer 的 advance 紧跟 store。若当前不在
 规约循环中，被写的 `value` 也登记为可在外层使用。
 
+### `reduction`：把 load 值变成跨 roffset 块存活的结果
+
+`load` 只产生当前 `[XBLOCK,RBLOCK]` 块的值；它不会自动完成 sum。LoopBody 接着
+调用 Triton `reduction(dtype,src_dtype,"sum",value)`。方法先收集 x/r mask，把
+输入广播到 dense block shape，并以 `(src_dtype,reduction_type,value)` 查 cache。
+未命中时，2×128 的 non-persistent sum 走下面这条状态链：
+
+```text
+进入 roffset 循环前（body）：
+    _tmp_acc = tl.full([XBLOCK,RBLOCK], 0.0, accumulator_dtype)
+
+每个 roffset 块内（compute）：
+    当前 load value 已用 rmask/zero padding 表示无效 lane
+    _tmp_acc = _tmp_acc + value                 # 逐 lane 跨块累计
+
+退出 roffset 循环后（suffix）：
+    tmp_sum = tl.sum(_tmp_acc, reduction_dim)   # RBLOCK lane 横向合成一项
+    tmp_sum reshape 为 [XBLOCK,1]
+```
+
+因此 RBLOCK=64 时，128 项分两轮：第一轮把 0..63 加入 `_tmp_acc`，advance 到
+r=64 后把 64..127 加入同一 `_tmp_acc`，循环结束才做 `tl.sum`。返回的
+`tmp_sum` 被加入 `outside_loop_vars`，随后作为 `store_reduction` 的 `value`。
+这补齐了“load 结果 → compute 累计 → suffix 结果 → 最终 store”的生产链。
+
+把输入固定为两行连续整数，第一行是 0..127，第二行是 128..255。先看第一行：
+
+| 时刻 | lane j（0≤j<64）的 `_tmp_acc[j]` |
+| --- | --- |
+| 初始化 | 0 |
+| roffset=0，读取位置 j | j |
+| roffset=64，读取位置 64+j | `j+(64+j)=64+2j` |
+
+所以 suffix 的横向结果为
+`Σ(j=0..63)(64+2j)=64×64+2×(0+...+63)=4096+4032=8128`，
+`store_reduction` 把 8128 写到输出位置 0。第二行同一 lane 两轮分别读
+`128+j` 和 `192+j`，累计成 `320+2j`，横向和为
+`64×320+4032=24512`，写到输出位置 1。它们正是 0..127 与 128..255
+各自的总和。
+
+不同 reduction type 使用各自的 accumulator 单位元和 combine：sum 为 0 与加法，
+max 为负无穷与 maximum，argmin/argmax 还同时保存 index，Welford 保存
+mean/m2/weight。普通 masked load 的 `_load_other` 由 `mask_loads(mask,value)`
+上下文临时设置；sum 的 block pointer 可用 zero padding，max 等非零单位元的案例
+在本篇使用普通 offset 的 `other` 展示。无论填充值来自哪条 load 路径，
+`reduction` 还会以 reduction 默认值屏蔽无效 mask，保证 combine 的单位元正确。
+
+persistent reduction 不建立跨 `roffset` 循环的 `_tmp_acc`：完整 r block 已在同一
+次计算中，它先按 mask 换成默认值，再直接对 reduction 维做 `tl.sum`、max 等
+最终 reduction。对同一输入，它一次看到第一行 0..127，直接得到 8128；第二行
+直接得到 24512。结果相同，区别是 non-persistent 用两个 64-lane 块先逐 lane
+累计再横向收尾，persistent 在一个覆盖完整 r 维的 block 中直接横向 reduction。
+
 ### `store_reduction`：先退出内层坐标，再把最终值写到输出坐标
 
 规约体内的 `value` 已经组合了 r 维，但输出地址不应继续带 rindex。因此方法先
@@ -940,7 +1513,11 @@ block pointer，也会改走普通 `IndexingOptions`。未知 mode 不猜测语�
 进入 `suffix`，即规约循环结束后的位置；block pointer 路径显式附上 boundary
 check，普通路径使用 offset 与 mask。
 
-以 2×128 的按行 max 为例：规约体里读取地址含 `128*xindex+rindex`，无效 r lane
+这里的恢复是源码中的两次普通赋值，不是 `try/finally`。若中间 `indexing`
+抛异常，状态可能停在 False；该异常会终止本次 kernel 生成，当前 kernel 对象不会
+再被当作成功结果消费。正常路径才继续恢复 True 并写 suffix。
+
+以关闭 block pointer 的 2×128 按行 max 为例：规约体里读取地址含 `128*xindex+rindex`，无效 r lane
 由 `_load_other=-inf` 填充；累计结束后，`store_reduction` 为输出只生成 x 维地址。
 如果不临时退出 reduction 状态，索引器可能把 r 维 mask 或 dense 形状带进最终
 两元素输出，这正是状态切换要避免的问题。
@@ -964,7 +1541,12 @@ loads、compute、stores 和 reduction suffix 拼成完整 Triton 函数。
 
 ### 完整源码：`codegen_body`
 
-对同一个 2×128 规约，进入函数前五个缓冲区分别含：`indexing_code` 的 x/r 索引，`loads` 的输入读取，`compute` 的 max 累计，`stores` 为空，`suffix` 含最终输出 store；`inside_reduction=True`，r tree 是 loop。函数把前三段放进 roffset 循环，每轮清除只在该块有效的 CSE，循环结束后才拼 suffix。逐点 N=19 例没有 r loop，五段直接依次拼接一次。
+对同一个 2×128 sum 规约，x range header 已在此前写进 `body`；r tree 是
+loop，它的 rbase/rindex/rmask header 由 `codegen_body` 在每轮直接写进
+`body`。进入函数时，`indexing_code` 保存其余地址准备语句，`loads` 保存输入
+读取，`compute` 保存 sum 累计，`stores` 为空，`suffix` 保存最终输出 store。
+函数把地址准备、读取和累计放进 roffset 循环，每轮清除只在该块有效的 CSE，
+循环结束后才拼 suffix。逐点 N=19 例没有 r loop，这五段直接依次拼接一次。
 
 ```python
 def codegen_body(self):
@@ -1017,7 +1599,14 @@ def codegen_body(self):
 
 ### 完整源码：`codegen_kernel`
 
-先走 N=19 逐点例：`numels=[19]`，size hint 向上取为 32；签名有输入 pointer arg0_1 和输出 pointer buf0，没有 mutation、workspace 或等于 1 的维度，range tree 只有 x，body 已由上一方法组成，metadata 使用 pointwise heuristic。预期出口是带 `@triton_heuristics.pointwise(size_hints=[32])`、两个 pointer 形参和 x block body 的完整函数。
+先走 N=19 逐点例：构造阶段保留规约占位，因此
+`self.numels=[19,1]`。循环先把两项分别变成 `size_hints=[32,1]`；因为
+`inside_reduction=False`，随后 `pop()` 删除最后的 r 占位，得到最终
+`[32]`。签名有输入 pointer arg0_1 和输出 pointer buf0，没有 mutation、
+workspace；参与实际地址的 range tree 是 x，body 已由上一方法组成，metadata
+使用 pointwise heuristic。预期出口是带
+`@triton_heuristics.pointwise(size_hints=[32])`、两个 pointer 形参和 x block
+body 的完整函数。
 
 ```python
 def codegen_kernel(self, name=None):
@@ -1306,7 +1895,65 @@ K05 到此完成。K06 回到 CPU，完整打开 `CppKernelProxy` 怎样从 scal
 
 ### 完整源码：`codegen_functions`
 
-本次 CPU 输入是一个 LoopBody callable，`fn_list=[fn]`、`var_sizes_list=[((19,),())]`；机器与 float32 支持 16 lane，tiling 轴为 x、factor=16，尾部配置允许标量 fallback。`set_ranges` 建立长度 19 的一维循环；scalar kernel 先形成正确底稿，vector checker 通过后生成 0..15 主段，剩余 16..18 用 scalar 尾段。若 checker 因 dtype 或操作失败，则直接保留覆盖 0..18 的 scalar loop。
+本次 CPU 输入是一个 LoopBody callable，`fn_list=[fn]`、`var_sizes_list=[((19,),())]`；机器与 float32 支持 16 lane，tiling 轴为 x、factor=16，尾部配置允许标量 fallback。`set_ranges` 建立长度 19 的一维循环；scalar kernel 先形成正确底稿，`TilingSelect` 返回一维候选后生成 0..15 主段，剩余 16..18 使用 masked vector 或 scalar 尾段。
+
+当前实现没有在 `codegen_kernel(CppVecKernel,...)` 外包一层“生成失败就恢复 scalar”的异常处理。候选是否进入向量分支主要在调用前由 `TilingSelect.select_tiling` 决定：
+
+| 检查到的情况 | 返回 | `codegen_functions` 的结果 |
+| --- | --- | --- |
+| 某个 LoopBody dtype 不在 `VECTORIZABLE_DTYPES` | `([],[])` | 保留已经建立的 scalar loop nest |
+| 读写索引找不到适合的 tiling 轴 | `([],[])` | 保留 scalar |
+| `enable_tiling_heuristics=True`，且非连续 load/store/index_expr 占比达到阈值 | `([],[])` | 保留 scalar |
+| 静态 pointwise 轴长度小于向量宽度一半 | `([],[])` | 保留 scalar |
+| 找到一个或两个可用轴 | factor 与 axis 列表 | 进入 1D 或 2D vector 分支 |
+
+这些出口对应当前 `select_tiling` 中的实际判断：
+
+```python
+all_dtypes = _get_dtype_from_loopbodies(loop_bodies)
+if any(dtype not in VECTORIZABLE_DTYPES for dtype in all_dtypes):
+    return [], []
+
+tiling_indices = self._select_tiling_indices(
+    fn_list, var_sizes_list, tiling_factor
+)
+
+if config.cpp.enable_tiling_heuristics:
+    # 遍历 LoopBody 节点后得到两个计数：全部操作数 op_num，
+    # 以及非连续 load/store/index_expr 数 non_contig_indexing_op_num。
+    if op_num > 0 and non_contig_indexing_op_num / op_num >= 0.08:
+        return [], []
+
+    if (
+        not reduction_group
+        and group
+        and len(tiling_indices) == 1
+        and not has_free_symbols([group[tiling_indices[0]]])
+        and group[tiling_indices[0]] < tiling_factor / 2
+    ):
+        return [], []
+
+if len(tiling_indices) == 1:
+    return [tiling_factor], tiling_indices
+if len(tiling_indices) == 2:
+    return [tiling_factor, tiling_factor], tiling_indices
+return [], []
+```
+
+`_select_tiling_indices` 从 LoopBody 的 read/write index 计算每个循环变量在 vector range 内的 stride：stride 1 的变量是连续候选，stride 0 不影响候选；同时出现不合适非连续 stride 的轴会被排除。它没有找到轴时，上述末尾返回空列表。
+
+候选已经返回后，源码直接重放 CppVecKernel。1D 分支先完整执行 `vec_kernel = codegen_kernel(CppVecKernel,...)`，成功后才调用 `split_with_tiling` 并把 main 改绑它；主 vector kernel 生成时若抛异常，`loop_nest` 仍是先前的 scalar 结构，但整个编译异常退出，不会拿它继续生成结果。tail kernel 在 main 已绑定后才生成，tail 生成异常可能留下内存中的部分绑定状态，同样因为编译退出而不会成为输出。这里没有静默 scalar fallback。
+
+2D 分支的顺序不同：它先把原来的 loop nest 沿外轴切成 main/tail，再把
+外轴 main 沿内轴切成 main/tail，然后才调用
+`codegen_kernel(CppTile2DKernel,...)`。因此主 2D kernel 在生成时抛异常，
+内存里的两次 split 已经发生，但 `inner_main_loop.set_kernel(tile2d_kernel)`
+还没有执行；异常继续向外传播，部分 loop tree 不会被打印成输出。若异常
+发生在后面的 masked tail kernel，前面已经成功生成并绑定的 main kernel
+和部分 tail 结构可能仍留在内存中，编译仍然失败，也不会把它们当作一次
+scalar fallback 的结果。
+
+另一个独立判断 `MASKED_VECTORIZABLE_DTYPES` 只控制不足一宽的 tail 是否能用 masked vector：它失败时不会调用 masked-vector codegen，main 仍向量化，tail 直接改绑已存在的 scalar kernel。
 
 ```python
 def codegen_functions(self, fn_list, var_sizes_list):
@@ -1531,9 +2178,11 @@ vector kernel 不知道每个值实际需要哪一种 C++ 向量类型。每个 
 等于完整 group 的函数写入主体；范围只有外层 group 的额外 pointwise 函数，在遇到
 规约后写入 suffix。任何其他范围组合触发 assert，不会把不兼容循环强行融合。
 
-随后总会生成 `CppKernel` scalar kernel，并用它建立 `LoopNestWithSplit`。它既是无
-SIMD、无循环等出口的最终实现，也是所有 tail 无法向量化时的正确性后备。scalar
-生成期间发现的 removed/inplaced buffer 同步回 graph。
+随后总会生成 `CppKernel` scalar kernel，并用它建立 `LoopNestWithSplit`。没有
+可用 ISA、没有循环或 tiling 选择没有返回候选时，它就是最终实现；main 已选用
+vector 而 tail 不支持 masked vector 时，它只负责 tail。vector kernel 生成过程
+若抛异常不会回到这份 scalar 结果，而是让编译失败。scalar 生成期间发现的
+removed/inplaced buffer 同步回 graph。
 
 有可用 ISA 且确实存在循环时，才在关闭重复 inplace 更新的配置中选择 tiling：
 
@@ -1596,3 +2245,7 @@ scalar。若根本没有循环变量（单个 scalar 结果），在生成 scala
 loop nest；Triton 路径从 range tree、indexing、访存缓冲区走到完整 decorated kernel。
 两者都消费 Q411 的 LoopBody，但 CPU 把并行宽度固化进 C++ loop nest，Triton 把范围
 参数与 block hint 交给 decorator 和运行 launch 配置。
+
+
+
+

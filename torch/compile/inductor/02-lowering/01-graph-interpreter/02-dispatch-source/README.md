@@ -353,3 +353,4 @@ base[1:4]，同 storage 不同 offset -> layer_weight_0
 4. 两个数值完全相同、但分别分配的 3×4 tensor 具有不同 data pointer，名字去重不会把它们当成同一常量。
 
 Q212 至此交出可放入 env 的计算 IR、常量 IR 或明确错误。Q213 将继续解释 output 如何把 env 中的最终值变成 `graph_outputs`，并处理输入 mutation。
+

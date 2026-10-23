@@ -4,6 +4,17 @@
 
 Q34 已经让我们按节点类型画出提交时间线。本篇打开实际控制循环：它维护哪几份状态，为什么在 extern/template/device 边界先 flush，以及分派后哪个 `node` 被加入 available/completed。
 
+先固定循环中的四份状态：
+
+| 状态 | 保存什么 | 谁使用它 |
+| --- | --- | --- |
+| `self.backends[device]` | 每个 device 已创建的有状态生成器及其尚未提交的工作 | 分派调用继续积累；`flush()` 要求所有已创建 backend 提交 |
+| `current_device` | 当前 wrapper device guard 所在设备 | 下一节点决定是否 flush、退出旧 guard、进入新 guard |
+| `buffer_names_to_free` | 已到最后一次使用、等待安全提交点释放的 buffer 名 | `flush()` 在 backend 工作写出后调用 `free_buffers()` 兑现 |
+| `available_buffer_names` / `completed_operations` | Scheduler 外层循环已经登记的 buffer 名和 operation 名 | available 在调度构造时用于裁掉已由输入、常量或先前结果满足的依赖；completed 在后续 inplace 判断中过滤已经处理过的使用者 |
+
+这两份“完成”集合是编译期记账，不表示设备已经执行。具体 backend 还会在 `mark_run()` 中分配输出并记录生成状态；template 案例会展示 backend 处理范围与 Scheduler 外层记账范围为何不同。
+
 ```text
 最终节点序列
     -> 选择 wrapper 上下文
@@ -123,7 +134,7 @@ cpp.flush([op0,op1])               # 真正提交
 
 ### K01 理解验收
 
-若首节点是 extern，前置 `flush()` 时 `backends` 仍可能为空；extern 路径本身不需要先创建普通 CPU backend。只有节点完成后的 `ready_to_flush()` 查询调用 `get_backend(cpu)` 时，才可能创建它。若同一 Scheduler 后来出现普通 CPU 节点，会复用这个实例。
+若首节点是 extern，前置 `flush()` 时 `backends` 仍可能为空；extern 分派本身不需要普通 CPU backend。K03 的完整循环会在该节点之后查询对应 backend 的 `ready_to_flush()`，这一步才创建并缓存它。若同一 Scheduler 后来出现普通 CPU 节点，会复用这个实例。
 
 K01 到此完成。K02 打开 extern 调用和主循环中的边界顺序。
 
@@ -290,7 +301,9 @@ def _codegen(self) -> None:
 
 判断依次是 template、extern、foreach、普通 Scheduler/Fused、nop。template 放在最前，是因为带 epilogue 的 `FusedSchedulerNode` 同时也是融合组；若先按普通 fused 判断，它会错误进入 `codegen_node`。extern 直接调用上节方法；foreach 还要检查 backend 是 `SIMDScheduling` 或 `CUDACombinedScheduling`，否则抛 AssertionError；普通节点进入 backend `codegen_node`；剩余对象必须是 nop，只 `mark_run()`。
 
-nop 在 device 边界块前被排除，所以不会切 guard，也不查询 `ready_to_flush()`；它仍更新待释放名字以及 available/completed。Triton debug sync 是调试生成路径，普通配置关闭；理解正常分派时无需让这个调试选项替代 nop 的实际职责。
+nop 在 device 边界块前被排除，所以不会切 guard，也不查询 `ready_to_flush()`；它仍更新待释放名字以及 available/completed，也不会向普通 backend 或 wrapper 添加一次 kernel 调用。
+
+当前源码中，debug-sync 分支没有同样排除 nop，却读取只在前面非 nop 条件块中赋值的局部变量 `device`。独立实验让首节点为 `NopKernelSchedulerNode` 并开启 `triton.debug_sync_kernel`，编译在这里以 `UnboundLocalError: local variable 'device' referenced before assignment` 失败。若 nop 前已有节点，Python 还可能保留上一轮的局部 `device`。因此本篇把“debug sync 调用当前 backend”限定为非 nop 正常路径；nop+debug-sync 是当前实现的失败/疑点出口，而不是一条可解释成安全同步的路径。
 
 ### frozen template 的 `node` 重绑定
 
@@ -303,13 +316,17 @@ nop 在 device 边界块前被排除，所以不会切 guard，也不查询 `rea
 分派后：node = op0
 ```
 
-具体 C++ template backend 在内部对 op0、op1 都 `mark_run()`，生成内容含 relu；但当前循环随后的两行只读取重绑定后的 op0，所以实验状态是 available 新增 buf0、completed 新增 op0，而不是整个融合组。理解这一步必须追踪 Python 局部变量，不能只看“模板含 epilogue”这一概念。
+当前 C++ template backend 的 `codegen_template` 遍历 `[op0,op1]` 并分别调用 `mark_run()`，所以两项输出都由 backend 分配，生成的同一个 template kernel 也包含 epilogue 的 relu。随后外层循环只读取重绑定后的 op0，因此实验状态是 available 新增 buf0、completed 新增 op0。
+
+这两层状态承担不同工作：backend 的 `mark_run()` 和生成代码保证 op1 的结果真实产生；Scheduler 的 available 集合主要在更早的调度构造和 dependency pruning 中使用，此时最终节点顺序已经确定；completed 集合供后续 inplace 判断过滤已处理使用者。没有把 epilogue 加入 completed 会让这项过滤更保守，而不会撤销 backend 已生成的 epilogue。因而外层集合不是“template kernel 实际包含哪些 operation”的清单，它只记录当前局部 `node` 指向的主模板。
 
 runtime-weight mm 则在 Q24 已回退成 extern op0 + 普通 relu op1；本循环不重新选择模板，它依次走 extern、ordinary 两支。
 
 ### available/completed 发生在分派之后
 
-普通融合组没有重绑定，`get_buffer_names/get_operation_names` 覆盖所有成员。extern 被 cast 后仍是同一 scheduler node。foreach 也保留组合节点。只有 template 明确换成主节点。两份集合表示生成阶段已经可以引用哪些逻辑结果、哪些 operation 已处理；不是设备执行完成事件。
+普通融合组没有重绑定，`get_buffer_names/get_operation_names` 覆盖所有成员。extern 被 cast 后仍是同一 scheduler node。foreach 也保留组合节点。只有 template 明确换成主节点。两份集合记录 Scheduler 外层看见的逻辑范围，不是设备执行完成事件，也不代替 backend 的 `mark_run()`。
+
+foreach 的短时间线是：处理 device/guard → 登记整个 foreach 的 last usage → backend 类型检查 → `codegen_combo_kernel(foreach)` → 按 foreach 组合对象更新两集合 → 查询 backend ready。nop 则是：登记 last usage → `mark_run()` → 不产生 kernel/wrapper 调用 → 更新两集合 → 跳过 ready 查询。
 
 ### K03 理解验收
 
@@ -330,7 +347,7 @@ flush 旧 backend 与 pending free
 
 extern/template 即使 device 未变也先 flush，但不会退出再进入同一个 guard。CPU 不需要 guard；CUDA 等需要 guard 的 device 必须已有 index，否则 assert。
 
-每次分派后，若 `config.triton.debug_sync_kernel` 为真，当前 backend 收到 `codegen_sync()`。然后更新 available/completed，再查询 `ready_to_flush()`。因此主动 flush 发生在本节点已交给 backend、状态集合已更新之后；它可把刚积累的组立即提交。
+非 nop 节点分派后，若 `config.triton.debug_sync_kernel` 为真，当前 backend 收到 `codegen_sync()`。然后更新 available/completed，再查询 `ready_to_flush()`。因此主动 flush 发生在本节点已交给 backend、状态集合已更新之后；它可把刚积累的组立即提交。nop 开启 debug-sync 的当前失败行为已在 K03 单列。
 
 遍历结束时，若当前 device 需要 guard，先发出最外层 exit 请求，再执行 final `flush()`。这是 Scheduler 调用这些生成接口的顺序；wrapper 如何组织缓冲区和缩进由 Q43/Q431 展开。
 
@@ -354,6 +371,7 @@ extern/template 即使 device 未变也先 flush，但不会退出再进入同�
 - `get_estimated_runtime()` 仅用于 debug log；异常被捕获后记 0.0，不阻断 codegen。
 - 测试专用 stack 检查发现相同 `(filename,lineno)` 重复 frame 时 assert；遇到 Dynamo `_compile_inner` 边界停止反向扫描。
 - 不支持 device、缺 Triton、旧 CUDA、foreach backend 类型错误、需要 guard 却无 index 都明确失败，不静默换路径。
+- 首节点为 nop 且启用 Triton debug sync 时，当前实现因局部 `device` 未赋值而失败；实验 11 已覆盖该出口。
 - 节点没有 origin 时 `enter_context` 不调用 wrapper；空 backend/pending 集合的 flush 合法。
 
 ### K04 理解验收

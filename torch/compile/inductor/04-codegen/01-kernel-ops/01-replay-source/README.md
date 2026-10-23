@@ -4,6 +4,20 @@
 
 Q41 已经说明“同一张 FX 小图换 handler 就得到不同目标表达”。本篇把这句话落实成源码状态：捕获阶段怎样建立图、索引表和 submodule；重放阶段怎样把新循环符号代入索引，再把当前动态 handler 填进图的 `ops` placeholder。
 
+先固定本篇反复使用的 `LoopBody` 状态。捕获把原 callable 的操作保存到这些字段；重放读取同一批字段，只临时改动 `indexing`：
+
+| 字段 | 捕获后保存的内容 | 重放时怎样使用 |
+| --- | --- | --- |
+| `var_ranges` | 捕获符号及其范围，例如 `{x0:2, x1:128}` | 确定新循环参数应有几维，并建立符号替换表 |
+| `indexing_exprs` | 有名字的索引式，例如 `index0 = 128*x0+x1` | 把 x0/x1 换成本次 backend 传入的 c0/c1 |
+| `memory_usage` | 哪个 buffer 以哪个索引被 load、store 或规约写 | 依赖分析可直接读取，不必执行算术小图 |
+| `root_block` | 普通 load、算术、store 组成的 FX 小图 | 用当前 ops handler 重放 |
+| `submodules`、`subblocks` | masked、scan、间接索引所需的 shim 和嵌套小图 | FX `call_module` 节点调用它们，把复合操作交给当前 handler |
+| `indirect_var_ranges` | 从 Tensor 值产生的间接索引符号及范围 | 重放到设置节点时，用当前值替换占位符 |
+| `indexing` | 捕获结束时为 `None` | 一次重放期间保存已经代换的索引表；正常返回后恢复为 `None` |
+
+例如逐点计算 `relu(x+y)*2` 会留下 root FX 图、输入/输出的 memory usage 和 `index0=x0`；backend 传入自己的循环变量 c0 后，临时表变为 `index0=c0`，同一张图中的 load 和 store 都读取它。
+
 ## K01：重放链先代换索引，再运行 FX interpreter
 
 ### InterpreterShim 保留当前 FX node，并安装动态 interpreter
@@ -118,6 +132,29 @@ K01 到此完成。K02 打开捕获期 `LoopBodyBlock.__init__` 的全部操作�
 ## K02：CaptureIndexing 同时建立 FX 图和 memory usage
 
 下面是 `LoopBodyBlock.__init__` 的完整实现。此次 `fn([x0])` 依次发出 `load("x",x0)`、加 1、`store("buf0",x0,...)`；`args=[x0]`，memory_usage 与 FX graph 初始为空，配置关闭额外的 IndexPropagation。局部 handler 包住 FX proxy handler：第一次 `add_index(x0,LOAD,name="x")` 把 x0 登记成 `index0`，再让内层 proxy 把 get_index、load、add、store 写进图；出口同时留下 LOAD/STORE 两条 memory usage。
+
+产品源码先写局部函数和局部类，后创建它们运行时需要的 tracer。阅读时要区分“定义”与“执行”：定义 `add_index` 和 `CaptureIndexing` 只建立函数/方法对象，方法体中的 `tracer.create_proxy` 此时尚未运行。
+
+真正执行 callable 前还会套两层索引处理器。`SimplifyIndexing(inner,var_ranges)` 接收原 ops 调用和循环变量范围；遇到 load、store、store_reduction、index_expr 或 check_bounds 时，它先用范围化简 SymPy 索引，再把同一操作交给 `inner`，这里的 inner 就是 CaptureIndexing。可选的 `IndexPropagation(inner,...)` 放在最外层：它尝试让常量和符号 `index_expr` 穿过中间算术；能保持为符号式的结果在交回 inner 时变成 constant 或 index_expr，其余操作解包后直接转发。本例关闭 IndexPropagation，所以实际路径是 `fn → SimplifyIndexing → CaptureIndexing → proxy_ops`。
+
+完整的捕获顺序是：
+
+```text
+1. tracer = torch.fx.Tracer()，并给它一张空 FX graph
+2. proxy_ops = tracer.create_proxy("placeholder", "ops", ...)
+   graph 此时已有第一个节点：placeholder ops
+3. CaptureIndexing(proxy_ops)
+   WrapperHandler.__init__ 把 proxy_ops 保存为 CaptureIndexing._inner
+4. SimplifyIndexing(CaptureIndexing(...), var_ranges)
+   本例的动态 ops handler 指向这层；索引化简后才进入 CaptureIndexing
+5. 执行 fn(*args)
+   fn 调用 load/store 时，才进入前面定义的方法并使用已经存在的 tracer
+6. ops.output(...) 建立 output 节点，self.graph = tracer.graph
+```
+
+所以第一次执行 `add_index` 时，它写入的正是第 1 步创建的 graph；`self._inner.load(...)` 则在 `proxy_ops` 上记录 `call_method("load",...)`，而不是读取真实 Tensor。
+
+这段源码里还有两个不同的 `self` 来源。`LoopBodyBlock.__init__` 的参数 `self` 是正在创建的 block；类体中的 `self.name = "CaptureIndexing"` 也读取这个外层 block，并不创建 handler 字段。局部类的普通实例方法另有自己的 `self`，它指向 `CaptureIndexing` handler，并通过 `self._inner` 调用第 3 步保存的 proxy handler。三个 `@staticmethod` 没有 handler 实例参数，所以方法体里的 `self` 仍是从外层 `LoopBodyBlock.__init__` 闭包捕获的 block；`self.body` 因而指向 block 所属的 `LoopBody`。`staticmethod` 保持 masked、scan、indirect_indexing 的 ops 调用签名不被额外插入 handler 参数。
 
 ```python
 def __init__(self, body: LoopBody, fn: Callable[..., Any], args: List[Any]):
@@ -297,7 +334,11 @@ store 同样保存 mode；原子等写模式不会因捕获而丢失。`load_see
 - 普通 reduction 返回一个 proxy；名称含 `welford` 时语义上有 mean/m2/weight 三项，显式取 `result[0:3]` 形成 Python tuple。
 - FX Proxy 可迭代，但下游有些接口要求真实 tuple/list，所以 scan 按输入 value 数量拆项，sort 按 values 数量拆项，frexp 固定拆成两项。
 
-捕获尾部先创建 `ops` placeholder，再组合 `CaptureIndexing→SimplifyIndexing`；配置开启时外层再包 `IndexPropagation`。在动态 ops 上下文中执行原 callable，最后通过 `ops.output` 显式建立 graph output。这里执行的是符号 proxy 过程，不读取真实 tensor。
+捕获尾部先创建 `ops` placeholder，再组合 `CaptureIndexing→SimplifyIndexing`。`SimplifyIndexing` 在 load、store、store_reduction、index_expr 和 bounds 进入 CaptureIndexing 前，利用 `var_ranges` 化简其中的 SymPy 索引；例如范围已经证明某个取模多余时，登记的是化简后的式子。配置开启时，最外层再包 `IndexPropagation`：它尝试把常量和 `index_expr` 的符号值继续穿过算术操作，能够保持为符号式的结果在交回内层时物化成 constant 或 index_expr，其他操作则解包后转发。本例关闭这项配置，因此 `fn` 的 load/add/store 直接经过 SimplifyIndexing 进入 CaptureIndexing，节点轨迹就是前面给出的形态。
+
+在动态 ops 上下文中执行原 callable，最后通过 `ops.output` 显式建立 graph output。这里执行的是符号 proxy 过程，不读取真实 tensor。
+
+动态 ops 上下文在正常返回和异常时都会恢复进入前的 handler，但这段构造不是事务：执行 `fn(*args)` 之前，`body.indexing_exprs`、`memory_usage`、`submodules` 或 `subblocks` 可能已经追加内容。若后续捕获抛异常，构造函数不会返回一个可用的 `LoopBodyBlock`，源码也没有把这些已经写入 `body` 的记录逐项回滚。调用方不应把这个失败对象当作一次完整捕获继续使用。
 
 ### K02 理解验收
 
@@ -344,6 +385,22 @@ def bind_masked_shim(self, name):
 
 每个 shim 额外挂一个 `clone=functools.partial(...)`。LoopBody 因循环合并/重排复制到新父对象时，submodule 可以用同一静态参数重新绑定 `self`，不会继续修改旧 LoopBody 的 indexing/subblocks。
 
+复制一份 `LoopBody` 时，调用侧会实际遍历旧对象的 subblock 和 submodule，并把新 body 传给每个 clone 接口：
+
+```python
+self.subblocks = {k: v.clone(self) for k, v in other.subblocks.items()}
+self.root_block = other.root_block.clone(self)
+
+submodules = {**other.submodules}
+submodules.pop("get_index")
+self.submodules = {
+    "get_index": self.get_index,
+    **{k: v.clone(self) for k, v in submodules.items()},
+}
+```
+
+这里的 `self` 是新 LoopBody。`LoopBodyBlock.clone(self)` 让复制后的 root/subblock 指向新父对象；每个 shim 的 `v.clone(self)` 则以同一个新父对象重新调用 bind 方法。复制完成后，新 root、subblocks、`get_index` 和 shim 都从同一份 LoopBody 读取状态。
+
 ### masked：主体单独捕获成 subblock
 
 捕获 `ops.masked(mask, masked_body, other)` 时：
@@ -357,7 +414,13 @@ def bind_masked_shim(self, name):
 
 ### scan：combine_fn 固定，值和 handler 延迟
 
-捕获 scan 时，`combine_fn` 被闭包保存进 shim，FX root 图保存 dtype/value proxies 的 call_module。重放时 shim 调用当前 `V.ops.scan(dtypes,combine_fn,values)`。返回 proxy 在捕获时按 `len(value_proxy)` 拆成确定数量，后续消费者能把它当真实 tuple 使用。
+捕获 scan 时，`combine_fn` 被闭包保存进 shim，FX root 图保存 dtype/value proxies 的 call_module。`combine_fn` 本身是一个普通 Python callable，不会在这里再捕获成 `LoopBodyBlock`。例如两项状态的组合函数可以接收左侧 `(sum_l, max_l)` 和右侧 `(sum_r, max_r)`，返回：
+
+```text
+(sum_l + sum_r, maximum(max_l, max_r))
+```
+
+若 `value_proxy=(sum_value,max_value)`，捕获图中的 scan call_module 只有 dtypes 和这两项 value proxy；shim 的闭包另外保存上述 callable。重放时 shim 把三者交给当前 `V.ops.scan(dtypes, combine_fn, values)`，由当前 handler 决定怎样调用组合函数和生成目标表达。scan 返回两项时，捕获代码显式建立 `result[0]`、`result[1]`，组成真正的 Python tuple，后续消费者不必把一个可迭代 FX Proxy 当作 tuple。
 
 ### indirect：先用符号占位，重放时再改索引表
 
@@ -383,9 +446,16 @@ def bind_masked_shim(self, name):
 
 ## K04：实验轨迹覆盖当前 CPU 重放，其他 handler 分支按源码逐项核对
 
-实验 12 的 pointwise 捕获表包含同一 `index0=x0` 的两项 LOAD 和一项 STORE。重放 `body([c0])` 后，临时 indexing 把 index0 换成 c0，InterpreterShim 依次让 CPU handler 产生 load x、load y、add、relu、constant、mul、store，结果为 `[0,10,4]`。
+实验 12 的逐点函数是：
 
-2×128 reduction 的捕获索引是 `128*x0+x1` 与 `x0`。重放时分别代成 backend 的输出变量和规约变量，handler 轨迹包含 `ops.reduction(sum,...)` 与 `store_reduction`，最终得到 `[8256,24640]`。当前 CPU 候选产生一次 scalar、两次 vector 重放；这不是 LoopBody 接口保证的固定次数。
+```python
+def pointwise(x, y):
+    return torch.relu(x + y) * 2
+```
+
+输入 `x=[-2,1,3]`、`y=[1,4,-1]` 时，三个位置依次计算 `relu(-1)*2=0`、`relu(5)*2=10`、`relu(2)*2=4`，所以结果是 `[0,10,4]`。捕获表包含同一 `index0=x0` 的两项 LOAD 和一项 STORE；root 图按顺序保存 load x、load y、add、relu、constant 2、mul、store。重放 `body([c0])` 后，临时 indexing 把 index0 换成 c0，CPU handler 按这张图产生对应表达。
+
+规约函数是 `(x+1).sum(dim=1)`，输入为 `torch.arange(256).reshape(2,128)`。第一行从 0 到 127，加 1 后求和为 `1+...+128=8256`；第二行从 128 到 255，加 1 后求和为 `129+...+256=(129+256)*128/2=24640`。捕获时，读取输入的索引是 `128*x0+x1`，写输出的索引是 `x0`；x0 选择哪一行，x1 遍历该行的 128 项。重放时它们分别代成 backend 的输出变量和规约变量，handler 轨迹包含 `ops.reduction(sum,...)` 与 `store_reduction`。当前 CPU 候选产生一次 scalar、两次 vector 重放；重放次数来自这个候选的生成策略，不是 LoopBody 接口规定的常数。
 
 masked、scan、sort、frexp 和 indirect 也通过同一套记录再重放机制传递操作；某个后端是否支持其中一种组合，仍由该后端的 handler 决定。
 
@@ -395,4 +465,4 @@ masked、scan、sort、frexp 和 indirect 也通过同一套记录再重放机�
 
 若 root 重放中 handler 抛异常，V.interpreter/V.ops 的上下文会恢复，但当前 `LoopBody.__call__` 没有 finally，`self.indexing` 可能仍保留。再次使用前不能仅依据“上下文已恢复”推断 LoopBody 临时状态也已清空。
 
-K04 到此完成。Q411 的 11 个声明、主要分支和状态推演已经齐全；下一篇 Q421 打开具体 CPU/Triton backend 如何消费这些 ops。
+现在可以用一个变化检验整条链：若逐点例的访问从 `x[x0]` 改为 `x[2*x0]`，捕获表应保存 `index0=2*x0`；backend 传入 c0 后临时表变为 `index0=2*c0`；FX 小图结构和 memory usage 类型不变，当前 handler 收到的新 load/store 索引随之变成 `2*c0`。下一篇 Q421 继续追踪 CPU/Triton backend 怎样把这些 ops 变成各自的目标表达。

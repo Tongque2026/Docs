@@ -1,6 +1,6 @@
 # Q311 Scheduler 依赖构造核心源码备课记录
 
-第五轮状态：补齐 `extract_read_writes` 各 `MemoryUsageType`、原子写 mode 与多个间接变量的机制解释后，叶子复核完成；根队列已转 Q321。旧“完成”记录只作历史依据，本状态来自本轮重新核对正文、产品源码、实验和迁移题。
+第六轮状态：经三位相互隔离的冷读者逐轮审查与整改，最终达到 A 级验收；根队列转 Q321。
 
 ## 读者、层次与出口
 
@@ -57,4 +57,12 @@
 - **分支覆盖：** wrapper 选择覆盖 no-op、computed/template、extern 与未知 operation 失败；读写提取覆盖 LoopBody fast path、callable slow path、normalize、各类 memory usage、间接变量和 store mode；依赖建图覆盖 available 裁剪、alias 三种合并、普通/输出 users、unbacked def/use、mutation 有/无旧 reader、多次 mutation 与输入副作用保活。
 - **具体状态：** `[2,3]` 静态规约得到三条输入 `MemoryDep` 与一条输出 `MemoryDep`；mm→sin 展示 extern 输入依赖被裁剪而内部 buf0 留在 unmet；旧读 mutation 得到 `StarDep(arg0_1)+WeakDep(buf0)` 及版本表；无旧读 mutation 没有 WeakDep；两个旧 reader 得到两条相互独立的 WeakDep。
 - **作者迁移复读：** 常量 read 保留在完整 reads 但 unmet 为空；第三个 alias 接入后与前两者共享同一 `DedupList` 对象；两个旧 reader 都约束 mutator，却不互相排序；两次 mutation 后后续 read 解析到最新版本，真实输入名仍可恢复。以上答案均可只凭正文推出。
-- **证据边界：** reduction、mm→sin 和两种 mutation 来自实验 08；alias、unbacked、multi-mutation、MemoryUsageType 边支来自当前源码逐句推演，正文未把它们冒充本机运行结果。实际读者尚未提供作答，因此只登记作者复读完成。
+- **证据边界：** reduction、mm→sin 和两种 mutation 来自实验 08；alias、unbacked、multi-mutation、MemoryUsageType 边支来自当前源码逐句推演，正文未把它们冒充本机运行结果。实际读者反馈见下方第六轮记录。
+
+## 第六轮隔离冷读整改
+
+- 第一位读者评级 B：no-op/template 未走到出口；`[2,3]` 规约缺实际 `memory_usage` 输入快照；两次 mutation 只有最终版本表，没有第二个写者的依赖变化。
+- 第二位读者评级 B：主线已闭合，但特殊 `MemoryUsageType` 仍缺 handler 侧证据，多旧 reader 只写结论，`mutation_real_name` 的消费者悬空。
+- 正文随后补入 `ReadWrites` 与三种依赖的首次定义、no-op/extern 构造器、实际 LoopBody 事件表逐项重放、记录器的 load/load_seed/store/bucketize 实现、两个旧 reader 的最终 reads/unmet/users，以及两次 mutation 中间 reader 的完整状态。
+- 第三位全新读者只读最终 README，K01–K04 均能闭卷迁移，评级 A。其唯一精修意见是 alias 合并案例需说明是假设状态而非函数真实时间顺序，正文已修正。
+- 完整报告保存为 `107_DEPENDENCY_SOURCE_COLD_REVIEW_1.md` 至 `109_DEPENDENCY_SOURCE_COLD_REVIEW_3.md`；读者均未读取作者记录、其他教程、源码、实验、Git、前轮报告或聊天，也未修改教程。
