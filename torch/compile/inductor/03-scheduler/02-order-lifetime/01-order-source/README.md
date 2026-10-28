@@ -26,7 +26,8 @@ compute_dependencies
     -> compute_ancestors
     -> 建立 foreach 等组合节点
     -> 第二次 topological_sort_schedule
-    -> 融合、合并循环和其他分组处理
+    -> 可选的 pre-fusion custom pass
+    -> 融合、合并循环和其他分组处理（其中还会按需再次排序）
     -> compute_last_usage
 ```
 
@@ -38,6 +39,8 @@ compute_dependencies
 | `dead_node_elimination` | 已拓扑排序的 nodes 与完整 users | 幸存 nodes、removed sets，并裁失效 WeakDep | ancestors、codegen/内存规划的删除过滤 |
 | `compute_ancestors` | DCE 后的拓扑序 | ancestors 与初始 min/max order | 后续融合合法性和顺序跨度判断 |
 | `compute_last_usage` | 融合完成后的最终节点序 | 外层及 fused 内部 last_usage | Scheduler 的可释放候选累计；Q431 展开最终 free/reuse |
+
+这些方法不是事务。拓扑排序只构造局部 `name_to_node/seen/result`，非法环会产生错误顺序但不会改写 scheduler node；后面的 DCE、ancestors 和 last usage 会逐项改写图或节点字段，源码没有为异常保存快照或回滚。当前调用链也没有捕获这些异常后重建同一个 Scheduler：异常会向上传播；而 `Scheduler.__init__` 早期已经令 `V.graph.scheduler` 指向自身，因此调试时甚至可能看到部分初始化对象。失败后的这些半成品只能用于定位，不能当作一个已完成阶段继续交给下一消费者。
 
 ## K01：拓扑排序只固定必要先后，不强造兄弟关系
 
@@ -116,6 +119,8 @@ append(B)，再 append(A)
 ```
 
 方法会返回 `[B,A]`，却不会报告 A↔B 的矛盾，也不可能同时满足两条边。因此这里的前置条件是 Q311 建出的依赖关系为 DAG；环诊断不在本方法中完成。类似地，`name_to_node[name]=node` 假定集合内每个 buffer 名只有一个 producer；若两个节点报告同名输出，后者会覆盖前者，当前方法也不验证这种非法输入。
+
+这两种非法输入不会留下“改了一半的 scheduler node”。本方法只改局部变量 `name_to_node`、`seen` 和 `result`：环会得到不满足全部依赖的返回顺序，重复 producer 会让后写入的节点覆盖前一个映射。方法既不抛出专门的校验错误，也不修改 `self.nodes`；当前调用链中也没有紧接着统一检查“结果仍是 DAG、每个 buffer 只有一个 producer”的步骤。
 
 ### mutation 的 WeakDep 在这里真正变成先后顺序
 
@@ -230,6 +235,12 @@ def dead_node_elimination(self) -> None:
         node.prune_weak_deps()
 ```
 
+这个方法的修改不是最后一次性提交。反向扫描每经过一个 dead buffer 或 operation，就立即把名字写入 `V.graph.removed_buffers` 或 `removed_operations`。若扫描中途报错，这两个集合已经含有前面处理过的结果，而 `self.nodes` 仍是调用前的列表，因为替换列表的赋值还没执行。
+
+反向扫描全部成功后，方法先用幸存节点替换 `self.nodes`，才逐个调用 `prune_weak_deps()`。因此裁弱边时出错，`self.nodes` 已经是删除后的列表，removed 集合也已写完，但排在出错节点之后的幸存节点还没有裁边。`prune_weak_deps()` 自身先在局部变量 `to_remove` 中查找待删弱边；若缺少 `name_to_buf[dep.name]`，当前节点尚未改变。只有这一步全部成功，`set_read_writes(...)` 才会把新访问集合和重新计算的 unmet dependencies 写回节点。
+
+源码没有保存旧列表、旧 removed 集合或旧 `read_writes`，调用方也没有捕获异常后恢复同一个 Scheduler。这里若失败，异常向上传播；这些部分更新的字段只能用于定位错误，不能继续当作 DCE 已经完成。
+
 buffer 与 operation 是两层决定。一个 side-effect node 即使所有输出都死，operation 仍需执行；其输出 buffer 却可以进入 `removed_buffers`，避免为无人读取的返回值保留存储。
 
 ### controlled DCE 的四个节点
@@ -313,6 +324,8 @@ def compute_ancestors(self) -> None:
         node.max_order = order
 ```
 
+这里也按节点立即写回。第一个循环每完成一个节点，就已经设置该节点的 `ancestors`；若后面某个节点查不到 `dep.name`，或者查到的 producer 尚未出现在 `name_to_ancestors`，当前节点还没写入，前面节点的结果却会保留。只有第一个循环全部成功，第二个循环才开始依次写 `min_order` 和 `max_order`。源码同样没有在异常时清除已写字段。
+
 ### 从分叉扩展到三层有向无环图
 
 先看实验 09 的分叉：op0 写 buf0，op1/op2 都读 buf0。按 `[op0,op1,op2]`：
@@ -368,13 +381,13 @@ K03 到此完成。下一知识点 K04 从图输出建立 future set，反向计
 `used_or_aliased_buffer_names()` 从本节点全部 reads 和 writes 的名字开始，再沿每个 buffer 的 `get_inputs_that_alias_output()` 递归加入被别名输出引用的输入名：
 
 ```python
-def used_or_aliased_buffer_names(self):
-    used_names = OrderedSet()
+def used_or_aliased_buffer_names(self) -> OrderedSet[str]:
+    used_names: OrderedSet[str] = OrderedSet()
     deps = [
         dep.name
         for dep in itertools.chain(self.read_writes.reads, self.read_writes.writes)
     ]
-    while deps:
+    while len(deps) > 0:
         dep = deps.pop()
         used_names.add(dep)
         if V.graph.name_to_buffer.get(dep):
@@ -400,6 +413,8 @@ def set_last_usage(
     self.last_usage = used_buffers - future_used_buffers
 ```
 
+对一个普通节点而言，收集名字、做 mutation 映射和差集计算都先发生在局部变量中；只有最后一行才改 `self.last_usage`。所以在最后赋值之前失败，当前节点的旧值不变。不过外层 Scheduler 是反向逐节点调用它的：若较早节点失败，排在它后面的节点已经写好了新 `last_usage`，不会自动恢复。
+
 `last_usage` 不是“本节点用到的所有 buffer”，而是其中尚未在更晚节点出现的部分。若 `mutation_real_name={buf1:arg0_1,buf2:arg0_1}`，节点使用 buf2 时先改写为 arg0_1；两次 mutation 的逻辑版本因此参与同一原输入名的 future/last-usage 判断。普通 alias 则通过上面的递归把相关名字都加入集合，而不是依靠这张 mutation 表。
 
 ### Scheduler 从图输出开始反向推进
@@ -420,6 +435,8 @@ def compute_last_usage(self) -> None:
         # 教学：把刚确定由该节点结束生存期的名字加入更早节点的 future 集合。
         future_used_buffers.update(node.last_usage)
 ```
+
+`future_used_buffers` 是本次调用的局部集合，但各节点的 `last_usage` 是对象字段。循环中途失败时，局部集合随异常退出而丢弃，已经处理过的较晚节点仍保留新字段，尚未访问的较早节点仍保留旧字段。因此不能把失败后的节点列表理解成一次完整的生命周期分析结果。
 
 反向时只把 `node.last_usage` 加入 future，而不是无条件加入所有 used buffers。两者在这套递推中达到同样的“已被更晚节点占用”效果：已在 future 的名字无需重复加入；新名字正是 last_usage。
 
@@ -469,6 +486,23 @@ def set_last_usage(
 ```
 
 外层 `self.last_usage` 处理融合 kernel 与其他 kernel 之间的边界，使用全局 future。各 `snode.last_usage` 只回答“在这个融合 kernel 内，哪一个原节点最后接触该名字”，所以从空集合按组内顺序重新计算；若把外部 future 带进来，一个稍后 kernel 仍使用的名字会从所有内部 snode 的局部结果中消失，组内优化便无法知道本 kernel 内最后接触它的位置。外层结果已经负责保证它不能在 kernel 之间过早释放。
+
+代入一个没有 alias 和 mutation 的融合组 `F.snodes=[A,B]`。A 读取输入 x、写临时量 t；B 读取 t、写图输出 y。融合组之后还有另一个 kernel 使用 x。y 因为是图输出、x 因为被更晚 kernel 使用，都已经在全局 future 中，因此传给 F 的集合是 `{x,y}`：
+
+```text
+F 整体使用 {x,t,y}，减去全局 future {x,y}
+    -> F.last_usage={t}          # kernel 之间的结果
+
+组内从空 future 重新反向：
+B 使用 {t,y}
+    -> B.last_usage={t,y}，组内 future 变成 {t,y}
+A 使用 {x,t}
+    -> A.last_usage={x}          # t 已被更后的 B 使用
+```
+
+x 没有进入外层 `F.last_usage`，因为后面的 kernel 仍会使用它；但 A 是融合 kernel 内最后接触 x 的原节点，所以 x 进入 `A.last_usage`。y 也因图输出而不进入外层结果，却仍进入组内 `B.last_usage`。这就是同一个名字在“kernel 之间”和“kernel 内部”得到不同答案的原因。
+
+融合节点的写入顺序也影响失败状态：它先调用父类写好外层 `F.last_usage`，再反向写各个 snode。若处理中间某个 snode 报错，外层结果和已经访问的较后 snode 已更新，尚未访问的较早 snode 未更新；源码没有把这几处字段一起回滚。
 
 这仍不证明 wrapper 已释放某个地址。Scheduler 后续还要累计可释放名字、处理 alias/mutation/must-keep，并由 wrapper 内存规划生成实际 free/reuse 代码；该实现归 Q431。
 

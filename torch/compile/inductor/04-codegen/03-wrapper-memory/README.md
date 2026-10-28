@@ -1,8 +1,33 @@
 # Wrapper 与内存计划：把 kernel 串成一次可调用执行
 
-[上一项：CPU C++ 与 GPU/Triton](../02-backends/README.md) · [返回 Codegen](../README.md) · 下一项：缓存、编译与加载
+[上一项：CPU C++ 与 GPU/Triton](../02-backends/README.md) · [返回 Codegen](../README.md) · [下一篇：缓存、编译与加载](../04-cache-load/README.md)
 
-kernel 只知道若干地址参数上的局部计算。生成的 C++ 或 Triton 代码把这种地址参数叫 pointer：它指向一块 tensor 存储的起始位置，kernel 再用索引找到要读写的元素。wrapper 负责把这些局部计算接成一次完整函数调用：接收 tensor 参数，核对 shape、stride 和 dtype，分配中间结果与输出空间，把各块存储的起始地址传给 kernel，按 Scheduler 的顺序调用它们，最后返回生成模块需要交出的 tuple。
+Q42 已经交出 kernel 定义和调用合同：kernel 名、tensor 参数顺序、逻辑范围，以及 GPU
+调用所需的 grid、device 和 stream。Scheduler 驱动 codegen 时还按执行顺序向 wrapper 写入
+allocation、free、kernel/extern call 和 device 行，并提供 buffer layout、`last_usage` 与图的
+输入、输出和修改关系。本篇把这两路对象合成一份可调用的 wrapper 源码。
+
+kernel 只知道若干地址参数上的局部计算。生成的 C++ 或 Triton 代码把这种地址参数叫
+pointer：它指向一块 tensor 存储的起始位置，kernel 再用索引找到要读写的元素。wrapper
+接收 tensor 参数，显式核对当前调用所需的 shape/stride。当前 Python wrapper 的
+`assert_size_stride` 不检查 dtype/device；这些专门化条件用于进入 `module.call(args)` 之前
+的 callable 选择。常规调用由 Dynamo guard 选择现有版本；进入编译/缓存查找时，FX Graph
+Cache 再检查候选条件。不满足时，外层寻找其他候选或重新编译，当前 wrapper 不会在调用中
+改写自己的 kernel。wrapper 依据已经成立的设备条件设置 device guard、分配空间，把各块
+storage 的起始地址传给 kernel，按 Scheduler 的顺序调用它们，最后返回模块 tuple。因此
+本篇从“进入 wrapper 时 dtype/device 合同已经成立”开始；Dynamo guard 与 FX Graph Cache
+分别怎样查找候选，由 Q44 沿缓存调用链继续展开。
+
+本篇依次完成四项工作：
+
+```text
+kernel 调用合同 + 按顺序写下的 wrapper 行 + 输入/输出/修改关系
+  │
+  ├─ 1. 形成包含 allocation、free、call 和 device 的完整时间线
+  ├─ 2. 选择普通 reuse 或 inference pool，确定每个逻辑 buffer 使用哪块 storage
+  ├─ 3. 生成 boxed 入口、检查、分配/view、调用、释放和模块返回 tuple
+  └─ 4. 加入 device/stream 作用域，把完整 wrapper 源码及输出合同交给 Q44
+```
 
 这里要始终分开三层对象：
 
@@ -18,7 +43,7 @@ kernel 只知道若干地址参数上的局部计算。生成的 C++ 或 Triton 
 
 ```text
 装有所有实参的 Python 列表 args（boxed 调用：多个实参装入一个列表）
-   │ 取出实参、清空列表、检查 shape/stride/dtype
+   │ 取出实参、清空列表、检查 shape/stride；外层 guard 约束 dtype/device 等条件
    ▼
 输入 tensor ──→ 分配/复用 buffer ──→ kernel / extern 调用
                        ▲                    │
@@ -37,7 +62,9 @@ kernel 只知道若干地址参数上的局部计算。生成的 C++ 或 Triton 
 
 - `AllocateLine(buffer)`：此处开始需要一块存储；
 - `FreeIfNotReusedLine(buffer)`：此处以后不再使用，可释放，也可留给后续 buffer；
-- `ReuseLine(old,new)`：新逻辑名字接管旧存储；
+- `ReuseLine(old,new)`：新逻辑名字接管旧存储。它有两个生产时机：Scheduler 已经批准
+  pointwise 等节点原地覆盖时，会直接写入这种行；普通 planner 扫描完整时间线后，也会把
+  匹配成功的 `FreeIfNotReusedLine(old)+AllocateLine(new)` 改成同一种最终行；
 - 普通文本/调用行：保留实际调用顺序，使规划扫描不能把分配、释放任意移过这些动作；
 - device/subgraph 行：建立嵌套作用域。
 
@@ -53,6 +80,41 @@ activated = relu(first)
 second = activated @ weight1
 return sin(second)
 ```
+
+这次生成物中的局部实参顺序与 Python 函数签名顺序不同，先固定对应关系：
+
+| wrapper 局部名 | 原函数参数 | 首次用途 |
+| --- | --- | --- |
+| `arg0_1` | `weight0` | 第一 mm 的右输入 |
+| `arg1_1` | `x` | 第一 mm 的左输入 |
+| `arg2_1` | `weight1` | 第二 mm 的右输入 |
+
+因此第一条调用是 `mm(arg1_1, arg0_1)`；它结束后 x 和 weight0 都不再使用，可以删除这两个
+wrapper 局部引用。第二条调用才消费 `arg2_1`。
+
+Scheduler 和 backend 完成 codegen 后，规划器先看到的是下面这条时间线，而不是已经决定好
+所有 `empty` 和 `del` 的 Python 文本。这里省略 kernel 定义，只保留规划所需的行：
+
+```text
+unpack/guard inputs
+AllocateLine(buf0)
+Call extern mm(inputs → buf0)
+free last-used input references
+ReuseLine(buf0 → buf1)             # Scheduler 已批准 relu 原地覆盖
+Call cpp_fused_relu_0(buf1)
+AllocateLine(buf2)
+Call extern mm(buf1, weight1 → buf2)
+free last-used weight1 reference
+FreeIfNotReusedLine(buf1)
+ReuseLine(buf2 → buf3)             # Scheduler 已批准 sin 原地覆盖
+Call cpp_fused_sin_1(buf3)
+Return module tuple (buf3,)
+```
+
+这条输入时间线中的两个 `ReuseLine` 都由 Scheduler 的原地决策产生：relu 接管 `buf0`，
+sin 接管 `buf2`。它们不是普通 planner 从 free-key 栈中选出的。普通 planner 随后另会尝试
+把较早的 `FreeIfNotReusedLine` 与后续兼容的 `AllocateLine` 配对，匹配成功时也输出
+`ReuseLine`。本例第二次 mm 分配 `buf2` 时，`buf1` 仍要作为输入，所以两者不能配对。
 
 当前 CPU 实际 wrapper 主线为：
 
@@ -74,6 +136,22 @@ buf3 = buf2; del buf2  # reuse
 cpp_fused_sin_1(buf3)
 return (buf3,)
 ```
+
+规划完成后，入口解包和检查、上面的分配/复用/调用行以及返回共同进入同一个 boxed
+`call(args)`。把不影响本例的模块级定义折叠后，结构是：
+
+```python
+def call(args):
+    arg0_1, arg1_1, arg2_1 = args
+    args.clear()
+    assert_size_stride(...)                 # 三个输入的当前合同
+    # buf0 empty → mm → buf1 接管 → relu
+    # buf2 empty → mm → buf3 接管 → sin
+    return (buf3,)
+```
+
+Q44 接收的是含 kernel binding/import 和这段 `call(args)` 的完整 wrapper 源码；上面折叠的
+注释位置就是紧邻代码块中已经列出的实际行，并没有省掉另一轮运行时规划。
 
 按对象状态逐步看：
 
@@ -114,6 +192,18 @@ new = old; del old  # reuse
 ```text
 (device, dtype, simplify(layout.storage_size()))
 ```
+
+同一个 key 下的候选按栈保存。假设 A、B 都是同 device、dtype、storage size 的中间
+buffer，并依次结束最后一次使用：
+
+```text
+FreeIfNotReusedLine(A) → 候选栈 [A]
+FreeIfNotReusedLine(B) → 候选栈 [A, B]，B 在栈顶
+AllocateLine(C)        → 弹出 B，生成 ReuseLine(B → C)；A 仍留作后续候选
+```
+
+所以“最近释放块”指同一 key 内最后压栈的 B。A、B 都满足容量合同，选择顺序只决定 C
+接管哪块 storage，不改变 C 的逻辑结果。
 
 它比较的是符号存储容量表达式相等，不是“大块容量至少够用”就算命中，也不直接比较 shape/stride。shape/stride 完全相同时生成直接别名；key 相同但 shape/stride 不同时，可用 `reinterpret_tensor` 在同一 storage 上建立新 view。
 
@@ -186,7 +276,7 @@ assert_size_stride(arg0_1, (8,8), (8,1))
 ...
 ```
 
-boxed 调用指把原本多个位置参数装进一个列表传给生成模块。`args.clear()` 让这个容器不再额外持有 tensor；拆出的局部变量仍保持所需引用。静态版本用 `assert_size_stride` 检查编译所依赖的 shape/stride，dtype/device 等其他专门化条件也由生成模块及其外层 guard 合同保证。
+boxed 调用指把原本多个位置参数装进一个列表传给生成模块。`args.clear()` 让这个容器不再额外持有 tensor；拆出的局部变量仍保持所需引用。静态版本用 `assert_size_stride` 检查编译所依赖的 shape/stride。dtype/device 用于外层选择这个已编译版本；进入当前 Python wrapper 后，代码按照该设备条件设置 guard 和分配，不再发出 dtype/device 断言。
 
 动态版本会把运行时尺寸绑定到符号：例如编译时把第一维记为 `s0`，本次输入 shape 为 `[19]`，入口便令 `s0=19`。若所选 kernel 要求长度能被 16 整除，就生成 `s0 % 16 == 0` 之类的检查。guard 不匹配时不是这段 wrapper 临时改写自己的 kernel；wrapper 外的编译缓存/调度路径需要寻找匹配版本，或为新条件重新编译。动态形状不是简单跳过检查。
 
@@ -245,6 +335,24 @@ view 输出使用同一原则。若函数返回 `x.view(3,1)`，外层元数据�
 
 若函数只执行 `x.copy_(y)`、另返回 `y+1`，调用者仍能观察 x 被改成 y，但新增返回值使用独立 storage。可见“图输出”不能只靠生成模块最后那行 tuple 判断：新增返回 buffer、mutated input 和 alias/view 都由图的输出/修改合同共同组装。
 
+## 没有中间 buffer 时怎样结束
+
+wrapper 不要求每次调用都产生可规划的中间 storage：
+
+| 请求 | wrapper 中仍要做的事 | 模块 tuple 与用户结果 |
+| --- | --- | --- |
+| 零元素输入 | 解包输入；当前实现跳过该输入的 size/stride 断言 | 按输出合同返回或恢复结果 |
+| 零元素计算结果 | 这类 `ComputedBuffer` 更早成为空节点，通常没有普通 allocate/free 行 | 若输出能由输入 alias/view 恢复，由外层恢复；否则遵守对应空结果合同 |
+| 只有输入 mutation | 调用写回输入 storage；无需为修改后的输入新建中间 buffer | 模块 tuple 可以为空，调用者仍从原输入观察副作用 |
+| 只有输入 alias/view 输出 | 保存输入引用，不申请复制数据的 storage | 模块 tuple 可以为空，外层按元数据重建用户输出 |
+| 没有可复用块 | 正常生成新的 allocation | 这不是规划失败，只是没有 reuse |
+
+没有 planning lines 时，两种 planner 都能直接处理空列表，wrapper 继续生成相应 return。选择
+pool 也不是一次“先试 pool、失败再退普通 reuse”的运行时探测：只有 inference 且
+`config.memory_planning` 开启时才进入 pool planner；训练或配置关闭时从一开始就选普通
+reuse。若规划数据违反内部必须成立的约束、kernel 调用合同无法形成合法 wrapper，编译会
+以异常结束，不会在已生成的 wrapper 运行时悄悄换一个 planner 或转回 eager。
+
 ## device guard 与 stream 位于 wrapper 层
 
 Scheduler 的 `_codegen()` 观察当前节点 device；设备变化时先结束旧 guard，再调用 `codegen_device_guard_enter(device.index)`。Python wrapper 对 GPU 生成大意如下的作用域：
@@ -267,6 +375,40 @@ Triton 调用由 wrapper 写成 `kernel.run(..., grid=..., stream=streamN)`。�
 两条路径都不能只靠一行 `del` 推出安全。
 
 C++ wrapper 和 AOT 模式会使用相应的 CUDA guard/stream guard 类型，语法不同但职责相同。多 device 图在 Scheduler 顺序中切换 guard，不能让单个 kernel 自行猜测当前 device。
+
+例如 Python wrapper 的时间线中依次出现 CPU、`cuda:0`、`cuda:1` 三段工作时，作用域可以
+画成：
+
+```text
+CPU allocation/call
+enter guard(cuda:0) → 取得 stream0 → cuda:0 allocation → launch kernel0(stream0) → exit
+enter guard(cuda:1) → 取得 stream1 → cuda:1 allocation → launch kernel1(stream1) → exit
+return outputs
+```
+
+默认 reuse key 含 device，pool 也按 device 分组，所以 `cuda:0` 的 storage 不会成为
+`cuda:1` allocation 的复用候选。若 `kernel1` 需要 `kernel0` 的结果，图中还必须存在合法的
+跨设备复制/通信与同步安排；两个 guard 在 wrapper 文本中相邻本身不传送数据。当前 AOT C++
+wrapper 只接受单个 CUDA device，第二个 CUDA device guard 会触发编译期检查；上面的多设备
+时间线描述的是支持这种切换的 Python wrapper 路径。
+
+## 本篇交给缓存与加载阶段的内容
+
+四项工作完成后，`GraphLowering.codegen()` 可以汇总一份完整 wrapper source：
+
+| 源码或元数据部分 | 已确定的内容 |
+| --- | --- |
+| 模块顶层 | kernel bindings、imports、常量与辅助定义 |
+| boxed `call(args)` 入口 | 参数解包、`args.clear()`、size/stride 检查和符号尺寸绑定 |
+| 已规划时间线 | allocation 或 pool view、reinterpret/reuse、kernel/extern calls、`del` |
+| 设备执行上下文 | device guards、raw stream 获取和 GPU launch 参数 |
+| 模块返回 | 不能只靠既有输入引用恢复的新结果 tuple |
+| Inductor 调用元数据 | mutated-input 索引、output strides、guards 等字段 |
+
+Q44 接住 wrapper source，把它写入缓存并加载为 `module.call`；随后把 callable、适用条件、
+mutated-input 索引和 output strides 等 Inductor 字段装入 `CompiledFxGraph`。input
+alias/view 的用户输出重建关系由更外层 AOTAutograd 的运行元数据继续保存，不属于
+`CompiledFxGraph`。缓存和加载不会重新做本篇的 storage 规划。
 
 ## 从一段 wrapper 反推执行计划
 

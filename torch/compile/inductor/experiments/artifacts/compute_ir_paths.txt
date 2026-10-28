@@ -21,5 +21,8 @@ direct_reindex [6]<-[2,3] index=[1,2] => (5,)
 direct_reindex [2,3]<-[6] index=[5] => (1, 2)
 direct_reindex fallback [2,3]<-[3,2] index=[2,1] => (1, 2)
 direct_reduction zero-size sum => TensorBox->StorageBox->Pointwise(ranges=[2])
+direct_reduction size-one sum => TensorBox->StorageBox->Pointwise(ranges=[2])
 direct_reduction size-one argmax => TensorBox->StorageBox->Pointwise(ranges=[2])
+direct_reduction small sum output_numel=2 => TensorBox->StorageBox->Pointwise(ranges=[2])
+direct_reduction small sum output_numel=1 => TensorBox->StorageBox->Reduction(ranges=[1],reduction_ranges=[3],type=sum)
 direct_reduction zero-size max => AssertionError: max not supported for zero-dimension tensors!

@@ -26,7 +26,7 @@ MultiTemplateBuffer：也已经是 operation，但内部 render 仍可等 Schedu
                                             → 固定 Triton render，或用 extern operation 替换它
 ```
 
-caller 只保存“如果选中我，怎样建立 IR”，不会出现在 `GraphLowering.operations`。operation 的构造器负责把自己登记到当前 `GraphLowering`，它才是后续 Scheduler 和 Codegen 处理的图节点。`TensorBox` 是 Lowering 传递 tensor 值的外层盒子；`TensorBox.create(buffer)` 会再套一层 `StorageBox`，由这层持有底层 buffer。
+caller 只保存“如果选中我，怎样建立 IR”，不会出现在 `GraphLowering.operations`。本文后面每种具体节点都有自己的登记语句：有的在创建 buffer 的 helper 内登记，有的在 `create()` 中显式调用 `register_buffer/register_operation`；进入 `GraphLowering.operations` 后，它才是 Scheduler 和 Codegen 处理的图节点。`TensorBox` 是 Lowering 传递 tensor 值的外层盒子；`TensorBox.create(buffer)` 会再套一层 `StorageBox`，由这层持有底层 buffer。
 
 `render` 是 Triton template 的代码生成函数：layout 和输入已经确定后，它把模板填成内核代码。`do_autotuning(...)` 返回以 caller 为 key、运行时间为 value 的字典，例如 `{T: 2.4, E: 1.1}`，单位是毫秒。
 
@@ -113,7 +113,7 @@ GraphLowering.operations = [ExternKernelOut]
 
 若同一个 extern choice 把 `has_out_variant` 从 `True` 改为 `False`，最后一支只改变 `cls`：图中得到 `ExternKernelAlloc`，表示外部函数自己返回存储；输入和 choice 身份没有因此变成 template。
 
-若 `abi_compatible=True` 但 choice 没有 `op_overload`，代码在建立 FallbackKernel 之前触发断言，所以图里不会留下半成品 operation。这说明失败出口发生在 `inner` 建立之前。
+若 `abi_compatible=True` 但 choice 没有 `op_overload`，代码在这个 `output_node()` 建立 `inner` 之前触发断言，因此这次调用不会新增 FallbackKernel。调用它之前已经发生的输入物化或其他建图状态不由该断言回滚，不能把这句话扩大成“整张图没有任何先前状态”。
 
 ### 延迟选择：先把 MultiTemplateBuffer 放进图
 
@@ -246,7 +246,7 @@ replace_operation_buffer(multi_node, out_buffer)
 两类胜者的处理不同：
 
 - Triton 胜出时，原来的 `MultiTemplateBuffer` 保留在图中，只把胜者的 render 永久装入 `make_kernel_render`。
-- extern 胜出时，先调用 E 的 `output_node()` 建立具体 `ExternKernel`，再用它替换图中的 `MultiTemplateBuffer`。替换函数把旧 buffer 和 operation 的名字移交给新节点，并同步 Scheduler 的节点与输出用户。
+- extern 胜出时，先调用 E 的 `output_node()` 建立具体 `ExternKernel`，再用它替换图中的 `MultiTemplateBuffer`。替换函数把旧 buffer 和 operation 的名字移交给新节点，并同步 Scheduler 的节点、输出用户以及 `min_order`、`max_order`、`last_usage` 三项调度状态。
 
 以旧节点名 `buf0`、新 extern 构造时暂得名 `buf1` 为例：
 
@@ -262,8 +262,11 @@ replace_operation_buffer：从索引表删掉 buf1
 
 替换后：GraphLowering.operations = [ExternKernel(name=buf0)]
         Scheduler 为 extern 重建节点，并把旧输出的 users 交给新输出
+        新节点继承旧节点的 min_order、max_order、last_usage
         下游仍通过 buf0 读取同一逻辑结果
 ```
+
+这段替换不是事务：新 extern 会先登记，随后才依次删旧索引、改名、替换列表和迁移调度状态。源码没有在这里建立快照或回滚；若这些步骤中途抛错，只能确定异常继续向上传播，不能仅凭本函数断言外围一定清除了已经发生的局部修改。
 
 上面的名字移交直接来自替换函数的这些语句：
 
@@ -372,6 +375,8 @@ def make_fallback(op, layout_constraint=None, warn=True):
 ```
 
 `aten.histc` 是一组同名重载的 packet，`aten.histc.default` 是其中一个具体 overload。这里传入 packet，因此循环把每个具体 overload 分别登记。登记同时调用 `add_needs_realized_inputs`：外部 operator 运行时需要真实 tensor，不能接收一条尚未执行的 Pointwise 规则。
+
+`register_fallback()` 求值 `fallback_handler(op_overload)` 时，外层 helper 还会先执行 `fallbacks.add(op_overload)`，把这个 overload 记入 fallback 集合，再把返回的 handler 交给 `register_lowering`。因此 packet 会逐 overload 写入需要物化的输入、可选 layout constraint、fallback 集合和 lowering handler。这个循环没有整体回滚；若后面的某个 overload 注册失败，源码不能保证前面 overload 已完成的登记会自动撤销。
 
 ### create 先用 fake 值确定接口，再建立 packed operation
 
@@ -514,6 +519,8 @@ FallbackKernel(buf0)
 问题：若 fake 返回一个当前不支持的字符串，失败前是否已经可能建立 packed operation？
 
 按这个方法内部的语句顺序，代码先构造 `FallbackKernel(MultiOutputLayout)`，随后 `generate_output` 才因字符串不是 None 而断言失败。调用者不会得到 outputs；本文没有展开外围异常处理，因此不能继续断言该临时登记是否会留在一次失败编译的最终图状态中。
+
+若输出树前几个 Tensor 叶子已经建立 `MultiOutput`，更靠后的叶子才失败，已建立的部分输出同样没有在 `create()` 内回滚。这里能确定的是 packed 和部分输出可能已经登记；失败编译最终是否丢弃整张图仍由外围处理决定。
 
 K02 到此完成。下一知识点 K03 打开 `_has_aliased_buffers` 与 `Conditional`，追踪两支子图从 Lowering 到统一父输出的全部状态。
 
@@ -715,6 +722,8 @@ self.codegen_subgraph(conditional.false_subgraph, outer_inputs, outer_outputs)
 
 编译一次后，以 true 和 false 分别运行，得到 `[3,5]` 与 `[1,3]`。编译期建立两张子图；生成的 wrapper 在运行时读取 predicate，只调用被选中的子图。
 
+合同检查通过并不把后面的输出构造变成事务。代码先登记父 `Conditional`，再逐项建立 `MultiOutput`；若这个列表构造过程意外失败，当前方法没有撤销父 operation 或已经完成的前几项输出。本文的正常案例没有触发该异常，这里只交代语句顺序和局部回滚边界。
+
 ### 失败发生在哪个状态
 
 若 false branch 返回同 shape、dtype、device 但 stride 不同的 view，代码在逐项 `get_stride()` 断言失败。此时两张子 GraphLowering 都已经存在，各自 operation 也已经建立；父 `Conditional` 尚未调用构造器，因此父图没有 Conditional/MultiOutput 半成品。
@@ -903,6 +912,8 @@ body(i,x): (i+1, x+2)
 | `(3,[7,8])` | false | 不再执行，返回当前 carried |
 
 同一编译函数传入 `i=3,x=[1,2]`，第一次 cond 就为 false，结果保持 `(3,[1,2])`。编译轨迹实际包含 cond 子图、body 子图、父 `WhileLoop` 和两个 `MultiOutput`；两项 carried 都来自图输入，因此这两个输出名都进入 `never_reuse_buffers`。
+
+成功尾段同样不是事务：代码先登记父 `WhileLoop`，再逐项建立 `MultiOutput`，随后才把符合条件的输出名加入 `never_reuse_buffers`。若输出构造或复用保护更新中途异常，当前方法没有回滚已经登记的父节点、部分输出或已经写入的集合项。
 
 实验的最小观测是：
 

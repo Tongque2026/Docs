@@ -183,6 +183,33 @@ with V.set_graph_handler(direct_graph):
         [sympy.Integer(1)],
         "argmax",
     )
+    one_sum = ir.Reduction.create(
+        torch.device("cpu"),
+        torch.float32,
+        torch.float32,
+        lambda index, reduction_index: None,
+        [sympy.Integer(2)],
+        [sympy.Integer(1)],
+        "sum",
+    )
+    small_sum = ir.Reduction.create(
+        torch.device("cpu"),
+        torch.float32,
+        torch.float32,
+        lambda index, reduction_index: None,
+        [sympy.Integer(2)],
+        [sympy.Integer(3)],
+        "sum",
+    )
+    scalar_small_sum = ir.Reduction.create(
+        torch.device("cpu"),
+        torch.float32,
+        torch.float32,
+        lambda index, reduction_index: None,
+        [sympy.Integer(1)],
+        [sympy.Integer(3)],
+        "sum",
+    )
     try:
         ir.Reduction.create(
             torch.device("cpu"),
@@ -207,7 +234,10 @@ events.extend(
         f"direct_reindex [2,3]<-[6] index=[5] => {split_result}",
         f"direct_reindex fallback [2,3]<-[3,2] index=[2,1] => {fallback_result}",
         f"direct_reduction zero-size sum => {describe(zero_sum)}",
+        f"direct_reduction size-one sum => {describe(one_sum)}",
         f"direct_reduction size-one argmax => {describe(one_argmax)}",
+        f"direct_reduction small sum output_numel=2 => {describe(small_sum)}",
+        f"direct_reduction small sum output_numel=1 => {describe(scalar_small_sum)}",
         f"direct_reduction zero-size max => AssertionError: {zero_max_error}",
     ]
 )

@@ -130,6 +130,16 @@ new_args = (new_dst, new_src, 2)
 
 call_function 节点还要先从 FX Interpreter env 取得 IR 参数，并把参数已有的 origins 与当前 FX node 合并。这样 `a=x+y; b=relu(a)` 处理 b 时，新 IR 的来源不仅有 b，也能带上 a/x/y 经已有 IR 汇集的来源。
 
+分派期间同时安装三份“当前节点”状态，分别服务不同读取方式：
+
+| 上下文 | 临时保存的内容 | 本篇中的直接消费者 |
+| --- | --- | --- |
+| `IRNode.current_origins(origins)` | 旧 origin 集合与本节点 `origins` 的并集 | 上下文内新建的每个 IRNode 在 `__post_init__` 中复制它，形成自己的 `origins` |
+| `self.set_current_node(n)` | `GraphLowering.current_node = n` | placeholder 的 users 判断、layout/lowering 辅助代码以及本类中通过 `V.graph.current_node` 读取当前 FX 节点的路径；`V.graph` 此时就是本 GraphLowering |
+| `V.set_current_node(n)` | 虚拟化的 `V.current_node = n` | 不持有 GraphLowering 引用的 lowering/IR helper，例如读取当前 node 的 users、meta 和 unbacked binding |
+
+三者进入时都先保存旧值。若 lowering 内部再解释子区域，内层退出后恢复外层节点；本次 `run_node` 的 `with` 退出后再恢复进入本节点以前的值。它们保存的是同一个 FX node，但读取接口和消费者不同，因此源码同时设置三处。
+
 ### 完整源码：run_node 开头至初始 result
 
 下面是 `run_node` 的第一连续段，下一段紧接产品源码中的 stride 注释。先代入普通 add 节点 n：`n.target=aten.add.Tensor`，env 已把两个 placeholder 映成 TensorBox，进入前 `len(buffers)=0`、`len(operations)=0`，所以两个 watermark 都是 0。`fetch_args_kwargs_from_env` 得到这两个 TensorBox；`super().run_node(n)` 调用 add lowering，返回尚未物化的 Pointwise TensorBox，此时全图列表仍为空。
@@ -152,8 +162,8 @@ def run_node(self, n: torch.fx.Node) -> object:
         args, kwargs = self.fetch_args_kwargs_from_env(n)
         # 教学：再收集输入 IR 已携带的来源，形成传递性的 origin 集合。
         origins |= gather_origins(args, kwargs)
-    # 教学：三个上下文分别服务新 IR 的 origin、GraphLowering 实例状态，
-    # 教学：以及通过 V.graph 访问当前节点的其他 Inductor 代码；退出后都恢复旧值。
+    # 教学：三个上下文分别服务 IRNode 构造、GraphLowering 实例读取，
+    # 教学：以及只通过虚拟化接口读取 V.current_node 的 helper；退出后恢复旧值。
     with ir.IRNode.current_origins(origins), self.set_current_node(  # type: ignore[arg-type]
         n
     ), V.set_current_node(
@@ -204,7 +214,7 @@ def run_node(self, n: torch.fx.Node) -> object:
             result = super().run_node(n)
 ```
 
-这段故意没有关闭 `with`：产品源码中的 stride、物化判断仍在同一上下文内，K03 会原顺序接上。直到那些处理结束，`IRNode.current_origins`、`self.current_node` 和 `V.graph.current_node` 才恢复进入前的值。
+这段故意没有关闭 `with`：产品源码中的 stride、物化判断仍在同一上下文内，K03 会原顺序接上。直到那些处理结束，IR origin 集合、`self.current_node` 和虚拟化的 `V.current_node` 才分别恢复进入前的值。`V.graph.current_node` 只是经当前 GraphLowering 读取第二项，不是第四份独立状态。
 
 ### 四条分派怎样决定 result
 
@@ -265,7 +275,9 @@ propagate_mutation： schema 说明 dst 可写 → copy_ lowering(old_dst,new_ds
 
 ### 完整源码：stride 与物化连续段
 
-继续代入这个 add：结果 shape `[2,3]`，它既不是 graph output，也不被 as_strided/stride-sensitive op 使用，用户只有后继 relu；配置没有 `inductor_realize_to_strides`，result 仍是 Pointwise。对照例把 relu 结果同时交给 mm 和 output：`is_output=True`、`num_users=2`，后继 mm 需要真实输入，于是该结果在本段物化为 ComputedBuffer。每个分支都用 `n.users` 与当前 result 决定，不按算子名字硬编码。
+继续代入这个 add：结果 shape `[2,3]`，它既不是 graph output，也不被 as_strided/stride-sensitive op 使用，用户只有后继 relu；配置没有 `inductor_realize_to_strides`，result 仍是 Pointwise。对照例把 relu 结果同时交给 mm 和 output：`is_output=True`、`num_users=2`。mm 属于 `needs_realized_inputs`，先给出物化 hint 并固定 stride order；随后 output 分支发现底层仍是 Pointwise/Reduction 时才强制 `realize()`。因此这个案例最终形成 ComputedBuffer，不能只把原因概括成“mm 需要真实输入”。
+
+`needs_realized_inputs` 是 lowering 模块导入时建立的 target 集合。`add_needs_realized_inputs(...)` 把 as_strided、mm、convolution 等要求接收存储形式输入的 overload（packet 会展开为各 overload）加入集合。`run_node` 只读取这张集合：在多用户情形遇到这些消费者时调用 `realize_hint()`；集合名称不代表此处无条件执行强制 `realize()`。
 
 ```python
         # require the same stride order for dense outputs,
@@ -434,7 +446,7 @@ propagate_mutation： schema 说明 dst 可写 → copy_ lowering(old_dst,new_ds
                         result.realize()
 
             # TODO(jansel): introduce a store vs inline choice
-            # 教学：记录原始 users 数，供 StorageBox 后续估计复用收益。
+            # 教学：立即运行 StorageBox 的复用启发式；必要时会在这里直接物化。
             result.mark_reuse(len(n.users))
 
         # Realize if the IRNode already has accumulated lots of reads
@@ -502,7 +514,7 @@ a 有两个不同 users：mm 和 output。a 最初可为延迟 Pointwise。
 | --- | --- | --- |
 | mm | target 在 `needs_realized_inputs`，也在 `need_fixed_layout` | `realize_hint()`，再按 a 的 meta stride order 固定布局 |
 | output | result 底层仍为 Pointwise/Reduction 时 | `realize()`，因为 a 必须有独立返回存储 |
-| 循环后 | 多用户 | `mark_reuse(len(n.users))` |
+| 循环后 | 多用户 | `mark_reuse(len(n.users))` 立即评估复用启发式，必要时物化 |
 
 如果只有 mm 一个 user，`num_users > 1` 不成立，这一整段不进入；mm 自身 lowering 或其他边界仍可能要求输入实现。这里的规则专门处理“一份结果将被多处使用”时的存储/重算权衡。
 
@@ -513,6 +525,8 @@ a 有两个不同 users：mm 和 output。a 最初可为延迟 Pointwise。
 - Pointwise 的 inner function 已过大：直接 `realize()`，避免后续求值递归过深。
 
 hint 表达“倾向在这里形成存储边界”，而直接 `realize()` 当场把 StorageBox 底层转换为已登记 buffer。正文不把两者写成同一个动作。
+
+`mark_reuse(users)` 也不是把 users 数保存起来留给以后。它立即调用 StorageBox 的 `should_realize_on_reuse(users)`：只有多用户且底层仍是 Pointwise/Reduction 时才考虑；CPU 重计算包含 exp/sigmoid 等重操作，或读取次数/inner function 超过阈值时，当前调用会直接 `realize()`。条件不满足便不改变 result。它与前面的 `realize_hint()`、output 强制实现是同一轮中相互独立的三个判断。
 
 固定布局的基础列表始终包含 convolution backward、mm 和 int_mm。若 `layout_opt` 关闭，普通 convolution 也加入。只有当前 PyTorch 构建带 MKLDNN 时，源码才把 MKLDNN/oneDNN target 加入两个列表；没有 MKLDNN 时这些追加完全跳过，基础列表仍照常使用。MKL linear 又要求该构建同时具有 MKL。平台条件只改变“哪些 consumer 进入特殊列表”，不跳过多用户循环、output 物化或 reuse 标记。
 
@@ -663,6 +677,10 @@ unbacked symbol 表示值来自运行时数据，编译期没有可用于普通 
 
 K04 已得到 `new_unbacked_defs`。最后一段跳过 placeholder，对每个新符号处理值域和等待断言，再确认 FX node 元数据声明的 bindings 都能在本节点新增 IR 中找到对应定义。
 
+`ras_by_symbol` 不是 `run_node` 临时创建的空表。ShapeEnv 在更早的符号推导中遇到不能静态证明、又含 unbacked symbols 的条件时，建立 `RuntimeAssert(expr,msg,stack)`，并按表达式中编号最大的 unbacked symbol 放进 `shape_env.deferred_runtime_asserts[key]`。GraphLowering 构造时复制这张表为 `self.ras_by_symbol`。本段的职责是：当某个 key 首次在 Inductor IR 中被定义时取出该组记录；依赖已齐便生成 AssertScalar，依赖未齐便换到另一个缺失 symbol 的 key 下继续等待。
+
+FX `node.meta["unbacked_bindings"]` 则来自 fake/meta 推导，内容是“符号 → 从该节点结果树取值的 key path”，例如 u0 对应 `result.size()[0]`。`resolve_unbacked_bindings` 只把已重命名的 symbol key 换成当前名字，path value 原样保留。当前覆盖检查只消费这些 key，确认 FX 声明的每个结果符号都由本节点新增 IR 定义；path 已在相应 lowering 建立 IR 定义时用于定位运行时取值，本段不再次沿 path 读结果。
+
 ### 完整源码：新符号处理至 return result
 
 先区分两类断言。`var_to_range[u0]` 中的有限上下界在处理 u0 时可以立即形成 `AssertScalar`。`ras_by_symbol[u0]` 中的 deferred runtime assertion 则要重新计算它引用的全部 unbacked symbols；本节点的新定义直到整个循环结束后才并入 bound 集合，所以这类 assertion 可能在本轮重新排队，而不是立即生成。末尾的 binding 覆盖检查只确认 FX 声明的符号确实由本节点 IR 定义，不等于 deferred 队列已经清空。
@@ -810,6 +828,8 @@ bound_unbacked_symbols = {s_old,s0,s1}
 
 刚重新放回 `ras_by_symbol[s0]` 的 assertion 不会在本次 `run_node` 中自动重访。当前方法没有在 union 后再扫一遍队列，也不在这里保证未来一定再次遇到同一个定义 key；离开本方法时能够确认的状态只是“记录仍保存在队列中，尚未生成 AssertScalar”。
 
+后续某次 `run_node` 只有在它的 `new_unbacked_defs` 再包含该等待 key 时，才会 `pop` 并重试这条记录；若编译过程中不再出现这个 key，本方法没有额外的收尾扫描来保证生成。这里应把“留在队列”当作当前源码的明确出口，而不能把“最终一定生成”当作教程补出的保证。
+
 对照一条已经就绪的记录：若 `ras_by_symbol[s0]` 中某项表达式只引用 `{s_old}`，那么 `missing={}`，处理 s0 时会立即建立 `AssertScalar`。所以判断依据不是“当前正在处理哪个 key”，而是 assertion 的 free unbacked symbols 是否已全部属于进入本轮前的 bound 集合。
 
 范围断言走的是另一条路径。若 s0 的范围为 `[2,10]`，`s0>=2` 与 `s0<=10` 在处理 s0 时直接建立，不参与上述 `ras_by_symbol` 的 missing/requeue 过程。
@@ -841,15 +861,16 @@ renamed_unbacked_bindings = {s0}
 
 ### 哪些不变量失败会停止本节点 Lowering
 
-本方法只为预期的分派路径选择 fallback；进入具体路径后，下列不变量失败不会被 `run_node` 吞掉：
+本方法只为预期的分派路径选择 fallback；进入具体路径后，不变量失败不会被 `run_node` 吞掉，也没有事务回滚：
 
-| 位置 | 必须成立 | 失败方式 |
+| 位置 | 失败方式 | 失败前已经可能发生的变化 |
 | --- | --- | --- |
-| `propagate_mutation` | target 是具体 `OpOverload`；old/new positional 与 kwargs 数量一致 | 显式断言失败 |
-| kwargs schema 配对 | 每个旧 kwarg 在新 kwargs 和 schema 中都有同名项 | 查表失败，编译停止 |
-| tensor stride 合同 | tensor meta 对应的 result 提供 size/data/stride 所需接口 | 属性访问或下层 layout 要求失败 |
-| 新 symbol 范围 | 每个 `new_unbacked_defs` 项在 `shape_env.var_to_range` 中有记录 | 查表失败 |
-| FX/IR binding | 重命名后的 FX bindings 是 `new_unbacked_defs` 的子集 | 带当前 FX node 和新对象定义信息的断言失败 |
+| `propagate_mutation` 的 target/数量断言 | 显式断言失败 | target lowering 已产生 result，新副本上的 mutation 可能已经发生；尚未完成旧参数语义修复 |
+| kwargs schema 配对 | 查表失败 | positional writable 参数和排在失败项以前的 kwargs 可能已经调用 `copy_` lowering |
+| tensor stride/layout 合同 | 属性访问或下层 layout 要求失败 | result 与 layout mutation 已产生；排在失败点以前的 realize/hint/layout 包装可能已改变或登记对象；上下文管理器仍会恢复三份 current state |
+| 新 symbol 的 `var_to_range` 查表 | KeyError | 分派、stride/物化、origin、readers 与新对象扫描已完成；更早 symbol 的 AssertScalar 或 requeue 可能已登记；当前 key 的 ras 已被 pop，bound 尚未 union |
+| FX/IR binding 覆盖 | 带 FX node 和新对象定义信息的断言失败 | 所有新 symbol 已完成范围/requeue 处理，AssertScalar 可能已登记，`bound_unbacked_symbols` 已并入本节点定义 |
+| `register_buffer/register_operation` 或相关 helper 自身异常 | 原异常向外 | 调用以前的所有图级修改保留；若 buffer 登记成功而 operation 登记失败，可能只留下前一项 |
 
 这些是编译期失败，不是生成程序中的 runtime assertion。有限值域和已就绪 deferred expression 形成的 `AssertScalar` 才会作为 buffer/operation 进入后续调度与代码生成。
 

@@ -27,7 +27,7 @@ async_compile = AsyncCompile()
 
 
 cpp_fused_add_sum_0 = async_compile.cpp_pybinding(['const float*', 'float*'], '''
-#include "/tmp/torchinductor_root/tmp359c143v/vu/cvuvp4i7roujum4xemrfwnb3t4c5t3r3mihr4b7iegh6tcqvdg43.h"
+#include "/tmp/torchinductor_root/tmp_1yu4zhh/vu/cvuvp4i7roujum4xemrfwnb3t4c5t3r3mihr4b7iegh6tcqvdg43.h"
 extern "C"  void kernel(const float* in_ptr0,
                        float* out_ptr0)
 {

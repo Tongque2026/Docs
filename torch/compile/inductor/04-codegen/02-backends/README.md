@@ -1,8 +1,13 @@
 # CPU C++ 与 GPU/Triton：同一逻辑位置怎样分给循环和 program
 
-[上一项：虚拟化 `ops`](../01-kernel-ops/README.md) · [返回 Codegen](../README.md) · 下一项：wrapper 与内存计划
+[上一项：虚拟化 `ops`](../01-kernel-ops/README.md) · [返回 Codegen](../README.md) · [下一篇：wrapper 与内存计划](../03-wrapper-memory/README.md)
 
-Codegen 后端接到 Scheduler 分好的节点和其中的 `LoopBody`。例如长度为 `N` 的逐元素计算保存了这串位置级操作：
+Q41 和本篇观察同一次 backend 调用。backend 已经接到 Scheduler 分好的节点、其中调整后的
+`LoopBody`、迭代范围和规约范围。CPU 路径先用标量 handler 重放，建立循环草稿，再尝试用
+向量 handler 重放并替换合法区段；Triton 路径先建立 grid/block 空间，再在其中安装 handler
+重放 `LoopBody`。两条路径都在重放过程中产生目标代码里的临时值。
+
+例如长度为 `N` 的逐元素计算保存了这串位置级操作：
 
 ```text
 tmp0 = load(input, x0)
@@ -12,7 +17,20 @@ tmp3 = mul(tmp2, 2)
 store(output, x0, tmp3)
 ```
 
-它还没有规定谁来处理 `x0=0..N-1`。CPU 后端生成循环，让一个 CPU 线程在每一步处理一个或一组连续位置；Triton 后端生成 GPU program，让每个 program 取得一块候选位置，再用 mask 去掉超出逻辑范围的 lane。
+它还没有规定谁来处理 `x0=0..N-1`。本篇的四项职责是：
+
+```text
+Scheduler node + LoopBody + iteration/reduction ranges
+  │
+  ├─ 1. 建立逻辑域、tiling、索引和有效条件
+  ├─ 2. CPU：选择标量/向量 loop，并在其中重放 LoopBody
+  ├─ 3. Triton：选择 grid/block/mask，并在 program 中重放 LoopBody
+  └─ 4. 登记 kernel 定义与调用合同，交给 Q43 排列 wrapper
+```
+
+CPU 和 Triton 平行接收同一类输入。CPU 后端生成循环，让一个
+CPU 线程在每一步处理一个或一组连续位置；Triton 后端生成 GPU program，让每个 program
+取得一块候选位置，再用 mask 去掉超出逻辑范围的 lane。
 
 ```text
 同一逻辑域 0..N-1 与同一 LoopBody
@@ -28,7 +46,26 @@ CPU：循环边界      Triton：启动多少个 program
 
 下面始终追踪同一个问题：每个逻辑位置由谁负责，尾部怎样避免越界，位置上的 `load/add/relu/mul/store` 又变成什么目标表达式。
 
-## CPU 用循环步长切分 19 个位置
+## 第一项：把逻辑范围变成后端执行域
+
+先固定后文反复使用的对象：
+
+| 对象 | 本篇含义 |
+| --- | --- |
+| iteration range / `numel` | pointwise 要覆盖的逻辑位置数；规约时是输出位置数 |
+| reduction range / `rnumel` | 每个输出要累计的逻辑位置数 |
+| index variable | 当前 loop 或 program 中代表逻辑位置的符号，例如 `x0`、`xindex`、`rindex` |
+| tiling | 把逻辑轴分配给 CPU 向量维或 Triton 的 x/y/z/r block 维的方案 |
+| vector width / block | 一次生成的候选 lane 数；例如 CPU 16 lane、Triton `XBLOCK=8` |
+| grid | 要启动多少个 Triton program |
+| mask | 候选 lane 是否对应真实逻辑位置，以及 masked/间接访问附带的有效条件 |
+
+本篇说的“补齐”或 padding lane，是执行块为了整宽覆盖而多出的候选位置。例如 N=19、
+XBLOCK=8 会产生候选位置 19..23，但 mask 禁止它们访存；tensor storage 仍只有原来的 19
+个逻辑元素。layout 中的物理 padding 则体现在 stride/index expression 中，逻辑位置据此
+映射到含空隙的物理地址。
+
+## 第二项：CPU 用循环步长切分 19 个位置
 
 CPU 后端先用标量 handler 重放 `LoopBody`，得到“一个位置怎样计算”的标量计算草稿，并建立循环边界。随后如果当前 CPU 指令集和 dtype 支持向量计算，它再用向量 handler 重放同一 `LoopBody`。向量 handler 的一个值包含多个 lane，例如 16 个 float32 值；这不是把已经生成的标量 C++ 文本再改写一遍。
 
@@ -65,7 +102,7 @@ for (int64_t x0 = 16; x0 < 19; x0 += 3) {
 
 生成过程中用过标量 kernel，也不表示最终文件必须保留标量循环。本例主段和尾段都被向量版本接管，最终只打印上面的两个循环。若循环范围足够大，外层还可用多个 CPU 线程分段；线程分段与 SIMD 是两层工作：线程领取一段区间，每个线程内部再以多个 lane 同时处理连续元素。
 
-## Triton 用 grid 启动 program，再在 program 内生成 block
+## 第三项：Triton 用 grid 启动 program，再在 program 内生成 block
 
 Triton 先选定 launch 配置中的 block 参数，grid 函数再据此计算 program 数量；kernel 内部由每个 program 计算自己的候选位置。对长度 19，先固定一个便于推演的 `XBLOCK=8`：
 
@@ -174,7 +211,13 @@ pid 1 使用同样的两个 `rindex` 块，但输入地址加上 `128*xindex`，
 
 另一种 persistent 形态尝试让一个 reduction block 覆盖完整的当前 r 域，从而不再使用上面的多个 `roffset` 扫描块；无效 lane 用求和的单位值 0 填充，最后完成规约。两种形态都会保留累计状态，区别是一次覆盖完整 r 域，还是让同一累计对象跨多批 `roffset` 扫描继续更新。persistent 不保证任意大的规约都能塞进一个 block；哪种形态合法并被选中还受范围、资源限制和后端启发式影响，本篇不展开选择算法。
 
-如果调度器同时保留 persistent 与 non-persistent 两种候选，`MultiKernel` 会包装这些已经生成的 kernel。这个生成物尚无已缓存选择时，运行调用会对候选做基准测试、选出更快者，并把选择写入该 multi-kernel 对应的选择缓存；在同一缓存条目所代表的编译专门化条件下，以后可直接调用赢家。这里缓存的是候选 kernel 编号，不是按 tensor 中的实际数值重新选择；尺寸、设备或生成配置改变并形成另一编译/缓存条目时，本段不保证沿用原选择。它不改变上面的求和语义。
+这些候选不是 Scheduler 预先交来的。Triton backend 先生成主 kernel；只有主 kernel 被判为
+persistent、`multi_kernel` 配置开启且 schedule 不含 sort 时，backend codegen 才额外生成
+non-persistent kernel，并用 `MultiKernel` 包装两者。这个生成物尚无已缓存选择时，运行调用
+会对候选做基准测试、选出更快者，并把选择写入该 multi-kernel 对应的选择缓存；在同一缓存
+条目所代表的编译专门化条件下，以后可直接调用赢家。这里缓存的是候选 kernel 编号，不是
+按 tensor 中的实际数值重新选择；尺寸、设备或生成配置改变并形成另一编译/缓存条目时，本段
+不保证沿用原选择。它不改变上面的求和语义。
 
 `DisableReduction/EnableReduction` 是 node schedule 中供 codegen 消费的状态标记，不是新的数学算子，也不会成为设备端执行的一条指令。它们只在 schedule 需要暂时关闭当前规约循环、生成位于 r 循环外层的 pointwise 后缀时成对包住这段区域；不是每个规约都必然出现。若一个融合 schedule 包含“规约求和→结果乘 2”，这段生成区域可以记成：
 
@@ -187,7 +230,7 @@ pid 1 使用同样的两个 `rindex` 块，但输入地址加上 `128*xindex`，
 
 基础规约仍是“建立累计状态→遍历完整 r 域→横向归并→写一次结果”；这些机制只决定候选选择和后缀计算放在哪个生成区域。
 
-## kernel 定义怎样接到 wrapper 调用
+## 第四项：kernel 定义怎样接到 wrapper 调用
 
 CPU kernel 可以简化成下面的合同：
 
@@ -224,11 +267,90 @@ stream = 当前 device 上用于排列这次工作的 CUDA stream
 
 于是 grid 启动三个 program。wrapper 先进入输入 tensor 所在设备的 device context，再把这次 kernel launch 排入该设备的当前 stream；stream 约束的是这次 launch 与同一 stream 中其他工作的先后，不保证 kernel 内三个 program 按 pid 串行执行。device 和 stream 不是新的数学输入。真实生成的调用可能把静态 numel 内联或由 launcher/meta 参数提供 block 值；无论具体签名怎样，wrapper launch 都要共同提供四类信息：数据指针、逻辑范围、启动网格和执行上下文。
 
+规约 kernel 也要形成同样的定义与调用合同，只是多了规约范围。前面的 2×128 CPU
+kernel 接收输入和输出指针；函数体的一个外层输出循环迭代两次，每次完成八次向量累计、
+横向求和及一次写回。前面的 Triton 规约 kernel 需要输入/输出指针、`xnumel=2`、
+`rnumel=128`、`XBLOCK`、grid、device 和 stream。non-persistent 形态的 launch 配置还提供
+`RBLOCK`，program 内用 `roffset` 循环按这个宽度扫描多批。persistent 形态则在 kernel 中
+根据静态规约范围确定覆盖完整 r 域的 `RBLOCK`，wrapper 不再传这个 block 参数。
+
+若 backend 生成 `MultiKernel`，它登记的调用入口会持有多个候选 kernel。第一次没有缓存
+选择时，这个入口测量候选并调用胜者；以后相同选择缓存条目直接调用已选编号。无论选中
+哪个候选，2×128 案例最终都只向两个有效输出位置各写一次。
+
 ## 普通 LoopBody 之外的两个入口
 
 上面的比较适用于普通 pointwise/reduction `LoopBody`。矩阵乘等操作可能进入 template：这条路径提供并实例化更专用的算法、block 和布局候选，编译与选择流程再结合实际尺寸和配置确定使用者。另一些 fallback/extern 节点直接调用已有库函数。Scheduler 仍负责把这些 kernel 或调用与其他节点排好顺序，但它们不需要把普通逐位置 LoopBody 翻译成上述 SIMD 循环。
 
-这是一条选择阅读入口的导航，不是三种互斥节点类型的完整判别式：模板可能带可融合的 epilogue，extern 周围也仍有布局和调度处理。遇到新节点时，先找它最终交给后端的是普通位置规则、模板候选，还是已有调用合同，再沿相应部分分析。
+模板可能带可融合的 epilogue，extern 周围也仍有布局和调度处理。遇到新节点时，先看它
+最终交给后端的是普通位置规则、模板候选还是已有调用合同，再沿相应入口分析。
+
+## 融合、动态范围和特殊索引怎样改变执行几何
+
+融合没有创造另一套位置系统。Q33 已经决定哪些节点共用一个 kernel，并排好其中的读写
+顺序；backend 为这组节点建立一份 CPU loop nest 或 Triton program 结构，再依次重放各成员
+的 `LoopBody`。若一个规约结果后面融合了逐元素计算，前文的
+`DisableReduction/EnableReduction` 把后缀放在 r 循环完成以后，后缀仍使用同一个输出位置。
+
+静态范围可直接写入生成代码；动态范围则作为 kernel 参数进入循环边界、grid 计算和 mask。
+例如运行时才知道 `xnumel=N` 时，Triton 仍按
+`ceil_div(N, XBLOCK)` 启动 program，并以 `xindex < N` 判断最后一块的有效 lane。生成的
+wrapper 可以在 launch 前执行当前调用所需的 size/stride 断言；Dynamo guard 和 FX Graph
+Cache guard 决定已有编译产物能否复用，这一缓存路径在 Q44 讲解。本篇从已经选定的编译
+产物和本次范围参数开始。
+
+同一位置还可能带第二个有效条件或非连续地址：
+
+| 输入情况 | CPU 后端中的变化 | Triton 后端中的变化 |
+| --- | --- | --- |
+| 间接索引，例如先读取 `index[x]` 再访问 `data[index[x]]` | 生成两次读取；不能合法向量化时改用标量实现 | 先得到临时索引值，再用它构造地址；临时值继承产生它时的有效 mask |
+| 带条件读取 | 在条件成立的路径读取，否则使用规定的替代值 | 把该条件与范围 mask 一起用于 `tl.load` |
+| 非连续 stride | 地址式按 stride 计算；连续 `loadu` 不一定可用 | block 中每个 lane 仍按索引式得到地址，不再假定地址相邻 |
+
+因此 mask 不只表示“最后一个 block 越界”。对
+`masked(mask, body, other)` 一类位置规则，最终访存条件同时要求当前位置处于逻辑范围且
+`mask` 为真。间接索引也不是先生成不受保护的地址再补 mask；产生索引临时值时已有的有效
+条件会跟着它进入后续访问。
+
+空范围会更早结束。静态 `numel=0` 的 pointwise loader 变成空操作，backend 没有位置可
+重放，也不生成一次假的位置计算。静态规约长度为 0 时，IR 创建阶段已经把规约改写成
+“在每个输出位置写单位值”的 pointwise 计算，例如空集合求和写 0；普通规约 backend
+不会收到一个要求进入 `rnumel=0` 累计循环的节点。动态范围在运行时可能为 0 时，生成的
+边界、grid 和 mask 必须让它没有有效位置。
+
+## 后端可能换实现，也可能拒绝生成
+
+“选择了 CPU 或 Triton backend”不保证每个快速实现都可用。CPU 后端先有标量
+`LoopBody` 重放结果；若 dtype、索引式或操作不适合当前向量 handler，它可以保留标量循环，
+只放弃 SIMD，而不是自动退回 eager。Triton 的合法配置也可能改用另一 tiling，或者在满足
+前文门槛时生成 persistent/non-persistent 两个候选。
+
+有些情况不能在本后端中表示，此时编译直接报错，而不是悄悄转到 CPU：同一个 SIMD kernel
+中的节点无法形成兼容迭代组，缺少生成所需的 buffer，或者某个 store mode、dtype/操作没有
+对应 handler，都会沿各自检查抛出异常。设备没有注册 Q34 所需的 backend 时同样无法开始
+生成。是否事先把某个算子留作 extern/fallback 是更早的 Lowering 和调度决定；到了这里，
+backend 只为自己收到的节点生成合法实现或报告失败。
+
+当前环境实际运行了 N=19 的 CPU 代码并核对输出；Triton 的 grid、block、mask 和规约例只
+依据当前源码与测试中的公式推演，因为当前环境没有可运行的 CUDA/Triton 设备。这个证据
+可以说明索引和覆盖关系，不能说明真实设备会选中示例里的 block 参数或获得何种性能。
+
+## 本篇交给 wrapper 的内容
+
+backend 完成后，Q43 接到的是可调用内容及其调用要求：
+
+| 交出内容 | 本例中的具体值 |
+| --- | --- |
+| kernel 定义或可调用入口 | CPU `cpp_fused_add_mul_relu_0`，或选定/包装后的 Triton kernel |
+| tensor 参数顺序 | `arg0_1` 提供输入指针，`buf0` 提供输出指针 |
+| 逻辑范围参数 | pointwise 的 `xnumel=19`；规约还带 `rnumel=128` |
+| 启动信息 | CPU 调用不需要 grid；Triton 带 grid、block 配置、device 和 stream |
+| 结果位置 | kernel 向已分配的 `buf0` 写入有效输出位置 |
+
+Q43 直接使用已经确定的位置计算。Scheduler 驱动 codegen 写下 allocation/free 候选和
+last-usage 顺序；Q43 据此形成内存计划，分配或复用 `buf0`，生成运行时 guard 和 device
+context，按照既定顺序调用这些入口，在最后一次使用后释放可复用存储，并把用户可见结果
+返回给 Python。
 
 ## 用两个新尺寸检查切分
 

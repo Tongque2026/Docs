@@ -6,6 +6,19 @@
 
 这里完整讲解当前版本 `/work/pytorch/torch/_inductor/compile_fx.py` 的四个连续函数：一个子图名字枚举器，以及 pre、joint、post 三个递归入口。读完后，你应能拿一棵嵌套控制流图，写出各图被访问的次序、每层收到的额外参数，以及哪一步会替换父模块中的子图对象。
 
+它们不是由同一个调用点连续调用。当前 `compile_fx.py` 中可以直接定位到这些 caller：
+
+- `compile_fx(...)` 在把 Dynamo 交来的 `GraphModule` 交给 AOTAutograd 前调用 pre 入口；
+- `fw_compiler_freezing(...)` 处理特殊的 freezing 推理路径，`compile_fx(...)` 内部的
+  `_fw_compiler_base(...)` 处理非 freezing inference，两者分别调用 joint 入口；训练时，
+  同样定义在 `compile_fx(...)` 内的 `partition_fn(...)` 在切分 forward/backward 前调用
+  joint 入口；
+- `_compile_fx_inner(...)` 收到一张即将单独编译的图后调用 post 入口；这张图可以是
+  推理图，也可以是训练产生的 forward 或 backward 图。
+
+本文只展开四个递归包装器怎样覆盖子图；pre/joint/post 内部各自改什么，仍由父篇和
+对应 pass 实现负责。
+
 ## 先看这四个函数收到什么
 
 普通 FX 节点通过输入边引用前一节点的结果。高阶控制流节点还会引用子 `GraphModule`：
@@ -34,7 +47,11 @@ getattr(gm, "true_graph")
     = 真正的 true 分支 GraphModule
 ```
 
-在本文实验以及当前编译流程交来的这类控制流图中，子图属性使用 `true_graph`、`false_graph` 等简单名字，`get_attr` 节点的 `name` 与该属性路径相同；产品代码据此读取 `.name` 并交给 `getattr`。这不是在宣称任意 FX `get_attr` 节点的 `name` 永远等于 `target`，而是这四个函数依赖的输入表示合同。
+在本文实验以及当前编译流程交来的这类控制流图中，子图属性使用 `true_graph`、`false_graph` 等简单名字，`get_attr` 节点的 `name` 与该属性路径相同；产品代码没有另做检查，而是直接读取 `.name` 并交给 `getattr`。因此这是当前函数要求输入满足的前提，不是它已经验证过的全局合同，也不是在宣称任意 FX `get_attr` 节点的 `name` 永远等于 `target`。
+
+名字枚举器只查找 target 精确等于 `torch.ops.higher_order.cond` 或
+`torch.ops.higher_order.while_loop` 的节点。其他 HigherOrderOperator 即使也携带子图，
+也不会自动进入这四个函数的递归范围。
 
 ## 声明范围的完整源码
 
@@ -45,9 +62,12 @@ getattr(gm, "true_graph")
 | `gm` | 父 `GraphModule`，其 graph 含一项 cond，参数 1、2 是 true/false 子图的 `get_attr` 节点 | `_get_subgraph_names` 调用 `gm.graph.find_nodes(...)` 找 cond/while 节点 |
 | `find_nodes(...)` 的结果 | 本例是只含该 cond 节点的可迭代结果；while 查询为空 | `itertools.chain` 合并后由 `sorted` 按 FX 顺序遍历 |
 | `true_subgraph_name` / `false_subgraph_name` | 两个 `get_attr` 节点的 `.name`，例如 `true_graph_0`、`false_graph_0`；在本实现接收的图中也是父模块子图属性名 | `getattr(gm, name)` 取出真正的子 `GraphModule` |
-| `example_inputs` 或阶段参数 | 调用当前 pre/joint/post 函数时一并传入的样例或配置 | 递归调用子图的同阶段函数时继续传递 |
+| 根层 `example_inputs` | 调用 pre 入口时传入的样例输入 | 只供根图的 `pre_grad_passes` 使用；递归子图固定收到 `None` |
+| `is_inference` | 调用 post 入口时传入的布尔值 | 原样传给每一层子图和本层 `post_grad_passes` |
 
-这段代码的可检查结果是：先分别处理 true、false 子图，再处理或返回父图；若子图函数返回了新的 `GraphModule`，父模块对应属性会被替换。
+这段代码的可检查结果是：先分别处理 true、false 子图，再处理父图。只有 pre 包装器
+接住递归返回的新 `GraphModule` 并替换父模块属性；joint/post 包装器不读取阶段函数的
+返回值，依赖被调用函数修改原对象。
 
 下面保留四个函数的全部产品语句、空行和原顺序。仅 `# 教学：` 开头的注释是本教程加入的；产品原注释原样保留。
 
@@ -134,12 +154,18 @@ def _recursive_post_grad_passes(gm, is_inference: bool = False):
 实验中的请求是：
 
 ```python
-old = torch.sin(x)
+v = x.view(-1)
+old = torch.sin(v)
 x.add_(1)
-return old, x
+later = torch.cos(v)
+return old, later, x
 ```
 
-pre hook 仍看到 `sin + add_`；AOTAutograd functionalization 之后，joint 与 post hook 看到函数式 `add`，再用 `copy_` 把新值写回输入。这个观测说明三个入口确实位于不同阶段。它本身没有控制流，因此只覆盖上表的零次循环路径。
+pre hook 看到 `view + sin + add_ + cos`；AOTAutograd functionalization 之后，joint hook
+看到函数式 `add` 和显式 `copy_`，而 post hook 还把两项 `view` 规范化为 `reshape`。
+输入 `[0,1,2]` 执行后，`old` 保存写入前的正弦值，`later` 通过共享 storage 的 view
+读到写入后的 `[1,2,3]`，调用者的 `x` 也变为 `[1,2,3]`。这个观测说明三个入口确实
+位于不同阶段。它本身没有控制流，因此只覆盖上表的零次循环路径。
 
 ## 第二条路径：一个 cond 怎样被处理
 
@@ -165,7 +191,12 @@ joint/post：阶段函数修改 old_true 本身
             调用后 gm.true_graph is old_true 仍为 True
 ```
 
-joint 和 post 的次序相同，但没有 `new_subgraph` 与 `setattr`。当前包装器根本不接它们的返回值，因此它们依赖阶段函数原地修改传入图的合同；若阶段函数改成返回新图，这两个包装器也必须像 pre 一样接住并写回。这里能断言的是对象上的修改会留下；具体修改 graph、meta 还是其他状态，由被调用阶段函数决定。
+joint 和 post 的次序相同，但没有 `new_subgraph` 与 `setattr`。当前包装器根本不接它们
+的返回值，因此它们依赖阶段函数原地修改传入图的合同。当前
+`joint_graph_passes(gm)` 修改 `gm` 后还会返回同一个对象，但这个递归包装器忽略该返回值；
+`post_grad_passes(gm, is_inference)` 则没有显式返回。若其中任一阶段以后只返回新图而不
+再修改原对象，包装器就必须像 pre 一样接住并写回。这里能断言的是对象上的修改会留下；
+具体修改 graph、meta 还是其他状态，由被调用阶段函数决定。
 
 ## 第三条路径：while、cond 与嵌套图的完整次序
 
@@ -225,7 +256,9 @@ wc_true → wc_false → while_cond → while_body
 
 “子层 pre 收到 `None`”不表示子图没有输入。它只表示这个递归入口没有一份与每张子图参数一一对应的样例输入列表。子图 pass 若需要形状或类型，应使用当前接口真正能取得的资料，不能假定这里总会传来运行样例。
 
-根函数的输入列表也不能直接原样传给每张子图：cond 分支收到的是 `operands` 对应的参数，while 的条件图和循环体还会接收 carried values 等各自签名。当前包装器没有重建这些逐子图样例，因此明确传 `None`。
+根函数的输入列表也不能直接原样当作每张子图的样例：cond 分支收到的是 `operands`
+对应的参数，while 的条件图和循环体还会接收 carried values 等各自签名。当前包装器
+没有重建这些逐子图样例，源码在递归 pre 调用处直接传 `None`。
 
 ## 用四个变化检查是否真正理解
 
@@ -241,4 +274,8 @@ t_true → t_false → true_graph → false_graph → root
 
 再检查两个变化：若在第一次 `yield "true_graph"` 暂停时 true 子图内部还有一个 cond，生成器何时才会恢复并产生 `false_graph`？答案是内部 cond 的两支、true 子图本身以及 `new_true` 写回全部完成之后。若 joint 阶段函数以后改为返回新 `GraphModule`，包装器也必须保存递归返回值并 `setattr`；否则新对象会像缺少 pre 写回时一样失去连接。
 
-至此，四个函数的每个循环、条件分支、参数传播和出口都已落到具体状态。下一叶子进入 pattern matcher 的候选扫描与应用。
+至此，本篇范围内的循环、条件分支、参数传播和正常出口都已落到具体状态。三个阶段及其
+控制流子图现在都会收到相应 pass。下一篇进入
+[Pattern Matcher 总览](../../02-pattern-matching/README.md)：先看一条局部改写规则怎样
+成为 `PatternEntry`、注册进 `PatternMatcherPass`，以及阶段入口怎样调用它；建立这些
+对象关系后，再打开候选扫描与应用的源码。

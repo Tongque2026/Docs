@@ -64,6 +64,18 @@ self.graph_outputs = [StorageBox(ComputedBuffer buf0)]
 
 若传入的结果不属于 `output` 允许的类型，类型断言立即失败；若返回项数量与原 FX output 参数数量不同，长度断言失败。正常路径中，两边仍逐项配对；只有 `realize_input` 后仍是 `TensorBox` 或 `BaseView` 的项目才读取原 FX 节点 `meta["val"]` 中记录的接口 stride。普通计算输出已经是 `StorageBox`，在这一循环中直接保留。
 
+失败发生时不会撤销此前的物化或写回。按源码顺序，各失败点留下的状态是：
+
+| 失败位置 | 已经发生的变化 | 尚未发生的变化 |
+| --- | --- | --- |
+| result 类型断言 | 只从 env 取得并归一化 result | 尚未调用 `realize_input`，也未建立本次 `graph_outputs` |
+| 返回数量断言 | 所有 result 都已经过 `realize_input`，因此可能已经物化并登记 buffer | `graph_outputs` 尚未赋值，输入 mutation 尚未检查 |
+| 某项 stride helper 内的 storage/layout 断言 | 所有 result 已物化；前面的项目可能已放进局部 `result_correct_strides` | 完整 `graph_outputs` 尚未赋值 |
+| 输入类型或对象层级断言 | `graph_outputs` 已形成；排在当前输入以前的输入可能已经登记写回并替换返回引用 | 当前输入及后续输入没有完成检查，`finalize` 尚未开始 |
+| 某个 buffer 的 `decide_layout()` | output 和输入写回均已完成；`self.buffers` 中排在它以前的前缀已经决定布局 | 当前 buffer 及后续 buffer 没有完成布局决定 |
+
+这些都是异常出口的部分状态，不是可继续生成程序的正常出口。
+
 ## 只有 size 0/1 维的 stride 可以改写
 
 这个 helper 不会接收已经解包成 `StorageBox` 的普通计算输出；调用它的条件是 `realize_input` 后的对象仍为 `TensorBox` 或 `BaseView`，例如 `ir.Constant` 形成的 TensorBox，或仍保留 view 身份的结果。下面直接给 helper 一份已有 storage/layout 的 tensor，观察它怎样处理接口 stride。
@@ -351,7 +363,7 @@ def try_match_insignificant_strides(
 3. 输入未修改时，两次 `.data` 得到 `StorageBox` 和同名 `InputBuffer`，条件为假，不调用 `realize_into`，也不搜索返回表。
 4. 输入已修改但没有返回时，写回先登记，返回表查找后失败；捕获 `ValueError` 后仍继续处理其他输入并最终 finalize。
 
-一次调用若有多个输入，循环按 `graph_inputs` 的顺序逐个完成上述检查。`graph_outputs.index` 负责源码当前这一次返回引用替换；完整编译 `x.add_(10); return x, x` 的两个运行时返回值仍都与调用者 x 共享同一 `data_ptr()`，但这个外部结果还包含上层图输出去重和 wrapper 处理，不能仅由本方法的一次 `.index()` 推出。
+一次调用若有多个输入，循环按 `graph_inputs` 的顺序逐个完成上述检查。`graph_outputs.index` 只返回第一次匹配的位置，因此若进入 mutation 检查时返回表是 `[current_storage, current_storage]`，本方法把它改成 `[original_x, current_storage]`；第二项不会在这次输入检查中再次搜索替换。完整编译 `x.add_(10); return x, x` 的两个运行时返回值仍都与调用者 x 共享同一 `data_ptr()`，但这个外部结果还包含上层图输出去重和 wrapper 处理，不能仅由本方法的一次 `.index()` 推出。
 
 ## 用新输入检查是否掌握出口合同
 

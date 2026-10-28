@@ -10,7 +10,7 @@ scalar_input value_type=NoneType input_names=['scalar'] input_keys=[] graph_inpu
 scalar_input value_type=BackwardState input_names=['scalar'] input_keys=[] graph_input_type=str graph_input=<not-registered> output_type=NoneAsConstantBuffer error=None
 scalar_input value_type=SymInt input_names=['scalar'] input_keys=['scalar'] graph_input_type=Symbol graph_input=u0 output_type=ShapeAsConstantBuffer error=None
 scalar_input value_type=bool input_names=['scalar'] input_keys=['scalar'] graph_input_type=BooleanTrue graph_input=True output_type=ShapeAsConstantBuffer error=AssertionError:Unsupported inductor graph input type: <class 'sympy.logic.boolalg.BooleanTrue'>
-scalar_input value_type=object input_names=['scalar'] input_keys=[] graph_input_type=str graph_input=<not-registered> output_type=<none> error=AssertionError:<object object at 0x7f1bcfe33d30>
+scalar_input value_type=object input_names=['scalar'] input_keys=[] graph_input_type=str graph_input=<not-registered> output_type=<none> error=AssertionError
 tensor_input name=None output_input=True input_names=['x'] keys=['x'] sizes=[2, 3] strides=[3, 1] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False
 tensor_input name=None output_input=True input_names=['x'] keys=['x'] sizes=[3, 2] strides=[1, 3] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False
 tensor_input name=branch output_input=True input_names=['x'] keys=['branch_x'] sizes=[2, 3] strides=[3, 1] symbolic=False dtype=torch.float32 device=cpu original_type=InputBuffer device_types=['cpu'] device_map=[('cpu', 'x')] aligned=False

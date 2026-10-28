@@ -37,17 +37,23 @@ StorageBox(InputBuffer) → TensorBox
 
 `TensorBox.create(InputBuffer(...))` 实际建立三层链：`TensorBox.data = StorageBox`、`StorageBox.data = InputBuffer`；InputBuffer 的 `layout` 字段再指向 FixedLayout。所以 `tensor.data.data` 正好取得最初的裸 InputBuffer，不需要再多取一层才能越过 layout。
 
-TensorBox 进入 `graph_inputs["arg0_1"]`，裸 InputBuffer 进入 `graph_inputs_original["arg0_1"]`。本页展示的 placeholder 只负责同时保存“当前可变引用”和“最初输入身份”。Q213 展开的 output 方法会重新查看 TensorBox 内层，并在输入表示已经改变时把最终值写回最初保存的 InputBuffer。后续 add 节点从解释器 `env` 取得这个 TensorBox，生成的是“运行时读取 arg0_1”的规则，而不是读取上面列出的 0 到 5。
+TensorBox 进入 `graph_inputs["arg0_1"]`，裸 InputBuffer 进入 `graph_inputs_original["arg0_1"]`。`graph_inputs` 让后续 lowering 和 wrapper 按生成期名字找到当前输入表示；本次 placeholder 的返回值同时进入解释器 `env`，所以后续 add 节点会从 env 取得同一个 TensorBox。它生成的是“运行时读取 arg0_1”的规则，而不是读取上面列出的 0 到 5。
+
+`graph_inputs_original` 只保留最初的 InputBuffer 身份。若后续 mutation 将 StorageBox 内的表示换成另一个结果，Q213 展开的 output 方法会比较当前内层表示与这份原始身份，并安排把最终值写回调用者传入的原存储。本页只建立这对对象和明确的接收者；替换与写回算法在 Q213 展开。
 
 ## 读源码前先固定四项状态
 
-`ShapeEnv` 保存符号、样例值和约束之间的关系。例如两个维度已知相等时，它们可以引用同一个符号，而不是各建一个变量。`reuse_shape_env=True` 表示沿用捕获 FX 图时已经建立的这些关系；false 分支则在当前 GraphLowering 的 ShapeEnv 中为样例 tensor 新建关系。docstring 所说的 duck-shape，就是数值相同且关系允许的尺寸会复用符号。
+`compile_fx` 构造 GraphLowering 后调用 `graph.run(*example_inputs)`。FX Interpreter 把这些实参保存成一个按位置前进的迭代器；每遇到一个 placeholder，父类 `placeholder` 就取出下一项。因此第一个 FX placeholder 接住第一份 example input，第二个接住第二份。这里不是根据参数名重新搜索样例，也不是从 `node.meta` 取真实输入。
+
+`ShapeEnv` 保存符号、样例值和约束之间的关系。例如两个维度已知相等时，它们可以引用同一个符号，而不是各建一个变量。进入 GraphLowering 以前，`compile_fx` 从 example inputs 找到它们所属的 FakeTensorMode，并取出同一个 `fake_mode.shape_env`，再把这个对象传给 `GraphLowering(..., shape_env=shape_env)`。GraphLowering 将它保存为 `self._shape_env` 并令 `reuse_shape_env=True`。因此动态 example 的 `size()[0]` 所携带的 u0，和当前 GraphLowering 查询约束、生成 guard 时使用的 u0 来自同一个 ShapeEnv，而不是碰巧同名的两个符号。
+
+若 example inputs 没有可取得的 ShapeEnv，GraphLowering 自己新建一个并令 `reuse_shape_env=False`。此时 `symbolic_sizes_strides` 用 `ConstantSource('__inductor_unknown_tensor_N')` 表示“第 N 份未知 tensor 输入”这个来源，再让新的 ShapeEnv 为这份样例的 size、stride、storage offset 建立符号和值/范围关系。docstring 所说的 duck-shape，就是创建这些关系时，数值相同且条件允许的尺寸可以复用符号。
 
 `SymTypes` 在这里包含 PyTorch 的符号整数、符号浮点数和符号布尔值。它们携带 `node.expr`，placeholder 直接把这个 SymPy 表达式交给后续 lowering。
 
-`self.current_node` 是当前正在解释的 FX placeholder；`self.current_node.users` 为空表示没有后续 FX 节点读取它。`V.graph` 指向当前激活的这一个 GraphLowering，所以 `V.graph.current_node` 是 `add_device_info` 记录设备来源时读取的同一当前节点。
+`GraphLowering.run_node(n)` 在解释每个 FX 节点前进入 `set_current_node(n)`，把 `self.current_node` 临时设为 n；父类解释器随后根据 `n.op` 调用这里的 `placeholder`。离开该节点时，context manager 会恢复先前值。因此 placeholder 内的 `self.current_node` 就是当前 FX placeholder；它的 `users` 为空表示没有后续 FX 节点读取该输入。`V.graph` 指向当前激活的这一个 GraphLowering，所以 `V.graph.current_node` 是 `add_device_info` 保存设备来源时读取的同一节点。
 
-输入名有两种用途。`graph_input_names` 按 FX 接口顺序保存原 target；只有 tensor 分支继续调用 `qualify_name`，使子图中的 InputBuffer 名全局唯一。标量分支在限定名字之前已经返回，因此命名子图中的标量仍以原 target 作为 `graph_inputs` 的 key。
+输入名有两种用途。`graph_input_names` 按 FX 接口顺序保存原 target；wrapper 生成 `call(args)` 时按这张列表写出 `x, alpha = args`，所以 None 和 BackwardState 即使不产生 buffer，也仍占据调用参数位置。只有 tensor 分支继续调用 `qualify_name`，使子图中的 InputBuffer 名全局唯一。标量分支在限定名字之前已经返回，因此命名子图中的标量仍以原 target 作为 `graph_inputs` 的 key。
 
 ## 完整源码
 
@@ -56,6 +62,21 @@ TensorBox 进入 `graph_inputs["arg0_1"]`，裸 InputBuffer 进入 `graph_inputs
 第一次逐行阅读先走静态主路径：`reuse_shape_env=True`，当前编译任务已有 `_shape_env`，x 没有符号尺寸，target 为 `arg0_1`，没有子图前缀，`current_node.users` 非空；CPU 输入不参与 GPU 对齐优化，所以 `aligned_inputs` 保持空。遇到另一分支时再换状态：动态 FakeTensor 的 size 为 `[u0,3]`，stride 为 `[3,1]`；动态 size 并不要求 stride 也含符号。
 
 若 `reuse_shape_env=False`，来源名中的编号取 `len(self._shape_env.var_to_val)`。只有该表原先为空时，第一项来源才叫 `__inductor_unknown_tensor_0`；已有两项映射时，新来源从后缀 2 开始。
+
+两条 symbolic 路径交出相同形式的结果，但建立过程不同：
+
+```text
+复用：example.size() 中的 SymInt u0
+        → sympy.sympify
+        → 当前 ShapeEnv 原有的 SymPy Symbol u0
+
+新建：example tensor + ConstantSource("__inductor_unknown_tensor_N")
+        → self._shape_env.create_symbolic_sizes_strides_storage_offset(...)
+        → ShapeEnv 登记新符号的来源、样例值和范围
+        → 从返回的 SymInt 取出 .node.expr
+```
+
+`convert_shape_to_inductor` 在复用路径中逐项执行 `sympy.sympify`：具体整数成为 SymPy Integer，SymInt 则交出它已经持有的 SymPy 表达式。新建路径调用的 ShapeEnv 方法同时返回 size、stride 和 storage offset；本方法只保留前两张列表，随后同样交给 FixedLayout。
 
 ```python
 def symbolic_sizes_strides(
@@ -274,7 +295,13 @@ InputBuffer name  = branch_x
 
 unused tensor 仍建立 InputBuffer、两张 tensor 输入表和接口名，只是不调用 `add_device_info`。这些字段是整图累计状态：“不调用”表示当前输入不增加或改写设备记录，不表示处理前已有集合会被清空。
 
-对齐判断与 users 条件无关。先把相邻 helper `should_assume_input_aligned(example)` 的返回值记为 A；placeholder 只负责在 A=true 时把限定名加入 `aligned_inputs`。当前 helper 对 CPU 返回 false；GPU 的具体判定读取配置和 storage offset。这是相邻 helper 的合同，不属于下面五个完整方法的内部控制流。判断处使用 suppress-shape-guards 上下文，避免这次观察新增 shape guard。后续生成和运行时如何消费 `aligned_inputs` 属于 Codegen/wrapper 篇。
+这三份设备状态在本页之后有不同消费者：
+
+- `device_types` 决定 wrapper 选 CPU 还是相应设备的生成器，并随编译产物保存；
+- `device_idxs` 随编译产物保存，运行时用它确定设备编号；
+- `device_node_mapping` 保留“哪个 FX 节点首次引入完整 device”的来源，编译收尾用它判断 CUDA Graph 是否因 CPU 或多设备而禁用，并可把原因定位回该节点。
+
+对齐判断与 users 条件无关。先把相邻 helper `should_assume_input_aligned(example)` 的返回值记为 A；placeholder 只负责在 A=true 时把限定名加入 `aligned_inputs`。当前 helper 对 CPU 返回 false；GPU 的具体判定读取配置和 storage offset。判断处使用 suppress-shape-guards 上下文，避免这次观察新增 shape guard。后续 GPU codegen 查询一个输入名是否在 `aligned_inputs`：在集合中便可采用要求该对齐条件的访问方式，不在集合中则按未对齐输入处理。具体生成指令留在 Codegen 篇；这里交出的合同就是“限定输入名 → 可否假定对齐”。
 
 把 users 条件和 helper 结果记为一张状态表。A 表示 `should_assume_input_aligned(example)` 返回 true：
 
@@ -291,7 +318,15 @@ unused tensor 仍建立 InputBuffer、两张 tensor 输入表和接口名，只�
 
 若增加一个未使用的 CPU tensor `unused`：它仍进入 `graph_input_names`、`graph_inputs` 和 `graph_inputs_original`，但因为当前 placeholder 没有 users，不调用 `add_device_info`。这个情况已由独立实验覆盖，使“接口中存在 CPU 参数”与“计算图需要在 CPU 执行”保持区别。
 
-本文把未知对象的 Tensor assert 作为具体失败出口。对正常 Tensor 路径，状态写入顺序仍可从源码读出：size/stride 和三层表示包装发生在两张输入表之前；两张表写入发生在 device 与 alignment 之前。外部 helper 的任意异常不是本方法定义的输入类别，本页不把它们扩展成新的正常分支。
+本文把未知对象的 Tensor assert 作为具体失败出口。Tensor 路径没有事务回滚；异常发生在哪一步，决定已经留下哪些状态：
+
+| 失败位置 | 已留下的图级状态 |
+| --- | --- |
+| size/stride helper、`qualify_name` 或三层对象构造期间 | 只有原 target 已进入 `graph_input_names` |
+| 两张输入表写完、设备登记之前 | 再加限定名对应的 TensorBox 与原 InputBuffer |
+| `add_device_info` 之后、alignment helper 期间 | 再加当前 used 输入贡献的设备记录 |
+
+成功通过 alignment 判断后才返回 TensorBox。这里按源码写入顺序说明部分状态；具体 helper 自身还能抛出哪些异常，不把它们扩展成新的输入类别。
 
 若动态输入的两个维度在 ShapeEnv 中是同一个符号 `s0`，复用 ShapeEnv 的分支把二者转换成同一 SymPy 表达式，而不是独立创造两个变量。实验已覆盖一个 unbacked `u0` 被保留；两个位置复用同符号的判断来自同一转换源码。
 

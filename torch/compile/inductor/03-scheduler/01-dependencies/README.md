@@ -1,127 +1,182 @@
-# Scheduler 节点与依赖：谁读了哪个位置，谁必须先完成
+# Scheduler 节点与依赖：谁必须等谁完成
 
-[上一层：Scheduler](../README.md) · [返回总览](../../README.md) · 下一项：排序、mutation 版本与生存期
+[上一层：Scheduler](../README.md) · [下一篇：排序、mutation 版本与生存期](../02-order-lifetime/README.md) · [返回总览](../../README.md)
 
-Lowering 交给 Scheduler 的每项 operation 都描述一项待执行工作。例如普通计算可能写 buf0，已有矩阵乘调用可能读取 buf0 并写 buf1。Scheduler 首先把每项工作包成统一的调度节点，并回答两个问题：这项工作会读写哪些 buffer；其中哪些读取尚未有生产者完成。普通计算、模板生成和已有函数调用对应的内部类名分别是 `ComputedBuffer`、`TemplateBuffer`、`ExternKernel`，但本篇只关心它们交出的读写记录。
-
-本篇先从 `Scheduler.__init__` 收到的 operation 列表建立依赖图，不提前讨论怎样排序或融合。
-
-## 一项 operation 为什么还要再包一层
-
-IR operation 保存“怎样计算”。Scheduler 还需要附加只服务于全局安排的状态，例如未满足依赖、输出使用者、祖先、最后使用位置和是否已经生成。当前实现由 `Scheduler.create_scheduler_node()` 按 operation 类型选择包装：
-
-| Lowering operation | Scheduler 节点 | 依赖从哪里取得 |
-| --- | --- | --- |
-| `ComputedBuffer`、`TemplateBuffer` | `SchedulerNode` | 重放循环体，记录其中的 load/store；模板调用自身的提取接口 |
-| `ExternKernel` | `ExternKernelSchedulerNode` | operation 已保存的 `get_read_writes()` |
-| no-op operation | `NopKernelSchedulerNode` | operation 已保存的 `get_read_writes()` |
-
-所以 FX 节点数、Lowering operation 数和 Scheduler 节点数不能互换。在案例 `(x+1).sum(dim=1)*2` 中，FX 图包含多步数学运算，Scheduler 入口则只有一个 `ComputedBuffer`：逐元素加法和乘法已经进入规约的计算体。
-
-## `ReadWrites` 是一项工作的读写清单
-
-每个 Scheduler 节点都有一份 `ReadWrites`，主要包含 `reads` 和 `writes` 两组依赖。对可生成循环的 `ComputedBuffer`，`extract_read_writes()` 用符号循环变量重放计算体；此时 load/store 不访问真实数据，而是记录 buffer 名、索引式和变量范围。
-
-本次规约输入为：
-
-```python
-x = torch.arange(6.0).reshape(2, 3)
-result = (x + 1).sum(dim=1) * 2
-```
-
-实际记录可简化为：
+Lowering 已经登记了一组 IR operation。每项 operation 说明一项运行时工作，例如“按循环
+计算 buf0”或“调用 mm，写出 buf1”。Scheduler 接到这些工作后，先建立一张依赖图：
 
 ```text
-读 arg0_1[3*c0]、arg0_1[3*c0+1]、arg0_1[3*c0+2]，c0 ∈ [0, 2)
-写 buf0[c0]，c0 ∈ [0, 2)
+Lowering operations
+        │
+        ▼
+1. 包成 scheduler nodes，并取得每项工作的读写清单
+        │
+        ▼
+2. 按 buffer 名登记生产者、使用者和未满足的读取
+        │
+        ▼
+3. 补上共享 storage 与 mutation 的顺序和版本关系
+        │
+        ▼
+4. 补符号依赖，并接住 ReadWrites 已携带的 effect 顺序
+        │
+        ▼
+scheduler nodes + ReadWrites + users + unmet dependencies + 版本表
 ```
 
-把 `c0=0` 代入，三个读取位置是 0、1、2，写输出 0；代入 `c0=1`，读取 3、4、5，写输出 1。数值过程为：
+这些状态回答“谁必须等谁”，还没有决定最终执行次序。下一篇才据此拓扑排序、删除无用工作
+并计算生存期；融合篇还会继续使用具体的访问位置。
 
-| `c0` | 读取 x | 加 1 后求和 | 乘 2 | 写入 |
-| --- | --- | --- | --- | --- |
-| 0 | 0、1、2 | 1+2+3=6 | 12 | `buf0[0]` |
-| 1 | 3、4、5 | 4+5+6=15 | 30 | `buf0[1]` |
+## 第一步：把 operation 包成带调度状态的节点
 
-这种带精确索引和迭代范围的记录叫 `MemoryDep`。它不仅说明“读 x”，还说明本循环如何访问 x；后面的融合和循环顺序判断会使用这些信息。
+IR operation 保存怎样计算。Scheduler 还要为它保存未满足的读取、输出使用者、是否已经
+生成等全局安排状态，所以每项 operation 都再包成一个 scheduler node：
 
-## 三种依赖分别记录什么
+| Lowering operation | Scheduler 包装 | 怎样取得读写 |
+| --- | --- | --- |
+| `ComputedBuffer`、`TemplateBuffer` | `SchedulerNode` | 重放普通循环；模板调用自己的提取接口 |
+| `ExternKernel` | `ExternKernelSchedulerNode` | 读取 operation 已保存的整块读写关系 |
+| no-op operation | `NopKernelSchedulerNode` | 读取 operation 已保存的读写关系 |
 
-### `MemoryDep`：知道访问哪个位置
+上一篇的 `FallbackKernel`、`Conditional`、`WhileLoop` 和 `MultiOutput` 都属于
+`ExternKernel` 这一族，因此每项 operation 各自得到一个 `ExternKernelSchedulerNode`。
+父 operation 表示一次调用或控制流；`MultiOutput` 只表示从父结果中取一项，不会再次执行
+父 operation。
 
-`MemoryDep(name, index, var_names, size, mode)` 描述一个按索引访问的 buffer。`index` 是线性物理索引，`var_names` 与 `size` 给出符号变量范围。普通读取/写入的 mode 为默认值；原子累加等特殊写入会记录相应 mode，后端据此选择普通赋值还是原子操作，融合也不能把不兼容的访问方式当成同一次普通读写。上例的 `MemoryDep(arg0_1, 3*c0+1, {c0: 2})` 表示两次循环分别访问物理位置 1、4。
+no-op operation 不需要普通 kernel，但仍可能携带必须保留的关系。类型判断先检查 no-op，
+再检查普通、模板和 extern 类型。operation 没有关联的 FX 来源时会触发断言；不属于已支持
+类型时会抛 `NotImplementedError`，Scheduler 不会猜测怎样包装它。
 
-两个依赖都叫 `MemoryDep`，不代表索引相同。连续访问、广播、转置和间接索引会留下不同的表达式；Scheduler 因而可以比较循环是否访问兼容，而不是只比较 buffer 名。
+### ReadWrites 是这项工作的读写清单
 
-### `StarDep`：只知道依赖整个 buffer
+每个 scheduler node 都有一份 `ReadWrites`。其中最重要的两组是：
 
-外部调用未必向 Scheduler 暴露逐元素循环。案例：
-
-```python
-buf0 = torch.mm(x, weight)
-buf1 = torch.sin(buf0)
+```text
+reads  = 这项工作读取哪些 buffer，以什么方式读取
+writes = 这项工作写出哪些 buffer，以什么方式写入
 ```
 
-这个 CPU 案例得到两个入口节点：
+对 `ComputedBuffer`，`extract_read_writes()` 用符号循环变量重放计算体。重放中的 load/store
+不读取真实数据，只登记 buffer 名、线性索引和变量范围。以
+`(x+1).sum(dim=1)*2`、`x.shape=[2,3]` 为例，Lowering 已把整个表达式放进一个规约 operation：
+
+```text
+读 arg0_1[3*c0]、arg0_1[3*c0+1]、arg0_1[3*c0+2]，c0 ∈ [0,2)
+写 buf0[c0]，c0 ∈ [0,2)
+```
+
+`c0=0` 时读取位置 0、1、2，得到 `(0+1 + 1+1 + 2+1)×2=12`，写 `buf0[0]`；
+`c0=1` 时读取位置 3、4、5，得到 30，写 `buf0[1]`。这种知道具体访问位置的记录叫
+`MemoryDep`。
+
+### 三种记录表达不同精度的关系
+
+| 记录 | 保存什么 | 本例用途 |
+| --- | --- | --- |
+| `MemoryDep(name,index,var_names,size,mode)` | buffer 名、线性索引、循环变量范围和访问方式 | 普通循环精确读写某些位置 |
+| `StarDep(name)` | 只知道依赖整块 buffer，不提供逐位置索引 | extern 输入输出、mutation 目标、符号顺序 |
+| `WeakDep(name,mutating_buf)` | 修改必须等待某个旧 reader；不代表真实内存读取 | 保护覆盖前仍要完成的读取 |
+
+例如 `MemoryDep(arg0_1, 3*c0+1, {c0:2})` 在两次循环中读取物理位置 1 和 4。
+连续、广播、转置和间接索引会产生不同的 `index`；后面的融合判断会使用这些差异。
+
+外部 mm 没有交出普通循环体，因此 `sin(mm(x,w))` 的入口状态是：
 
 ```text
 op0 ExternKernelSchedulerNode
-  reads  = StarDep(arg0_1), StarDep(arg1_1)
+  reads  = StarDep(x), StarDep(w)
   writes = StarDep(buf0)
 
 op1 SchedulerNode
-  reads  = MemoryDep(buf0, c0, {c0: 8})
-  writes = MemoryDep(buf1, c0, {c0: 8})
+  reads  = MemoryDep(buf0, c0, {c0:8})
+  writes = MemoryDep(buf1, c0, {c0:8})
 ```
 
-`StarDep(buf0)` 表示对整块 `buf0` 的依赖，没有可供比较的逐位置索引。`sin` 的循环则明确读取展平位置 0 到 7。两种表示仍通过同一个名字 `buf0` 相连：`buf0` 的生产者是 op0，使用者是 op1。
+生产端和消费端的记录精度不同，仍可通过共同的名字 `buf0` 相连。
 
-### `WeakDep`：只维持 mutation 顺序
+## 第二步：由名字建立生产者、使用者和等待关系
 
-`WeakDep` 不表示一次真实内存读取；它只要求修改发生在先前读者之后。之所以是“弱”的，是因为先前读者若被删除，或者其结果被融合掉，这条人为顺序边也可随之裁剪，不必强迫一个无用 buffer 物化。
+Scheduler 开始时先把图输入、常量和 TorchBind 常量的名字放进
+`available_buffer_names`。这些值在编译函数开始运行时已经存在，不需要等待图内 operation
+产生。节点初始化时把全部 `reads` 复制成 `unmet_dependencies`，再从中删除这些已可用名字。
 
-## 普通生产者—消费者边怎样建立
-
-创建节点时，`read_writes.reads` 已经存在，`unmet_dependencies` 初始取同一组读取，再删去已经可用的图输入和常量。
-
-先看一条完全由普通逐元素计算组成的链：
+看一条内部结果链：
 
 ```text
 op0: buf0 = x + 1
-  reads  = MemoryDep(arg0_1, c0, {c0: 8})
-  writes = MemoryDep(buf0,   c0, {c0: 8})
+  reads  = MemoryDep(x,    c0, {c0:8})
+  writes = MemoryDep(buf0, c0, {c0:8})
 
 op1: buf1 = buf0 * 2
-  reads  = MemoryDep(buf0, c0, {c0: 8})
-  writes = MemoryDep(buf1, c0, {c0: 8})
+  reads  = MemoryDep(buf0, c0, {c0:8})
+  writes = MemoryDep(buf1, c0, {c0:8})
 ```
 
-图输入 `arg0_1` 已在 `available_buffer_names` 中，所以它从 op0 的 `unmet_dependencies` 删除。`buf0` 是内部结果，op1 的未满足读取仍保留：
+`x` 已经可用，所以 op0 不再等待它；`buf0` 是图内结果，op1 仍要等待：
 
 ```text
 op0.unmet_dependencies = {}
-op1.unmet_dependencies = {MemoryDep(buf0, c0, {c0: 8})}
-users[buf0]             = {op1}
-users[buf1]             = {OUTPUT}
+op1.unmet_dependencies = {MemoryDep(buf0, c0, {c0:8})}
+
+buf0.defining_op = op0
+users[buf0]      = {op1}
+users[buf1]      = {OUTPUT}
 ```
 
-`name_to_buf[buf0].defining_op` 指回 op0。于是 op1 中尚未满足的 `buf0` 读取有了明确生产者，形成 `op0 → op1`；后面的排序必须把 op0 放在 op1 前面。这里两端都是精确的 `MemoryDep`，依赖名字确定生产—消费关系，索引式则继续供融合等判断使用。
+`defining_op` 指向写出该 buffer 的节点；`users` 记录谁要使用它；`unmet_dependencies` 记录
+当前节点仍需等待哪些图内结果。三份状态共同表达 `op0 → op1`，并没有另外创建一个叫
+“edge”的产品对象。
 
-在 mm 案例中，op0 读取的两个输入一开始就在 `available_buffer_names`，所以它们不是未满足依赖。op1 读取内部结果 `buf0`，因此保留：
+`OUTPUT` 是虚拟使用者，不执行计算。Scheduler 为函数返回值登记它，使通向返回值的工作
+不会在后续死节点删除中消失。输入或常量被修改时，也会为其最新版本登记 `OUTPUT`，因为
+写回本身是调用者可见的结果。
+
+若一项读取既不在 `available_buffer_names` 中，也没有图内 producer，Q31 不会把它自动当成
+外部输入。这个名字会继续留在 `unmet_dependencies`；后续建立祖先关系时无法找到它的
+`defining_op`，编译失败。
+
+## 第三步：共享 storage 和 mutation 补充普通名字关系
+
+普通读写默认“一个 buffer 名代表一份结果”。alias 和 mutation 会打破这个假设：两个名字
+可能指向同一 storage，同一个外部可见名字也可能先后表示修改前后的值。
+
+### alias 名共享同一份 users
+
+Scheduler 先读取每个 operation 输出声明的 alias 名。假设 IR 已说明 `view_out` 与 `base`
+共享 storage，消费者 C 读取 `view_out`：
 
 ```text
-op1.unmet_dependencies = MemoryDep(buf0, c0, {c0: 8})
-users[buf0]             = op1
-users[buf1]             = OUTPUT
+登记 alias 前：users[base] 和 users[view_out] 是两份列表
+登记 alias 后：users[base] ─┐
+                             ├─→ 同一份列表 {C}
+             users[view_out] ┘
 ```
 
-`compute_dependencies()` 遍历每个节点的读取，把当前节点登记为相应 buffer 的使用者。输出还会登记一个虚拟的 `OUTPUT` 使用者，防止最终结果被死节点删除。
+随后节点 M 声明覆盖 `base`。M 查询 `users[base]` 时会看到经 `view_out` 读取的 C。假设 C
+写出 `c_result`，M 就增加：
 
-在这条 mm→sin 链中，同样由 `name_to_buf[buf0].defining_op` 找到 extern op0。生产端的 `StarDep` 和读取端的 `MemoryDep` 精度不同，但相同的 buffer 名仍形成 `op0 → op1`。是否把两项合成一个生成单元由后面的融合阶段处理。
+```text
+WeakDep(c_result, mutating_buf=m_result)
+```
 
-## mutation 会增加两类依赖记录
+这条记录表示 C 必须先读完共享 storage，M 才能覆盖它。若 `base` 本身由图内 P 产生，M
+还会增加 `StarDep(base)`，表示覆盖也要等待 P。于是当前依赖状态表达：
 
-看下面的旧值读取与写回：
+```text
+P → M          # 目标 storage 先存在
+C → M          # alias reader 先完成
+```
+
+若 C1、C2 都已通过 `base` 或任一 alias 名读取这块 storage，共享 users 列表会同时包含二者。
+M 分别对 C1、C2 的输出增加 WeakDep，于是两名 reader 都必须先于 M；这组读取本身不会在
+C1 与 C2 之间建立先后边。
+
+这里的案例按当前 alias 合并逻辑推演；实验 08 没有单独运行 alias 图。Q31 只能处理 IR 已经
+报告的 alias 名，不能发现一项未写进 IR 的隐藏共享关系。
+
+### mutation 先保护旧 reader，再更新逻辑版本名
+
+考虑：
 
 ```python
 old = x + 1
@@ -129,85 +184,102 @@ x.copy_(y)
 return old, x
 ```
 
-输入 `x=[0,1,2]`、`y=[9,9,9]`。Lowering 已经交出两个 operation：
+Lowering 交出：
 
 ```text
-op0：读 arg0_1，写 buf0          # old
-op1：读 arg1_1，写 buf1
-     buf1 mutations=['arg0_1']   # 写回调用者的 x
-```
-
-只看 op1 的数学循环，它读 y、写 buf1，与 op0 看似无关。但 `buf1` 最终覆盖 `arg0_1`，而 op0 需要旧的 `arg0_1`。`compute_dependencies()` 因而为 op1 增加：
-
-```text
-StarDep(arg0_1)                  # 记录被写回的目标版本
-WeakDep(buf0, mutating_buf=buf1) # 修改必须晚于先前读者 op0
-```
-
-采集到的关键状态是：
-
-```text
-op1.unmet_dependencies = WeakDep(buf0, mutating_buf=buf1)
-users[buf0] = op1(weak=True), OUTPUT
-mutation_renames = {'arg0_1': 'buf1'}
-mutation_real_name = {'buf1': 'arg0_1'}
-```
-
-`StarDep(arg0_1)` 记录写回目标；若目标由一个尚未完成的内部节点产生，它也会约束写回等待该生产者。本例的目标是已经可用的图输入，所以经过 `prune_deps()` 后，它不留在 `unmet_dependencies`，也不形成另一条 op0→op1 边。真正保护旧值读取的是未满足的 `WeakDep(buf0)`，它明确连接 op0 与 op1。后续读原名 `arg0_1` 时，依赖图会把它重命名为最新版本 `buf1`；生成代码仍通过 `mutation_real_name` 知道实际被写回的是原输入。
-
-由这条边可推出正确顺序：先用旧 x 算得 `old=[1,2,3]`，再把 y 写入 x，最终 x 为 `[9,9,9]`。若反过来，old 会错误地变成 `[10,10,10]`。
-
-### mutation 后的值可能已被上游改写成新值来源
-
-对照函数：
-
-```python
-def read_after_mutation(x, y):
-    x.copy_(y)
-    return x * 2
-```
-
-这里进入 Scheduler 的后继乘法已经被改成直接读取 `y`，因此入口是：
-
-```text
-op0：读 arg1_1(y)，写 buf0 = y*2       # 普通输出
+op0：读 arg0_1(x)，写 buf0                 # old
 op1：读 arg1_1(y)，写 buf1，mutations=[arg0_1]
 ```
 
-`compute_dependencies()` 后，op1 只有用于表达写回目标版本的 `StarDep(arg0_1)`；因为 arg0_1 是已可用输入，它不留在 unmet。op0 根本不读取旧 arg0_1，所以 op1 不需要指向 op0 的 WeakDep。实际状态为：
+处理 op1 的修改声明时，Scheduler 做三件事：
+
+1. 增加 `StarDep(arg0_1)`，表明被覆盖的目标；本例目标是已可用图输入，所以该记录随后从
+   `unmet_dependencies` 删除；若目标由图内节点产生，它会留下并要求等待 producer。
+2. 查看 `users[arg0_1]`，发现 op0 已读取旧 x；为 op1 增加
+   `WeakDep(buf0, mutating_buf=buf1)`，并把 op1 登记为 buf0 的 weak user。
+3. 更新版本表：后续依赖图中对 `arg0_1` 的读取改指向 `buf1`；生成代码仍知道 buf1 实际
+   写回调用者的 `arg0_1`。
+
+结果是：
 
 ```text
-mutation_renames = {'arg0_1': 'buf1'}
-mutation_real_name = {'buf1': 'arg0_1'}
-users[buf0] = OUTPUT
-users[buf1] = OUTPUT
+op1.unmet_dependencies = {WeakDep(buf0, mutating_buf=buf1)}
+users[buf0]             = {op1(weak), OUTPUT}
+mutation_renames        = {arg0_1: buf1}
+mutation_real_name      = {buf1: arg0_1}
 ```
 
-运行得到输出 `[8,10,12]`，调用者 x 更新为 `[4,5,6]`。这里的两个 OUTPUT 含义不同：buf0 是普通函数结果，buf1 代表必须保留的输入更新。版本表仍登记“原名 arg0_1 的最新逻辑版本是 buf1”；当前图的后继计算直接读 `y`，没有节点再读取这个逻辑新版本。
+因此 op0 先得到 `old=[1,2,3]`，op1 再把 y 写入 x，最终 x 为 `[9,9,9]`。若没有旧 x reader，
+就不会凭空增加这条 WeakDep。例如 `x.copy_(y); return x*2` 在进入 Scheduler 前，后继乘法
+已经被改成直接读取 y；两个 operation 都读 y，版本表仍记录写回，但没有需要保护的旧 x
+reader。
 
-是否需要 WeakDep，取决于 mutation 前是否已经登记了必须完成的旧版本 reader。这个案例没有旧 `x` reader，因此不需要 WeakDep。
+## 第四步：补符号依赖，并接住已有的 effect 顺序
 
-## 别名为什么共用使用者集合
+有两种值或行为不一定通过普通 Tensor buffer 的读取自然形成边：运行时才能得到的符号整数，
+以及必须维持先后的副作用。符号关系由 Scheduler 在本步新增；同类 effect 的前驱已经由
+IR 写进 `ReadWrites`，Scheduler 在本步沿普通读关系把它接入 users 和 unmet 状态。
 
-如果一个输出与另一个 buffer 共享存储，按两个独立名字维护使用者会漏掉真实冲突。`compute_dependencies()` 先读取各输出的 alias 名，并让别名键指向同一份 `name_to_users` 列表。随后无论从哪个名字登记读取或 mutation，都能看到共享存储上的既有使用者。
+### unbacked SymInt：使用者等待符号的产生者
 
-例如 logical names `view_out` 与 `base` alias 同一 storage 时，若消费者登记为读 `view_out`，之后 mutation 声明覆盖 `base`，二者仍落入同一 users 列表；mutation 不会因为名字不同漏掉 view reader。
+有些 shape 整数无法从输入 shape 预先推导，只能由图中一次计算得到。这里把它记为 `u0`。
+假设 op0 产生 `u0`，op1 用 `u0` 决定输出 size：
 
-这一步只建立保守而正确的关系。哪些边可删除、mutation 版本怎样参与拓扑排序、节点何时成为最后使用者，放在下一项继续讲。
+```text
+op0：产生 buffer buf0，并声明自己定义 u0
+op1：在 size/index 中使用 u0，但没有普通 load(buf0)
+```
 
-## 用新案例判断依赖
+若只看普通 `ReadWrites`，op1 与 op0 没有共同 buffer 名。Scheduler 另建一张
+“符号 → 首个定义节点”的表，记录 `u0 → op0`；看到 op1 使用 u0 时，为 op1 增加对 op0
+所有输出 buffer 的 `StarDep`：
 
-假设 `buf0=x+1` 已物化，随后两个节点分别计算 `buf1=buf0*2` 和 `buf2=buf0.sin()`：
+```text
+op1.unmet_dependencies += StarDep(buf0)
+```
 
-- 两个消费者都各有一条读取 `buf0` 的 `MemoryDep`；
-- `users[buf0]` 同时包含两个消费者；
-- 两个消费者之间没有由这组读写自然产生的先后边；
-- 若第三项要覆盖 `buf0`，它必须排在这两个旧读者之后，并会获得相应 mutation 顺序依赖。
+这是一条只为排序建立的 fake dependency。它不表示 op1 真的读取 buf0 元素，只保证 u0
+已经产生。若同一个 `MultiOutputLayout` 让多个输出都声明定义 u0，当前实现使用遇到的第一
+个定义节点作为来源。
 
-改变某个消费者的布局会改变 `MemoryDep.index`，但不会取消它对 `buf0` 生产者的依赖。改变访问方式与改变执行先后，是依赖记录提供给后续阶段的两类不同信息。
+来自符号图输入的自由符号一开始就标成“输入提供”，使用者不需要等待图内节点。图内节点
+使用尚未登记来源的 unbacked symbol 时，依赖构造立即触发断言。若最终图输出的 shape 使用
+u0，Scheduler 还给定义 u0 的节点输出登记 `OUTPUT`，避免产生这个返回 shape 所需符号的
+工作被删除。
 
-若第一个消费者经 view 名读取、第二个经 base 名读取，而这两个名字已声明 alias，mutation 仍必须看见两名消费者。若其中一个消费者随后被死节点删除，对应 weak 顺序边才可能在依赖裁剪时消失；本篇只负责把当前已知读者完整登记出来。
+### effect chain：后一个同类副作用读取前一个结果
 
-## 继续阅读实现
+带副作用的调用不能只凭“没有普通使用者”判断为无用。`EffectfulKernel` 在 IR 建立时按
+effect type 保存同类调用的前一个 operation。若 E0、E1 是同一种 effect：
 
-[依赖构造核心源码：完整方法与状态推演](01-dependency-source/README.md)
+```text
+E0：该 effect type 的前一个 operation
+E1：get_read_writes() 额外加入 StarDep(E0 的输出)
+```
+
+因此 E1 的普通依赖处理会建立 `E0 → E1`。不同 effect type 不会仅因“都有副作用”自动
+得到彼此的顺序边。第一项同类 effect 没有前驱，也不会凭空得到一条读取；它仍通过
+`has_side_effects=True` 告诉下一篇的死节点删除逻辑保留自己。collective 等其他 IR 也可能
+报告副作用；只有 operation 明确提供的读写或 effect chain 才决定本篇的顺序关系。
+
+## 本层交给后续阶段什么
+
+依赖构造结束时，每类状态都有明确消费者：
+
+| 本层结果 | 内容 | 谁继续使用 |
+| --- | --- | --- |
+| scheduler nodes + `ReadWrites` | 节点类型及精确/整块读写 | Q32 排序和删除；Q33 比较访问与融合条件 |
+| `defining_op`、`users`、`unmet_dependencies` | producer、消费者和仍需等待的内部结果 | Q32 拓扑排序、祖先和死节点删除 |
+| alias 共用 users、WeakDep | 共享 storage 上的 reader 与覆盖顺序 | Q32 保持合法顺序；删除后再裁剪失去来源的 weak 关系 |
+| `mutation_renames`、`mutation_real_name` | 当前逻辑版本与实际写回名字 | Q32 继续解释版本、排序与后续生成 |
+| unbacked symbol fake deps、`OUTPUT` users | 符号顺序；函数返回、输出 shape 和外部可见 mutation 的保活 | Q32 排序和删除 |
+| effect `StarDep`、`has_side_effects` | 同类 effect 的前驱关系；一般副作用的保留标志 | Q32 排序和死节点删除 |
+
+本篇完成的标志是：已可用输入已经从 unmet 集合删除，所有已知消费者、alias reader、
+mutation、symbol use、effect 前驱和输出保活都已登记。合法图中的内部 unmet 关系应能在
+后续找到 producer；缺失 producer 的名字也可能暂时留在这里，直到 Q32 建立祖先关系时
+失败。本篇仍没有选出最终次序，也没有删除节点或计算最后使用位置。
+
+下一篇从这些状态开始，说明怎样得到合法顺序、怎样删除无用节点，以及 mutation 版本和
+生存期怎样随最终节点序列变化。完整构造源码与逐句状态见
+[依赖构造核心源码](01-dependency-source/README.md)。

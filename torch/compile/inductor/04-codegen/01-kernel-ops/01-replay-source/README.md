@@ -4,7 +4,75 @@
 
 Q41 已经说明“同一张 FX 小图换 handler 就得到不同目标表达”。本篇把这句话落实成源码状态：捕获阶段怎样建立图、索引表和 submodule；重放阶段怎样把新循环符号代入索引，再把当前动态 handler 填进图的 `ops` placeholder。
 
-先固定本篇反复使用的 `LoopBody` 状态。捕获把原 callable 的操作保存到这些字段；重放读取同一批字段，只临时改动 `indexing`：
+真实生命周期是先捕获、后重放：调用方用原 callable、捕获参数和符号范围构造 `LoopBody`；构造函数先建立各个容器，再创建 `root_block`，而 `LoopBodyBlock(...)` 的构造过程会立即执行 callable 并捕获 FX 图。以后 backend 调用同一个 `LoopBody`，才进入 K01 的重放链。
+
+```python
+def __init__(self, fn, args, var_ranges, iter_vars, reduce_vars):
+    super().__init__()
+
+    _flat_sizes = tuple(var_ranges.values())
+    self.sizes = (
+        _flat_sizes[: len(iter_vars)],
+        _flat_sizes[len(iter_vars) :],
+    )
+
+    self.iter_vars = iter_vars
+    self.reduce_vars = reduce_vars
+    self.var_ranges = var_ranges
+
+    if isinstance(fn, LoopBody):
+        self._init_with_copy(fn, args)
+    else:
+        self._init_with_tracing(fn, args)
+
+    self.indexing = None
+
+def _init_with_tracing(self, fn, args):
+    """Do an FX trace of an arbitrary callable to construct self"""
+    self.indexing_exprs = {}
+    self.indexing_exprs_name = {}
+    self.submodules = {"get_index": self.get_index}
+    self.subblocks = {}
+    self.indirect_vars = []
+    self.indirect_var_ranges: Dict[sympy.Symbol, sympy.Expr] = {}
+    self.memory_usage = {t: [] for t in MemoryUsageType}
+    self.root_block = LoopBodyBlock(self, fn, args)  # traces
+    del self.indexing_exprs_name  # not used after _init_with_tracing
+
+def _init_with_copy(self, other: LoopBody, args):
+    """
+    _init_with_tracing() is slow, so this is a fast path in the case
+    where we are just reordering/merging/splitting the args of an
+    existing LoopBody.
+    """
+    indexing_exprs = other.indexing_from_args(args)
+    self.indexing_exprs = {
+        name: V.graph.sizevars.simplify_with_ranges(expr, self.var_ranges)
+        for name, expr in indexing_exprs.items()
+    }
+    self.subblocks = {k: v.clone(self) for k, v in other.subblocks.items()}
+    self.indirect_vars = other.indirect_vars
+    self.indirect_var_ranges = other.indirect_var_ranges
+    self.memory_usage = other.memory_usage
+    self.root_block = other.root_block.clone(self)
+
+    submodules = {**other.submodules}
+    submodules.pop("get_index")
+    self.submodules = {
+        "get_index": self.get_index,
+        **{k: v.clone(self) for k, v in submodules.items()},  # type: ignore[attr-defined]
+    }
+```
+
+普通 callable 走 trace 路径：容器先置空，`root_block = LoopBodyBlock(...)` 随即触发捕获，成功返回后才删除只在捕获期使用的反向名字表，并最终把 `indexing` 设为 `None`。若构造中途失败，`LoopBody` 可能只写到一部分字段，甚至尚未执行最后的 `indexing=None`；源码没有回滚。
+
+已有 `LoopBody` 走 copy 路径：root/subblock/shim 会重新绑定到新父对象，但 `indirect_vars`、`indirect_var_ranges` 和 `memory_usage` 直接复用旧对象的引用，并非整份状态深拷贝。后文解释 clone 时只对重新绑定的部分作承诺。
+
+`var_ranges` 还是一张有顺序的映射。最终用于代码生成的常规路径通过 `index_vars_no_squeeze(iter_sizes, reduce_sizes)` 建立它，插入顺序固定为全部逐点循环变量在前、全部规约变量在后；backend 重放也必须按同一位置顺序传入两组 indices。`LoopBody` 自己只检查扁平参数总数是否等于 `len(var_ranges)`，不会验证“前几项确实是逐点变量、后几项确实是规约变量”；自定义调用者若传入同样数量但顺序颠倒的符号，会得到错误替换而不是专门报错。
+
+初始的 squeeze 路径还有一个临时边界：大小为 1 的维可能在 `iter_vars/reduce_vars` 中表现为常量 0，却不占 `var_ranges` 的符号项，所以此时仅按 `len(iter_vars)` 切 `sizes` 不能作为最终分类依据。调用方随后按实际符号重新分类，并用 no-squeeze helper 重建最终 body。本文后续重放案例都使用这份重建后的有序 `var_ranges`。
+
+现在固定捕获成功后的 `LoopBody` 状态。捕获把原 callable 的操作保存到这些字段；重放读取同一批字段，只临时改动 `indexing`：
 
 | 字段 | 捕获后保存的内容 | 重放时怎样使用 |
 | --- | --- | --- |
@@ -96,7 +164,7 @@ self.indexing = {index0:128*c0+c1, index1:c0}
 
 FX 图执行 `get_index("index0")` 时，`LoopBody.get_index` 就从这张临时表返回 `128*c0+c1`；load handler 因而看到本轮 backend 的符号，而非捕获期的 x0/x1。root 返回后表被设回 None，避免下一次重放误用旧参数。
 
-第一个 assert 防止少传/多传循环维；第二个 assert 防止把原 `var_ranges` 中的同一符号原样当作新参数，避免替换关系自指。当前实现没有 `try/finally` 包住 `root_block()`：若重放中抛异常，`self.indexing=None` 这句不会执行。因此正常重放能恢复，异常后的同一对象可能保留临时表；这是源码边界，不能泛称所有状态都会自动清理。动态 interpreter/ops 上下文则由各自 context manager 恢复。
+第一个 assert 防止少传/多传循环维；第二个 assert 防止把原 `var_ranges` 中的同一符号原样当作新参数，避免替换关系自指。当前实现没有 `try/finally` 包住 `root_block()`：若重放中抛异常，`self.indexing=None` 这句不会执行。因此正常重放能恢复，异常后的同一对象可能保留临时表；这是源码边界，不能泛称所有状态都会自动清理。`InterpreterShim.run` 在重放期间安装的 `V.interpreter` 会由 context manager 恢复；这段重放代码没有安装新的 `V.ops`，只是把调用方当前 handler 作为 placeholder 实参，并让 shim 读取调用方已有的 `V.ops`。若外层调用方另用 ops context，它的恢复也由外层负责。
 
 ### LoopBodyBlock 把当前 ops handler 作为 placeholder 参数
 
@@ -348,7 +416,7 @@ K02 到此完成。K03 打开三个可 clone shim 和 masked/scan/indirect 的�
 
 ## K03：submodule shim 把嵌套操作留给重放时的 handler
 
-先代入 masked 例：捕获期名字为 `masked_subblock0`，mask 是 `x0<8`，other=0；`self.subblocks` 起初为空，递归捕获的主体执行 `load("x",x0)`。shim 保存的静态值只有子块名字；重放到另一份 LoopBody 时，`clone` 用同名子块重新绑定新的 `self`，函数体再从当时的 `V.ops` 取得 CPU 或 Triton handler。indirect 例可同样代入 `var=u0,size=16,check=True,wrap_neg=True`。
+先代入 masked 例：捕获期名字为 `masked_subblock0`，mask 是 `x0<8`，other=0；`self.subblocks` 起初为空，递归捕获的主体执行 `load("x",x0)`。shim 保存的静态值只有子块名字；重放到另一份 LoopBody 时，`clone` 用同名子块重新绑定新的 `self`，函数体再从当时的 `V.ops` 取得 CPU 或 Triton handler。indirect 例统一使用 `var=indirect0,size=8,check=True,wrap_neg=True`。
 
 ```python
 def bind_set_indirect_shim(self, var, size, check, wrap_neg):
@@ -385,21 +453,7 @@ def bind_masked_shim(self, name):
 
 每个 shim 额外挂一个 `clone=functools.partial(...)`。LoopBody 因循环合并/重排复制到新父对象时，submodule 可以用同一静态参数重新绑定 `self`，不会继续修改旧 LoopBody 的 indexing/subblocks。
 
-复制一份 `LoopBody` 时，调用侧会实际遍历旧对象的 subblock 和 submodule，并把新 body 传给每个 clone 接口：
-
-```python
-self.subblocks = {k: v.clone(self) for k, v in other.subblocks.items()}
-self.root_block = other.root_block.clone(self)
-
-submodules = {**other.submodules}
-submodules.pop("get_index")
-self.submodules = {
-    "get_index": self.get_index,
-    **{k: v.clone(self) for k, v in submodules.items()},
-}
-```
-
-这里的 `self` 是新 LoopBody。`LoopBodyBlock.clone(self)` 让复制后的 root/subblock 指向新父对象；每个 shim 的 `v.clone(self)` 则以同一个新父对象重新调用 bind 方法。复制完成后，新 root、subblocks、`get_index` 和 shim 都从同一份 LoopBody 读取状态。
+复制一份 `LoopBody` 时，篇首 `_init_with_copy` 会实际遍历旧对象的 subblock 和 submodule，并把新 body 传给每个 clone 接口。那段代码里的 `self` 是新 LoopBody：`LoopBodyBlock.clone(self)` 让复制后的 root/subblock 指向新父对象；每个 shim 的 `v.clone(self)` 则以同一个新父对象重新调用 bind 方法。复制完成后，新 root、subblocks、`get_index` 和 shim 都从同一份 LoopBody 读取临时 indexing 和 subblocks；但 memory usage 与 indirect 列表/范围仍是新旧对象共享的引用。
 
 ### masked：主体单独捕获成 subblock
 
@@ -412,6 +466,8 @@ self.submodules = {
 
 重放 root 到该 call_module 时，shim 调用当前 `V.ops.masked(mask,self.subblocks[name],other)`。具体 handler 决定怎样执行 mask，并在需要时调用 subblock；subblock 自己再次用 InterpreterShim 传入当时的 handler。这样被 mask 的 load/算术仍保留独立小图，而不是在 root 捕获时无条件执行。
 
+为了手算操作语义，先假定当前是一个按具体布尔值惰性执行 body 的解释型 handler，并取 `x=[10,11,...,25]`。位置 `x0=3` 时 mask 为真，handler 调用 subblock，`load("x",3)` 得 13，所以 masked 结果为 13；位置 `x0=9` 时 mask 为假，handler 返回 `other=0`，无需读取 `x[9]`。代码生成 handler 不一定在 Python 重放时就按这个布尔值跳过 subblock：例如它可以先调用 subblock 生成一段 lambda/表达式，再让生成代码在运行时选择 13 或 0。LoopBody 只保证把 mask、subblock 和 other 一起交给当前 handler。
+
 ### scan：combine_fn 固定，值和 handler 延迟
 
 捕获 scan 时，`combine_fn` 被闭包保存进 shim，FX root 图保存 dtype/value proxies 的 call_module。`combine_fn` 本身是一个普通 Python callable，不会在这里再捕获成 `LoopBodyBlock`。例如两项状态的组合函数可以接收左侧 `(sum_l, max_l)` 和右侧 `(sum_r, max_r)`，返回：
@@ -421,6 +477,8 @@ self.submodules = {
 ```
 
 若 `value_proxy=(sum_value,max_value)`，捕获图中的 scan call_module 只有 dtypes 和这两项 value proxy；shim 的闭包另外保存上述 callable。重放时 shim 把三者交给当前 `V.ops.scan(dtypes, combine_fn, values)`，由当前 handler 决定怎样调用组合函数和生成目标表达。scan 返回两项时，捕获代码显式建立 `result[0]`、`result[1]`，组成真正的 Python tuple，后续消费者不必把一个可迭代 FX Proxy 当作 tuple。
+
+代入一次具体 combine：左状态为 `(sum_l,max_l)=(2,5)`，右状态为 `(sum_r,max_r)=(3,4)`，闭包中的 combine_fn 得到 `(2+3, maximum(5,4))=(5,5)`。捕获图保存的不是这个常量答案，而是“调用 scan shim，并从返回 proxy 取第 0、1 项”的结构；实际值或符号表达由重放时的 handler 产生。
 
 ### indirect：先用符号占位，重放时再改索引表
 
@@ -433,6 +491,8 @@ self.submodules = {
 ```
 
 重放到 set shim 时，当前 handler 先执行 `indirect_indexing(p,8,check,wrap_neg)`，得到适合该 backend 的新索引对象；`replace_indirect` 再把当前 `self.indexing` 所有表达式中的 indirect0 替换为它。因此必须先执行 set call_module，后续 `get_index` 才能看到实际间接值。
+
+同样先用能返回具体整数的解释型 handler 手算：取 `p=5`、当前直接循环位置 `x0=2`，并令输入 `x=[100,101,...,107]`。捕获索引式是 `indirect0+x0`；重放 set shim 后临时表中的 indirect0 被 5 替换，后续 `get_index` 得到 `5+2=7`，所以 load 读取 `x[7]=107`。CPU/Triton 代码生成 handler 也可能把 p 变成 CSE 或符号表达，此时临时索引是“该表达式 + 2”，而不是 Python 整数 7；生成代码运行到 p=5 时才得到同一地址。若把 set 节点移到 get_index 后面，第一次取索引时仍含未替换的 indirect0，无法建立这条数据流。
 
 `check` 与 `wrap_neg` 捕获进闭包，控制是否检查范围、是否把负索引环绕；clone 时也原样保留。两个 indirect 调用分别得到 indirect0、indirect1，不共享占位符。
 
@@ -463,6 +523,6 @@ masked、scan、sort、frexp 和 indirect 也通过同一套记录再重放机�
 
 换成 Triton handler 时，`indexing_from_args`、FX node 顺序、memory usage 和 submodule 名不变；placeholder 实参、各 ops 返回对象及目标代码改变。依赖快速路径甚至可以不执行这张算术图，只消费 memory usage；这不改变 codegen 重放链的实现。
 
-若 root 重放中 handler 抛异常，V.interpreter/V.ops 的上下文会恢复，但当前 `LoopBody.__call__` 没有 finally，`self.indexing` 可能仍保留。再次使用前不能仅依据“上下文已恢复”推断 LoopBody 临时状态也已清空。
+若 root 重放中 handler 抛异常，`InterpreterShim.run` 安装的 `V.interpreter` 会恢复，但当前 `LoopBody.__call__` 没有 finally，`self.indexing` 可能仍保留。产品重放路径本身没有替换 `V.ops`；实验 12 为记录轨迹而设置的 ops context 属于实验调用方。再次使用前不能依据 interpreter 或外层 ops context 已恢复，就推断 LoopBody 临时状态也已清空。
 
 现在可以用一个变化检验整条链：若逐点例的访问从 `x[x0]` 改为 `x[2*x0]`，捕获表应保存 `index0=2*x0`；backend 传入 c0 后临时表变为 `index0=2*c0`；FX 小图结构和 memory usage 类型不变，当前 handler 收到的新 load/store 索引随之变成 `2*c0`。下一篇 Q421 继续追踪 CPU/Triton backend 怎样把这些 ops 变成各自的目标表达。

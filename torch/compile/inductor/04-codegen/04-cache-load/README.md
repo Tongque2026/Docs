@@ -2,7 +2,35 @@
 
 [上一项：Wrapper 与内存计划](../03-wrapper-memory/README.md) · [返回 Codegen](../README.md) · [返回教程总览](../../README.md)
 
-上一篇已经得到完整的 wrapper Python 源码，其中定义了 `call(args)`；`args` 是装有本次所有实参的列表。本篇接住这份源码，完成三件事：把源码和 kernel 产物写入缓存，在当前进程加载出可调用的 `module.call`，再把这个函数连同其适用条件装进一个 `CompiledFxGraph` 对象交给运行时。首次调用和后续缓存命中最终都要得到这样的可调用对象。
+本篇从 `_compile_fx_inner()` 接到一张 FX 单图开始。对于含计算、采用普通即时编译的图，
+wrapper source 此时还没有产生；只有 FX Graph Cache 没有给出可用 candidate 时，系统才进入
+Q43 生成完整 wrapper source。cache hit 则从旧 candidate 恢复当时保存的 wrapper artifact。
+
+这里的 **candidate** 是以前保存的一份编译记录：它保存适用条件、wrapper source 及其
+定位信息，但不保存仍然活着的 Python 函数。**graph key** 用当前 FX 图、输入属性和配置找到
+一组 candidate；**wrapper artifact** 是由 wrapper source 内容定位的 Python `.py` 模块文件。
+candidate 命中后，还要经 wrapper artifact 重新取得 `module.call`。
+
+这次请求有四项工作：
+
+```text
+FX 单图 + example inputs + 编译配置
+  │
+  ├─ 1. 在允许使用 FX Graph Cache 时，按 graph key 查找并验证 candidate
+  │        ├─ hit ────────────────┐
+  │        └─ miss / bypass ─┐    │
+  │   cache disabled ────────┤    │
+  │                           ▼    │
+  ├─ 2. 运行后半程并接住 Q43 wrapper source，写入/加载 wrapper 与 kernel artifacts
+  │                           │    │
+  ├─ 3. miss 时构造并保存 candidate；hit 时从 candidate 恢复 module.call
+  │                           └─┬──┘
+  └─ 4. 交出带 current_callable 的 CompiledFxGraph，并用 boxed list 调用
+```
+
+这里的 miss、hit、bypass 只用于“缓存功能已启用”的查询。配置关闭或
+`force_disable_caches=True` 时直接运行后半程，不计作 cache miss。下文先讲这条普通非空、
+非 AOT 主线，随后单列空计算图与 AOT 编译的不同出口。
 
 artifact 指能够单独保存、以后再取回的产物。这里有三种 artifact，它们各有自己的 key，不能混用；FX Graph 候选引用 wrapper，wrapper 模块顶层再取得 kernel：
 
@@ -14,7 +42,8 @@ artifact 指能够单独保存、以后再取回的产物。这里有三种 arti
 
 `CompiledFxGraph` 是本篇的交接对象：它的 `current_callable` 字段指向当前进程内真正可调用的 `module.call`，其他字段记录恢复该函数所需的 wrapper source key/source、输入条件和诊断信息。磁盘不能保存一个仍然活着的 Python 函数，所以写入 FX Graph Cache 的副本不含 `current_callable`；命中后必须重新从 wrapper artifact 得到它。下文固定把定位候选集合的标识叫 **graph key**，把定位 wrapper `.py` 的标识叫 **wrapper source key**。这两个 key 会沿 candidate 恢复 wrapper 的链路传播；kernel cache 另用 kernel source 和编译参数计算自己的后端 key，由 wrapper 模块顶层重新查询。
 
-首次编译的主线是：
+先看 cache miss 后的普通即时编译主线；cache disabled 或 bypass 也运行同一后半程，但不会把
+本次结果作为 FX Graph candidate 保存：
 
 ```text
 GraphLowering.codegen()
@@ -31,7 +60,7 @@ PyCodeCache.load_by_key_path() ──执行模块顶层──→ module
       ▼
 module.call ──→ 构造可调用的 CompiledFxGraph ──→ 本次立即运行
                          │
-                         └─复制并清空副本的 current_callable
+                         └─仅在 cache miss 路径复制并清空副本的 current_callable
                                       │
                                       └─按 graph key 保存 candidate
 ```
@@ -45,7 +74,7 @@ module.call ──→ 构造可调用的 CompiledFxGraph ──→ 本次立即�
 1. `codegen()` 生成完整 wrapper source，同时记录“生成文件的这一行来自哪个 FX 节点或源码位置”；这张生成行号到原始位置的对应表就是 source line map，编译报错和调试信息用它把生成代码的位置指回用户程序；
 2. `PyCodeCache.write(code)` 对去除首尾空白的源码做哈希，得到 wrapper source key（源码局部变量名为 `key`）和 `.py` 路径；
 3. 文件不存在时用原子写写入，避免两个并发进程写同一路径时留下只写了一半的文件；相同内容映射到相同路径；
-4. `load_by_key_path(wrapper_source_key,path,linemap,attrs)` 加载 Python 模块；若生成代码引用了没有直接写入源码的 tensor 常量，参数 `attrs` 就携带后文 `CompiledFxGraph.constants` 中的这些对象，并把它们放进模块的全局名字表；
+4. `load_by_key_path(wrapper_source_key,path,linemap,attrs)` 加载 Python 模块；若生成代码引用了没有直接写入源码的 tensor 或 torchbind 常量，首次路径的 `attrs` 直接来自当前 `GraphLowering` 的 `constants` 与 `torchbind_constants`，并把这些对象放进模块的全局名字表；随后构造 `CompiledFxGraph` 时，相关常量也从当前 graph 复制到交接对象中；
 5. GraphLowering 保存 `cache_key/cache_path/cache_linemap`，返回模块；
 6. `compile_to_fn()` 选择模块的 `call` 函数。
 
@@ -75,11 +104,30 @@ def call(args):
 
 调用链是 `外围 → CompiledFxGraph.__call__(inputs) → current_callable(inputs) → module.call(inputs)`。`_compile_fx_inner()` 最后设置 `_boxed_call=True`，告诉外围调用者该函数要求参数列表，而不是 `fn(*args)`。wrapper 取出局部输入名后执行 `args.clear()`，释放这个临时列表持有的 tensor 引用，让后续内存生存期不再被列表额外延长。
 
+## 两条在 candidate 查询前分开的出口
+
+普通非空图才走后文的 `CompiledFxGraph` 主线。`_compile_fx_inner()` 还会更早处理两种情况：
+
+| 条件 | 执行动作 | 本层出口 |
+| --- | --- | --- |
+| FX 图没有任何计算调用，且不是 AOT mode | 强制刷新可能延迟重编译的 GraphModule，再把现有 `gm.forward` 包成 boxed callable | 直接返回 callable；不查询 FX Graph Cache，不生成本篇的 wrapper/kernel artifacts，也不构造 `CompiledFxGraph` |
+| AOT mode | 跳过普通 FX Graph Cache 查询；仍运行 GraphLowering/Codegen，但生成 C++ wrapper，由 `AotCodeCompiler` 编译部署产物 | 返回编译文件路径字符串；不加载 Python `module.call`，也不构造普通 `CompiledFxGraph` |
+
+因此 AOT 与即时编译共享前面的图处理、Lowering、Scheduler 和 kernel/wrapper 生成职责，但在
+wrapper 形态和最终消费者上分开：即时路径要取得当前进程里的 Python callable，AOT 路径要
+取得可部署文件。后文的 candidate、PyCodeCache Python module 和 `current_callable` 都限定为
+普通即时编译路径。
+
 ## FX Graph Cache：从单图编译入口复用后续产物
 
 `_compile_fx_inner()` 接到一张准备交给 Inductor 后半程处理的 FX 单图。启用本地或远端 FX Graph Cache 时，它不立即调用 `fx_codegen_and_compile()`，而是先进入 `FxGraphCache.load()`。
 
-这次查询只包住从 `fx_codegen_and_compile()` 开始的工作：对当前单图做剩余图改写，再运行 Lowering、Scheduler、wrapper/kernel Codegen 及相应编译。命中会省掉这整段工作；在单图到达 `_compile_fx_inner()` 之前已经完成的处理不在本次命中范围内。
+这次查询只包住从 `fx_codegen_and_compile()` 开始的工作：当前单图的 post-grad 改写、
+Lowering、Scheduler 和 wrapper/kernel Codegen 都在其中。hit 不再调用这段函数，因此省掉这些
+后半程处理和源码生成；pre-grad 与训练路径的 joint passes 在单图到达
+`_compile_fx_inner()` 之前已经完成，不在本次命中范围内。恢复 wrapper 模块时仍会执行模块
+顶层；若对应 kernel 子缓存缺少产物，模块顶层仍可能触发实际 C++/Triton 编译，所以不能把
+FX hit 概括为“绝不会发生子编译”。
 
 动态尺寸需要先定义三个词。图里某一维可以不用固定整数，而用符号 `s0` 表示；当前输入长度 32 是这个符号本次的具体值，源码称 hint。候选保存的 `guards_expr` 是适用条件，例如 `s0 % 16 == 0`。ShapeEnv 是外围维护符号及其约束的状态。查询时先把 hint 代入表达式选候选；命中后再把同一条件登记到 ShapeEnv，使外围只在条件成立时使用这个 callable。
 
@@ -149,14 +197,30 @@ run 2: fxgraph_cache_miss=0, hit=1, bypass=0
 
 若全部候选都不合法，系统执行完整编译。`_save_graph()` 对原 `CompiledFxGraph` 做一份不可调用的磁盘副本，序列化一次：`local=True` 时写入 key 子目录，远端对象存在时把同一内容编码后 `put(key, data)`。两处可以同时保存，不是“远端模式完全替换本地模式”。
 
-远端开关由 `should_use_remote_fx_graph_cache()` 与配置决定。源码中的 `fbcode` 判断表示 Meta 内部构建环境；本教程使用的开源构建不属于它，因此没有显式配置时远端缓存默认关闭。本地实验没有连接远端服务，只验证了本地缓存的 miss、保存和 hit。远端缓存连接或读写失败时，源码会记录日志并继续尝试其他缓存层，最终也可以按 cache miss 重新编译；但真正的 wrapper 或 kernel 编译错误仍会向上报告，不能靠 cache miss 掩盖。
+远端开关由 `should_use_remote_fx_graph_cache()` 与配置决定。源码中的 `fbcode` 判断表示 Meta 内部构建环境；本教程使用的开源构建不属于它，因此没有显式配置时远端缓存默认关闭。本地实验没有连接远端服务，只验证了本地缓存的 miss、保存和 hit。
+
+查找与保存的失败出口不同：
+
+| 发生位置 | 当前处理 |
+| --- | --- |
+| graph key/pickle 不支持缓存 | 抛出并捕获 `BypassFxGraphCache`，直接完整编译且不保存 candidate |
+| 某个本地 candidate 文件损坏或无法反序列化 | 跳过该文件，继续其他本地 candidate，随后仍可查远端 |
+| 远端 cache 创建或读取失败 | 这次查询按未命中处理，运行完整编译 |
+| hit 后 wrapper 文件缺失或发生可恢复的 `OSError` | 用 candidate 保存的 source 重建；仍无法加载时按 miss 完整编译 |
+| wrapper 的其他加载异常 | 向上报告，不统一吞成 cache miss |
+| candidate 序列化或保存失败 | 记录失败；当前已经生成的 callable 仍可返回，但这次 candidate 可能没有完整落盘/上传 |
+| 真正的 wrapper 或 kernel 编译错误 | 向上报告，不能靠 cache miss 掩盖 |
+
+本地写入和远端 `put` 位于同一次保存尝试中。若本地写入先失败，代码不会承诺仍继续远端
+保存；若远端 `put` 失败，本地文件可能已经写好。因此不能把所有“远端读写失败”概括成
+继续尝试另一缓存层。
 
 ## 各层缓存与运行时 dispatch 的职责表
 
 | 层 | key/判据大意 | 命中省掉什么 | 仍需做什么 |
 | --- | --- | --- | --- |
 | Dynamo/上层图缓存 | Python frame、guards | 重新 trace/capture | 调用已选 compiled callable |
-| FX Graph Cache | 到达单图编译入口的 FX 图、输入/配置信息 + shape guards | 剩余图改写、Lowering、Scheduler、Codegen 和子编译主流程 | 恢复模块/callable，登记 guards，运行 |
+| FX Graph Cache | 到达单图编译入口的 FX 图、输入/配置信息 + shape guards | post-grad、Lowering、Scheduler、Codegen 与源码生成 | 恢复模块/callable；kernel 子产物缺失时仍可能编译；登记 guards，运行 |
 | PyCodeCache（进程内） | wrapper source hash key | 重复加载 Python module | 调用 `module.call` |
 | PyCodeCache（磁盘 artifact） | 同一个 wrapper 内容哈希 | 重写相同 `.py` | 新进程仍需加载/执行模块 |
 | C++/Triton code cache | kernel source + 编译相关参数 | 重复编译具体 kernel | 加载产物并 launch |
@@ -167,11 +231,16 @@ run 2: fxgraph_cache_miss=0, hit=1, bypass=0
 
 把全教程主线收束起来：
 
-1. `_compile_fx_inner` 用 graph key 为当前单图查找 FX Graph candidate；
-2. hit 时验证 guard 并恢复 wrapper；miss 时才运行剩余图改写、Lowering、Scheduler、Codegen，再保存 candidate；资格检查判定 bypass 时不查找或保存 candidate，转而完整编译；
-3. Codegen 写出带 kernel 定义和 `call(args)` 的 wrapper；
-4. PyCodeCache 加载模块，`module.call` 成为 current callable；
-5. 运行时用 boxed list 调用它，wrapper 依次调用已经加载的 kernel 并返回结果。
+1. `_compile_fx_inner` 先分流：无计算调用的非 AOT 图直接返回 boxed `gm.forward`；AOT 路径
+   生成部署文件并返回路径字符串；普通非空即时编译继续。
+2. 只有 cache 启用时才用 graph key 查 candidate；cache 关闭直接进入后半程，既不是 miss
+   也不是 bypass。
+3. hit 时验证 guard 并恢复 wrapper；miss 时运行 post-grad、Lowering、Scheduler、Codegen
+   并保存 candidate；资格检查判定 bypass 时不保存 candidate，转而完整编译。
+4. Codegen 写出带 kernel 定义和 `call(args)` 的 wrapper；PyCodeCache 加载模块，
+   `module.call` 成为 current callable。hit 恢复模块时，缺少的 kernel 子产物仍可能编译。
+5. 普通即时路径交出 `CompiledFxGraph`，运行时用 boxed list 调用其中的 current callable，
+   wrapper 再依次调用已经加载的 kernel 并返回结果。
 
 ## 继续阅读实现
 

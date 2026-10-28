@@ -1,4 +1,4 @@
-# Wrapper 复用规划源码：先记录生存期，再决定同一块 storage 给谁
+# Wrapper 复用规划源码：记录内存动作，再决定分配、复用或 pool 位置
 
 [返回 Wrapper 与内存计划](../README.md) · [上一叶子：CPU/Triton backend](../../02-backends/01-backend-source/README.md)
 
@@ -10,18 +10,32 @@ storage。下面这个请求中，A 由 `kernel0` 写入，`kernel1` 最后一�
 申请 A → kernel0 写 A → kernel1 读 A → 释放 A → 申请 C → kernel2 写 C
 ```
 
-若 A、C 的 device、dtype 和 storage 容量兼容，C 可以接管 A 的 storage，最终
-wrapper 不必为 C 再申请一块空间。但这个决定不能在 A 刚创建时作出：当时还不知道
-A 的最后一个使用者，也不知道后面是否真的出现 C。
+这里先看默认复用路径。“兼容”有精确含义：A、C 的
+`(device, dtype, simplified symbolic storage size)` 三项相同。最后一项是化简后的
+符号容量表达式，不是用某次运行的样例值碰巧比较相等；shape 或 stride 可以不同，
+只要所需 storage 容量相同，生成调用时再用 view 表达新布局。满足这组条件时，C 可以
+接管 A 的 storage，wrapper 不必为 C 再申请一块空间。但这个决定不能在 A 刚创建时
+作出：当时还不知道 A 的最后一个使用者，也不知道后面是否真的出现 C。后文的 pool
+路径采用另一套放置标准：先按 device 分 pool，再用字节容量和生存期决定 byte offset，
+不能把默认路径的 key 原样套过去。
 
-源码先把这些动作保存成可修改的、尚未输出 Python 的 wrapper planning line 对象。
+这些行的上游是 Scheduler。一个调度节点 `mark_run()` 时，会依次调用各输出的
+`SchedulerBuffer.allocate()`。需要分配的输出通常调用 wrapper 的
+`codegen_allocation`，alias-output 和 mutation 也走这个入口；只有已经确定的 kernel
+inplace 共享才调用 `codegen_inplace_reuse`。节点最后一次使用某个 buffer 后，
+`Scheduler.free_buffers` 经过“是否已经删除、是否允许释放、是否为输入”等过滤，再调用
+wrapper 的 `codegen_free`。因此 planner 接到的不是所有 IR buffer，而是 Scheduler
+已经按执行顺序记录好的 allocation、调用、reuse 和 free 时间线。
+
+wrapper 接着把这些动作保存成可修改的、尚未输出 Python 的 planning line 对象。
 `Buffer` 记录一个逻辑结果的名字、
 device、dtype、size 和 layout；`AllocateLine(A)`、`FreeIfNotReusedLine(A)`、
 `ReuseLine(A,C)` 分别表示申请、候选释放和接管。`ReuseLine` 有两种来源：codegen
 事先确定的 inplace 共享合同，以及默认 planner 把一条 free 与后来的 allocate 配对后
 产生的替代行。这些都还是生成期对象，不是正在执行的 Python tensor。planner 修改
-整条行列表，最后每一行的 `codegen` 才写出
-`empty_strided`、`del` 或下面的复用代码：
+整条行列表。最终生成循环遇到 `WrapperLine` 才调用它的 `codegen`；普通字符串/代码行
+直接由 `writeline` 写入。两种出口在这时才写出 `empty_strided`、`del`、kernel 调用或
+下面的复用代码：
 
 ```python
 C = A
@@ -39,9 +53,14 @@ del A  # C 与 A 指向同一块 storage，不复制元素
                               默认 planner：按 reuse key 用 LIFO 栈配对 free/allocate
 ```
 
-它们不是先执行默认复用、再执行 pool 的两个阶段。wrapper 的生成入口只选择其中
-一条：推理且开启 `memory_planning` 时调用 `MemoryPlanner.plan`；否则调用
-`memory_plan_reuse`。两条路径最终都交回一份可按顺序 codegen 的 wrapper lines。
+它们不是先执行默认复用、再执行 pool 的两个阶段。`WrapperCodeGen._generate` 是共同
+入口：推理且开启 `memory_planning` 时，它先调用 `memory_plan()`，由这个包装方法
+构造 `MemoryPlanner(self)` 并执行 `plan(self.lines)`；否则直接调用
+`memory_plan_reuse()`。规划方法只修改或替换 `self.lines`。回到 `_generate` 后，
+同一个循环才按最终顺序处理每一行：`WrapperLine` 调用 `codegen`，其余行直接
+`writeline`，随后生成输出和 return。
+所以正文后面说的“第二遍 codegen”是 wrapper 的共享消费阶段，不在
+`memory_plan_reuse` 函数体内部。两条路径最终都交回这同一份可顺序生成的 lines。
 
 后文还会反复使用一条固定的 8×8 float32 案例：
 
@@ -69,11 +88,19 @@ return buf3
 ```
 
 默认路径保留两条显式 reuse，并为 buf0、buf2 各做一次真实 allocation。pool 路径
-把 `{buf0,buf1}` 合成中间组 G1，把 `{buf2,buf3}` 合成输出组 G2，再以组为单位
-计算生存期、pool 和销毁位置。K01 先用更小的 A/C 案例解释默认 LIFO；K03、K04、
-K06 都只是在不同实现层面继续代入这条固定时间线。
+把 `{buf0,buf1}` 合成中间组 G1，把 `{buf2,buf3}` 合成输出组 G2。这里的“组”是
+生成期的 `BufferGroup`：它把已经确定共享同一 storage 的多个逻辑名字连同 owning
+buffer 放在一条记录中；后续只为整组计算生存期、pool 和销毁位置。
 
-## K01：把分配和释放先保存为可修改的时间线
+案例按下面的方式接力：K01 用更小的 A/C 时间线先解释默认 LIFO，K03 回到两次 mm
+并走完默认路径；K04 继续用两次 mm 建立 G1/G2 生存期。K05 暂停主案例，改用
+A=64、B=32、C=48 bytes 的辅助案例，因为主案例两个 pool 的 offset 都是 0，无法展示
+时间共址与空间分割怎样共同产生非零 offset。K06 再回到两次 mm，把 tree 结果接到
+pool 首次创建、末次销毁和最终 wrapper lines。
+
+## 共享入口：Scheduler 怎样留下可规划的内存时间线
+
+### 为什么先记录时间线，而不立即输出 allocation 和 free
 
 假设 wrapper 按顺序需要三个 float32 CPU buffer，三者容量相同：
 
@@ -88,6 +115,56 @@ K06 都只是在不同实现层面继续代入这条固定时间线。
 记录第 1 行时不能把 A 的 storage 直接承诺给 C，因为 C 尚未出现；记录第 3 行时也
 不能立即输出 `del A`，否则第 5 行看不到可接管的 storage。Inductor 因而先把分配和
 释放保存成携带 IR buffer 的对象，等 Scheduler 把全部 wrapper 行写完后再扫描。
+
+### allocation、free 与显式 inplace 怎样成为 planning line
+
+`codegen_allocation(buffer)` 并不等价于“写一行 empty”。它先判断这份 IR buffer 的
+存储由谁拥有：
+
+| 条件 | 采取的动作 | 原因 |
+| --- | --- | --- |
+| 名字已 removed 或已经登记 allocation | 直接返回 | 删除项和重复请求都不应再产生存储 |
+| defining op 是 `ExternKernelAlloc` / `MultiOutput` | 只登记名字，不写 `AllocateLine` | 存储由外部调用或多输出操作建立 |
+| `MutationLayoutSHOULDREMOVE` / `NoneLayout` | 返回 | 前者应由别名/修改关系处理，后者本就没有普通 tensor storage |
+| `NonOwningLayout` | 递归登记 backing buffer，再写 deferred alias | 当前名字只是已有 storage 上的 view |
+| 普通 owning layout | 写入 `AllocateLine(self, buffer)` | 到全局规划时才决定真实分配或复用 |
+
+例如 C 是 A storage 上 shape=(2,3)、stride=(1,2) 的 non-owning view。入口先确保 A 的
+owning buffer 已进入时间线，随后为 C 写 alias 引用；它不会为 C 再建一个普通
+`AllocateLine`。这和“C 后来复用一个同容量旧 buffer”不同：前者的共享关系在 IR
+layout 中已经确定，后者要等生存期扫描才能决定。
+
+`codegen_free(buffer)` 再把“删除局部名”和“storage 可复用”分开：
+
+1. `InputBuffer` 立即写普通 `del name`。这只删除 wrapper 的局部 Python 引用；调用者
+   仍持有输入 tensor，因此这块 storage 不进入 planner。
+2. `can_reuse(buffer)` 为 False 时不写 planning free。removed、graph input、常量、
+   torchbind 常量、`never_reuse_buffers` 和已经释放过的名字都在这里被排除。
+3. 普通中间结果加入 `freed`，写 `FreeIfNotReusedLine`，留到规划阶段决定是 `del`
+   还是被后续 allocation 接管。
+
+图输出还由时间线合同保护：Scheduler 不应在返回前把仍是输出的 storage 当普通死值
+释放；规划时也不能删除或转交仍需由 return 观察的名字。
+
+某些 pointwise 已由前面的别名和生存期分析确定可以原地覆盖，入口会调用
+`codegen_inplace_reuse(old,new)`。它先断言两者 reuse key 相同，然后：
+
+```text
+确保 old 已登记 allocation
+old 加入 freed
+new 加入 allocated
+reuses[new] = old
+写入 ReuseLine(old,new)
+```
+
+这条 `ReuseLine` 是 codegen 已经给出的显式共享合同，不是某个 planner 临时配对的
+结果。默认 planner 直接保留并生成它；pool planner 用它把 old/new 合并到同一个
+`BufferGroup`。至此，共享入口已经交出完整 planning line 时间线，下面才开始选择
+默认或 pool 算法。
+
+## 默认 planner：用最近释放的兼容 storage 替代新分配
+
+### K01：LIFO 候选栈怎样改写 allocation 与 free
 
 默认 planner 的状态是一张按兼容 key 分组的栈：
 
@@ -115,12 +192,16 @@ reuse_pool[(device, dtype, symbolic_storage_size)] -> [尚未被接管的 free �
 候选栈，可供后一个 D 使用。这不是按名字匹配，而是同 device、dtype、简化后 storage
 容量表达式的候选中优先取最近一项。
 
-普通文本调用行不会清空候选栈，它只是保持执行顺序。进入子图时则新建独立
-`MemoryPlanningState`，退出时收起该状态，避免子图内部 free 被外层 allocation 直接
-接管。扫描末尾还会去掉不属于图输出、且连续落在末尾的无效 planning line；这些行后面
+普通文本调用行不会清空候选栈，它只是保持执行顺序。默认 planner 扫到
+`EnterSubgraphLine` 时把当前 state 留在栈中并新建一个 state；扫到
+`ExitSubgraphLine` 时弹出这个子图 state，恢复外层 state。这样子图内部 free 不能被
+外层 allocation 直接接管；入口/出口不平衡会在 pop 或最终栈检查时报错。pool planner
+没有这套 state 栈，子图边界只会像其他非 planning line 一样切断连续 planning 段。
+扫描末尾还会去掉不属于图输出、且连续落在末尾的无效 planning line；一旦遇到普通行
+就停止向前删除，因为不能跨过仍需输出的代码。这些尾部 planning line 后面
 已经没有消费者或新 allocation，保留它们不能产生可观察结果。
 
-### 条件对照
+#### 条件对照
 
 - C 的 dtype 改成 float16：reuse key 不同，A 留在原 key 栈，C 保留真实 allocation。
 - C 形状改变但 storage 容量、device、dtype 相同：key 仍可能匹配；生成阶段用
@@ -128,68 +209,23 @@ reuse_pool[(device, dtype, symbolic_storage_size)] -> [尚未被接管的 free �
 - A 是图输入：wrapper 可以在最后使用后删除局部名，但 `can_reuse` 禁止把调用者的
   storage 放进普通中间复用池。
 
-### K01 迁移题
+#### K01 迁移题
 
 时间线改为 `Free(A) → Free(B) → Allocate(C) → Allocate(D)`，四者 key 相同。
 第一次 allocate 弹出 B，所以 C 接管 B；第二次再弹出 A，所以 D 接管 A。若 B 是
 alias-output buffer，它的 free 不会入栈，则 C 接管 A，D 必须真实分配。这一变化来自
 候选集合改变，而不是 C/D 名字或数值内容改变。
 
-K01 建立了规划对象存在的原因和扫描状态。K02 将打开 allocation/free 入口与身份
-过滤，解释哪些 line 根本不会进入上述候选池，以及 exact alias 与 reinterpret 两个出口。
+K01 建立了默认 planner 的候选栈与扫描状态。K02 继续解释候选不能接管哪些身份，
+以及匹配成功后怎样生成 exact alias 或 reinterpret view。
 
-## K02：先判断 buffer 是否拥有可接管的 storage
+### K02：候选 storage 怎样通过身份检查并生成新布局
 
-`codegen_allocation(buffer)` 并不等价于“写一行 empty”。它先判断这份 IR buffer 的
-存储由谁拥有：
-
-| 条件 | 采取的动作 | 原因 |
-| --- | --- | --- |
-| 名字已 removed 或已经登记 allocation | 直接返回 | 删除项和重复请求都不应再产生存储 |
-| defining op 是 `ExternKernelAlloc` / `MultiOutput` | 只登记名字，不写 `AllocateLine` | 存储由外部调用或多输出操作建立 |
-| `MutationLayoutSHOULDREMOVE` / `NoneLayout` | 返回 | 前者应由别名/修改关系处理，后者本就没有普通 tensor storage |
-| `NonOwningLayout` | 递归登记 backing buffer，再写 deferred alias | 当前名字只是已有 storage 上的 view |
-| 普通 owning layout | 写入 `AllocateLine(self, buffer)` | 到全局规划时才决定真实分配或复用 |
-
-例如 C 是 A storage 上 shape=(2,3)、stride=(1,2) 的非 owning view。入口先确保 A 的
-owning buffer 已进入时间线，随后为 C 写 alias 引用；它不会为 C 再建一个普通
-`AllocateLine`。这和“C 后来复用一个同容量旧 buffer”不同：前者的共享关系在 IR
-layout 中已经确定，后者要等生存期扫描才能决定。
-
-### free 入口把“删除局部名”和“storage 可复用”分开
-
-`codegen_free(buffer)` 有三种出口：
-
-1. `InputBuffer` 立即写普通 `del name`。这只删除 wrapper 的局部 Python 引用；调用者
-   仍持有输入 tensor，因此这块 storage 不进入 reuse pool。
-2. `can_reuse(buffer)` 为 False 时不写 planning free。removed、graph input、常量、
-   torchbind 常量、`never_reuse_buffers` 和已经释放过的名字都在这里被排除。
-3. 普通中间结果加入 `freed`，写 `FreeIfNotReusedLine`，留到规划阶段决定是 `del`
-   还是被后续 allocation 接管。
-
-图输出的保护还依赖时间线合同，而不只靠 `can_reuse`：Scheduler 不应在返回前把仍是
-输出的 storage 当普通死值释放；`memory_plan_reuse` 也不会把末尾属于 output name 的
-planning line当作无效尾行删除。若一个旧名字本身是输出，`make_buffer_reuse` 在生成
+图输出的保护不只靠 `can_reuse`：`memory_plan_reuse` 不会把末尾属于 output name 的
+planning line 当作无效尾行删除。若一个旧名字本身是输出，`make_buffer_reuse` 在生成
 新名字时不会输出 `del old`，使返回合同仍能观察旧名。
 
-### 显式 inplace reuse 在扫描前就知道旧、新 storage 必须相同
-
-某些 pointwise 已由前面的别名和生存期分析确定可以原地覆盖，入口会调用
-`codegen_inplace_reuse(old,new)`。它先断言两者 reuse key 相同，然后：
-
-```text
-确保 old 已登记 allocation
-old 加入 freed
-new 加入 allocated
-reuses[new] = old
-写入 ReuseLine(old,new)
-```
-
-这条 `ReuseLine` 不是默认 planner 从“一个 free + 后一个 allocate”偶然配对出来的，
-而是 codegen 已经给出的显式共享合同。后面的 pool planner 也据此把 old/new 合并为
-同一个 `BufferGroup`。
-
-### exact alias 与 reinterpret view
+#### exact alias 与 reinterpret view
 
 规划最终调用 `make_buffer_reuse(old,new,delete_old)`。dtype 必须相同；reuse key 在更
 早阶段已经保证 device 与 storage capacity 兼容。生成端再比较 shape/stride：
@@ -212,14 +248,14 @@ stride=(1,3)，capacity 仍为 6。同 device/dtype 下 key 可以相同，但 C
 复用的是六元素 storage，改变的是 C 的位置解释。若 C 需要七元素容量，reuse key 已在
 扫描阶段不同，不会走到 reinterpret 分支。
 
-### alias output 与 MultiOutput 的 free 分支
+#### alias output 与 MultiOutput 的 free 分支
 
 即使一条 `FreeIfNotReusedLine` 已经存在，`plan()` 还要检查 buffer 是否有
 `inputs_that_alias_output`，或 layout 是否是 `MultiOutputLayout`。命中任一项时，它
 保留 free line 但不 push 入候选栈；第二遍因此只执行正常 free 语义，不把与输出共享的
 storage 交给无关新 buffer。removed buffer 则直接把 line 换成 `NullLine`。
 
-### K02 状态推演
+#### K02 状态推演
 
 给定时间线：输入 X 最后使用、普通 A 最后使用、alias-output B 最后使用，随后申请
 同 key 的 C、D：
@@ -240,9 +276,9 @@ K02 到此完成。K03 将逐句保留默认 planner 声明范围的完整源码
 `buf0/buf1`、`buf2/buf3` 代入 `MemoryPlanningState` 与两遍 codegen。
 
 
-## K03：默认 planner 的完整源码与两次 mm 状态
+### K03：默认 planner 的完整源码与两次 mm 状态
 
-### reuse key 与 `MemoryPlanningState`
+#### reuse key 与 `MemoryPlanningState`
 
 下面五个短方法属于同一个 `MemoryPlanningState` 类。新状态只有两个字段：
 `reuse_pool` 是空的 `key → free-line 栈`，`total_allocated_buffer_size=0`。planning
@@ -284,7 +320,7 @@ def push(self, key: ReuseKey, item: FreeIfNotReusedLine) -> None:
         self.reuse_pool[key].append(item)
 ```
 
-### 三类 planning line
+#### 三类 planning line
 
 下面其实连续摘录了四个类的方法，而不是同一个类把 `plan/codegen` 定义四次。按出现顺序分别是：共同基类 `MemoryPlanningLine`、申请新空间的 `AllocateLine`、把空间放回候选池的 `FreeIfNotReusedLine`、让新 buffer 接管旧空间的 `ReuseLine`。代码内的分隔注释标出每组方法所属的类。
 
@@ -372,7 +408,7 @@ def codegen(self, code: IndentedBuffer) -> None:
         )
 ```
 
-### 两遍扫描与子图状态
+#### 两遍扫描与子图状态
 
 先固定一个独立的最小默认复用例；它不是开头两次 mm 案例中的同名 buffer。
 `self.lines` 依次是 `Allocate(buf0[8×8]) → kernel0 → Free(buf0) →
@@ -423,7 +459,7 @@ def memory_plan_reuse(self):
         )
 ```
 
-### allocation/free/inplace 入口与复用代码生成
+#### allocation/free/inplace 入口与复用代码生成
 
 ```python
 # 教学源码：以下方法保持产品源码原顺序；本行仅标识教学副本。
@@ -510,7 +546,7 @@ def codegen_inplace_reuse(self, input_buffer: ir.Buffer, output_buffer: ir.Buffe
         self.writeline(ReuseLine(self, input_buffer, output_buffer))
 ```
 
-### 20 个声明怎样共同完成两遍规划
+#### 20 个声明怎样共同完成两遍规划
 
 `buffer_reuse_key` 使用化简后的符号 storage size 字符串，而非 size hint。若两个动态
 尺寸在本次样例中碰巧都是 64，符号表达式分别是 `s0` 和 `s1`，key 仍不同；planner
@@ -533,7 +569,7 @@ def codegen_inplace_reuse(self, input_buffer: ir.Buffer, output_buffer: ir.Buffe
 `make_buffer_allocation`；未复用 free 输出 `del`；被标记复用的 free 静默；ReuseLine
 调用 `make_buffer_reuse` 选择 exact alias 或 reinterpret。`NullLine` 不输出内容。
 
-### 固定案例的两组显式 reuse
+#### 固定案例的两组显式 reuse
 
 开头两次 mm 案例的 pointwise 覆盖已经在 codegen 阶段被判为显式 inplace，因此进入
 规划器的是两条 `ReuseLine`，而不是依靠 LIFO state 临时匹配：
@@ -557,7 +593,7 @@ buf3 = buf2; del buf2  # reuse
 本案例的生成产物包含这两条显式 inplace 路径；K01 的普通 free→allocate LIFO
 配对则由当前源码和状态推演支持，二者不是同一个决定。
 
-### 已删除的 buffer 会在哪几个步骤从规划时间线消失
+#### 已删除的 buffer 会在哪几个步骤从规划时间线消失
 
 入口可能先因为 `V.graph.removed_buffers` 不写 allocation；已经写入时间线后 buffer
 又被优化删除，line 的 `plan` 会把它换成 `NullLine`。此外，`memory_plan_reuse` 在扫描
@@ -565,7 +601,7 @@ buf3 = buf2; del buf2  # reuse
 消费它们。输出 name 会阻止这项尾删，保留返回所需对象。三者分别发生在记录时、规划
 时、扫描开始前，解决的不是同一个状态。
 
-### K03 迁移推演
+#### K03 迁移推演
 
 若在第一条 relu 后额外返回 `first`，buf0 的旧值成为图输出。原地覆盖会破坏该输出，
 因此上游不应再交出 `Reuse(buf0,buf1)`；需要为 activated 使用独立 storage，或采用能
@@ -578,7 +614,9 @@ buf3 = buf2; del buf2  # reuse
 K03 到此完成。K04 转入 pool planner，先建立 `BufferGroup` 与离散时间：为什么连续的
 planning line 属于同一 timestep，普通 kernel 调用又怎样把两个使用阶段分开。
 
-## K04：把多个逻辑名字合成一块 storage 的生存期
+## Pool planner：把共享名字放进带生存期和 byte offset 的 pool
+
+### K04：把多个逻辑名字合成一块 storage 的生存期
 
 pool planner 不再逐次寻找“最近 free 的同规格 buffer”，而是先回答两个更全局的问题：
 
@@ -612,7 +650,7 @@ G2: node=buf2, names=[buf2, buf3], is_output=True
 组仍以最初 owning allocation 的 node 表示容量和布局；后续 inplace 名只说明共享
 storage。`ReuseLine` 不会新建 G3/G4，否则 planner 会把同一块物理内存错误计算两次。
 
-### 从普通 planning line 转成 pool line
+#### 从普通 planning line 转成 pool line
 
 `convert_to_pool_lines` 使用上述 name→group 映射修改原时间线：
 
@@ -623,7 +661,7 @@ storage。`ReuseLine` 不会新建 G3/G4，否则 planner 会把同一块物理�
 removed line 已在此前变成 `NullLine`，没有 group。外部调用自行创建的 storage 原本也
 没有普通 AllocateLine，因此当前 TODO 明确不把这类 old name 强行纳入 reuse group。
 
-### timestep 不是每一行加一，而是每一段 planning line 加一
+#### timestep 不是每一行加一，而是每一段 planning line 加一
 
 `compute_live_ranges` 用 deque 扫描完整 wrapper 时间线。若队首是
 `MemoryPlanningLine`，timestep 加一，并把后面连续的所有 planning line 都归入这个
@@ -653,7 +691,7 @@ G1 的 `update_usage` 先把初始 `(inf,-inf)` 变为 `(1,1)`，再扩成 `(1,4
 因此不能占 pool 的同一 offset；
 G1 结束后出现的另一个中间 storage 才可能在时间上复用它的位置。
 
-### `LiveRanges` 为什么允许多个不连续区间
+#### `LiveRanges` 为什么允许多个不连续区间
 
 单个 `LiveRange(begin,end)` 能做包含与并集；`LiveRanges` 接收多个区间，先按 begin
 排序，再把相交或首尾接触的区间合并。`overlaps` 用两个 deque 比较当前最早区间：
@@ -670,14 +708,14 @@ A 和 B 不重叠：边界 4、7 处前一段已经结束。若 B 改为 `[3,7)`
 在 `[3,4)` 重叠。若一组区间输入为 `[1,3)、[2,5)、[8,9)`，构造后合并为
 `[1,5)、[8,9)`。
 
-### 输出为什么必须延长到规划末尾
+#### 输出为什么必须延长到规划末尾
 
 输出 storage 在最后一次 kernel 写完后仍要交给调用者，不能以最后一个内部使用点为
 结束。扫描完所有 line 后，planner 再令 timestep 加一，并对 `is_output=True` 的组执行
 一次 `update_usage`。实验中的 G2 因而活到 t=5；若没有这一步，pool 可能在 return 前
 把 buf3 所在区域交给另一个临时值。
 
-### K04 迁移题
+#### K04 迁移题
 
 若函数同时返回 `first=buf0` 和最终 `buf3`，G1 因包含输出名而变成 output，结束点也
 延长到 t=5；同时上游原本的 `Reuse(buf0,buf1)` 必须取消，否则 relu 会覆盖 first。
@@ -691,9 +729,9 @@ K04 到此完成。K05 将打开时间/空间分配树的完整实现，具体�
 的 allocation 怎样形成 `TemporalSplit`、`SpatialSplit` 和最终 byte offset。
 
 
-## K05：时间复用与空间分割组成一棵 allocation tree
+### K05：时间复用与空间分割组成一棵 allocation tree
 
-### 完整源码：live range、allocation 节点、时间/空间分割与 pool
+#### 完整源码：live range、allocation 节点、时间/空间分割与 pool
 
 先固定两种树节点的含义：
 
@@ -1179,7 +1217,7 @@ class AllocationPools:
             pprint.pprint(pool.root)
 ```
 
-### 两种节点分别表示“同一位置换时间”和“同一时间换位置”
+#### 两种节点分别表示“同一位置换时间”和“同一时间换位置”
 
 `TemporalSplit.allocations` 中的子节点不得有重叠 live range，它们共享同一块起始
 offset，在不同时段轮流使用。它的容量是各子节点 size 的最大值，符号容量用
@@ -1198,7 +1236,7 @@ parent_offset + align(left.symbolic_size)
 和 symbolic-size 缓存：树结构已经变化，旧聚合值不能继续用于下一次放置。最终
 `finalize(pool,offset)` 沿树递归，把 pool 身份和 byte offset 写入每个 Allocation。
 
-### 三块 allocation 的完整插入过程
+#### 三块 allocation 的完整插入过程
 
 设三块都在 CPU，单位为 bytes：
 
@@ -1239,7 +1277,7 @@ finalize 后 A.offset=0、B.offset=0、C.offset=64；pool 总 symbolic size 为
 放到另一空间。这三个 offset 是算法推演；开头固定案例的两个 pool 各只有一个
 8×8 float32 allocation，实际 offset 都是 0。
 
-### perfect fit、局部递归和扩容
+#### perfect fit、局部递归和扩容
 
 - 新块与一个 child 重叠时，根节点递归调用那个 child 的 `allocate`，尝试在其空间树
   内找位置；与多个 child 重叠时当前实现直接拒绝，没有跨多个空间节点重新拼接。
@@ -1253,19 +1291,21 @@ finalize 后 A.offset=0、B.offset=0、C.offset=64；pool 总 symbolic size 为
 `memory_pool` 配置选择追加到末尾 pool，或建立不能随意扩展的独立 pool。这样返回值
 所在的 pool 会一直保留到函数把结果交给调用者，不会因内部计算已经结束而提前删除。
 
-### 从 byte offset 回到 tensor view
+#### 从 byte offset 回到 tensor view
 
 `Allocation.codegen_alloc_from_pool` 把最终 pool name、offset、dtype、shape、stride
 交给 wrapper。pool 本身优先寻找“某个 allocation 恰好覆盖整个 pool”的情形，直接以
 该 tensor 的 shape/stride 创建；否则申请一维 uint8、长度为 symbolic nbytes 的底层
 storage。各 tensor 再基于对应 byte offset 建 view。
 
-pool 会在第一条使用它的 allocation line 之前创建；最后一条内部使用结束后，wrapper
-删除 `pool.name` 和累积的逻辑 tensor 名。究竟是哪两条 wrapper line 负责首用和末用，
-不是 allocation tree 自己决定的，而是 K06 的 `mark_first_last_usage` 标在具体
+pool 会在第一条被标记的 allocation line 中创建。销毁还需要两个条件：时间线上确实
+存在这个 pool 的 `DeallocFromPoolLine`，并且反向扫描到最后一条 dealloc 时，整池聚合
+生存期已经结束；缺少 dealloc、或输出保活使聚合结束点更晚时，都不会在这里写销毁。
+究竟是哪两条 wrapper line 负责首用和可能的末用，不是 allocation tree 自己决定的，
+而是 K06 的 `mark_first_last_usage` 标在具体
 `AllocFromPoolLine`/`DeallocFromPoolLine` 上。
 
-### K05 迁移题
+#### K05 迁移题
 
 若 B 的 live range 改成 `[3,6)`，它与 A 在 `[3,4)` 重叠，不能再共享 offset 0；树会
 为 B 建空间分支。若只把 B size 从 32 改成 96、live 仍为 `[4,6)`，时间上仍可复用，
@@ -1277,9 +1317,9 @@ K05 到此完成。K06 将保留剩余 25 个 pool planning 方法，沿 pass �
 line 转成 group、live range、allocation tree、首末 pool 使用和最终代码。
 
 
-## K06：MemoryPlanner 按固定 pass 把时间线变成 pool 代码
+### K06：MemoryPlanner 按固定 pass 把时间线变成 pool 代码
 
-### 完整源码：group、pool line 与 planner passes
+#### 完整源码：group、pool line 与 planner passes
 
 本次 planner 输入沿用开头的完整时间线：buf0 分配后被第一次 mm 写入，relu 后以 buf1 继续使用；buf2 由第二次 mm 写入并以 buf3 返回。inplace 关系先形成 G1={buf0,buf1} 与 G2={buf2,buf3}；G2 是输出。配置为 intermediates pool，timestep 从 0 开始，pools 为空。passes 依次把相关 line 换成 group line、得到 G1/G2 的 live range、按大小放入 pool、标记 pool 第一次创建与最后一次删除，再输出代码；因为 G2 是输出，它的生存期延长到末尾，不会在 return 前删除。
 
@@ -1551,7 +1591,7 @@ class MemoryPlanner:
                     seen.add(pool)
 ```
 
-### 五个顶层步骤及其两个内部子步骤不能交换
+#### 五个顶层步骤及其两个内部子步骤不能交换
 
 `MemoryPlanner.plan` 先复制 line 列表，随后固定执行：
 
@@ -1574,7 +1614,7 @@ range；首末使用最终依赖 allocation 已经指向具体 pool。
 在映射中的 allocate/free，并让原 ReuseLine 不删除旧名。`compute_live_ranges` 使用 K04
 的分段 timestep，末尾把 output 延长一个时刻。
 
-### 从 live range 到具体 pool
+#### 从 live range 到具体 pool
 
 `BufferGroup.make_allocation` 用 owning node 的 `storage_size * dtype.itemsize` 得到符号
 byte 数；`size_hint(...,fallback=64)` 只为排序和树的静态近似，`symbolic_size` 才进入
@@ -1598,7 +1638,7 @@ pool0 / G2: buf2,buf3，live [3,5)，is_output
 名字编号表达 finalize 顺序，不表达执行时创建顺序。运行代码仍在第一次使用 G1 时先
 创建 pool1；到第二次 mm 输出前才创建 pool0。
 
-### 第一次创建与最后一次销毁
+#### 第一次创建与最后一次销毁
 
 `mark_first_last_usage` 正向扫描 `AllocFromPoolLine`。某个 pool 首次出现时把该行的
 `is_first_pool_usage=True`；之后同 pool 的 allocation 不重复创建底层 storage。
@@ -1631,16 +1671,21 @@ pool1 在 G1 最后用户第二次 mm 之后删除；pool0 含输出，正文中
 对应销毁。这里实际观察到 group、首用创建、末用删除与 output 保活；两个 pool 都只有
 offset 0，非零 offset 仍由 K05 的源码推演支持。
 
-### removed、别名缓存和动态大小的条件对照
+#### removed、别名缓存和动态大小的条件对照
 
-- planning 完成前 buf0 被加入 removed：相关 Allocate/Free/Reuse line 先变 Null，group
-  和 pool 都不会为它保留幽灵容量。
+- planning 前 buf0 被加入 removed：`drop_removed_buffers` 只检查每条 planning line
+  自己的 `line.node.name`；命中的 Allocate/Free/Reuse line 变成 `NullLine`。它不会仅因
+  某个相关别名被 removed 就自动清掉所有行；剩余 Reuse 是否还能合组，仍取决于其 old
+  name 是否已存在于 group map。正常时间线必须保持这些名字关系一致。
 - 两个逻辑 tensor 得到完全相同的 `codegen_alloc_from_pool` 表达式：第二个使用
   `make_tensor_alias` 指向 creation cache 中的第一个名字；storage/view 不重复创建。
 - symbolic nbytes 无可靠 hint：排序使用 fallback 64，但 pool 的最终一维 uint8 长度和
   tensor offset 仍保留符号表达式；fallback 不是运行时分配容量。
+- 若异常时间线为一个 Allocate 建了 group，却没有任何成功转换后的 pool line 更新其
+  使用点，live range 仍是 `(inf,-inf)`；`make_allocation` 要求 begin 已是整数并会
+  断言失败，而不是替这个无使用 group 猜一段生存期。
 
-### K06 迁移题
+#### K06 迁移题
 
 若 pool1 再加入 G3，G3 的 dealloc line 比 G1 晚，那么反向扫描遇到 G1 的 dealloc 时
 即使 G1 自身结束，也可能因 pool aggregate end 更晚而不标记销毁；必须等 G3 对应的
@@ -1650,7 +1695,33 @@ pool，但 output 延长后的 live range仍会阻止同时段地址覆盖。
 
 至此，可以从一条 wrapper 时间线判断何时分配、何时释放、何时复用，以及 pool planner 怎样把多块逻辑 buffer 放入较大的 allocation pool。
 
-## 从新时间线判断一次复用是否安全
+## 共享出口：最终 lines 怎样成为 wrapper 代码和图输出
+
+两条 planner 都在生成期结束：默认路径原地替换 `self.lines[i]`，pool 路径返回转换后的
+line 列表并写回 `self.lines`。它们不直接返回用户 tensor，也不执行 allocation。
+`WrapperCodeGen._generate` 接住最终列表后，才按顺序消费各行：`WrapperLine` 调用
+`codegen`，其他普通代码行直接 `writeline`：
+
+```text
+默认 lines
+  -> AllocateLine / ReuseLine / FreeIfNotReusedLine / NullLine.codegen
+  -> empty_strided、alias/reinterpret、del 或无输出
+
+pool 路径中的主要 planning lines
+  -> AllocFromPoolLine / ReuseLine / DeallocFromPoolLine / NullLine.codegen
+  -> pool 创建、pool+byte_offset view、alias、满足条件时的 pool 销毁或无输出
+
+两条路径共同回到 _generate
+  -> 继续写普通 kernel 调用
+  -> 生成图输出所需的代码和 return
+  -> 得到完整 wrapper，而不是一份孤立的内存计划
+```
+
+这也闭合了本篇入口：Scheduler 的 `mark_run/free_buffers` 决定何时把 allocation、reuse
+和 free 记录进 wrapper，kernel codegen 另把调用写进同一时间线；planner 等完整时间线
+形成后重排行为；同一个 `_generate`
+再把最终 lines 与普通调用一起输出。默认 planner 的 LIFO 栈和 pool planner 的
+allocation tree 虽然内部算法不同，交出的都是这条统一 codegen 循环能够消费的 line。
 
 读到一段新 wrapper 时，先确定本次走哪条路径。默认 planner 按 free/allocate 顺序
 维护 LIFO 候选栈；pool planner 才先把已经确定的 inplace 名合并成 storage group，
@@ -1663,6 +1734,8 @@ kernel 观察的值。
 重叠；所以不能只因“写在 A、B 后面”便断言 offset 0 可用。allocation tree 会沿实际
 重叠 child 查找空间；若没有位置，再扩展最后 pool 或新建 pool。这正是从本篇机制判断
 新情况，而不是记住 `pool0`、`buf1=buf0` 两个产物名字。
+
+[下一篇：FX Graph Cache 怎样查找、编译并加载产物](../../04-cache-load/01-cache-source/README.md)
 
 
 

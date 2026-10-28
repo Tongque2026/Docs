@@ -2109,6 +2109,8 @@ def dynamic_reshape_indexer(cls, old_size, new_size):
 
 直接算法优先保留 old/new 中已经对齐的连续维组；例如 `[2,3,4]→[6,4]` 的尾维 4 可以直接对应。`[2,3]→[3,2]` 的右侧边界不对齐：新末维 2 小于旧末维 3，尝试再并入新维 3 后得到 6，又越过旧维 3，乐观配对失败。fallback 改成两步：`[2,3]←[6]` 与 `[6]←[3,2]`，两步都能以完整线性范围为边界，再由 `fuse_reindexing` 合成最终函数。
 
+这里的 `try/except` 只改用另一套坐标换算算法，没有保存和恢复 `ShapeEnv` 的步骤。下面的直接算法每配平一组维度，都会调用 `guard_equals`，要求两边的维长乘积相等；这个调用可能发现等式已经能静态确定，也可能留下 guard 或运行时断言。假如尾部一组已经留下约束，处理更靠前的一组时才抛出这里捕获的 `AssertionError` 或 `IndexError`，刚才的约束不会被这段函数撤销；fallback 仍通过同一个 `V.graph.sizevars` 调用 `guard_equals`。因此同一个 `ShapeEnv` 中可能同时保留乐观尝试前半段与 fallback 留下的约束。若 fallback 自己再次失败，异常会继续向调用者抛出；这段函数仍没有回滚先前约束。至于上层是否会丢弃整个 `GraphLowering`，不由这两个方法决定。
+
 ### 完整源码：从末维开始合并和拆分
 
 ```python

@@ -9,7 +9,7 @@ Q31 已经展示最终依赖图，本篇从实现重新建立它。输入是 Low
 - `ReadWrites` 保存一项工作的完整访问事实：`reads`、`writes`、不直接访问 buffer 的 `index_exprs`，以及解释索引符号所需的 `range_vars/var_ranges`。
 - `MemoryDep(name,index,...)` 表示按索引访问某个 buffer；`StarDep(name)` 只要求这个名字代表的整项结果已经完成；`WeakDep(reader_output,mutating_buf=...)` 只安排先后，不读取 `reader_output` 的数值。
 - `unmet_dependencies` 从完整 reads 开始，再删掉 graph input 和常量等调度开始前已经可用的名字。它回答的是“当前节点还要等哪些内部结果”，不是完整访问清单。
-- scheduler wrapper 把不同种类的 operation 接到统一调度接口。wrapper 不改变计算含义，只统一提供名字、输出、读写和 users 等信息。
+- scheduler wrapper 把不同种类的 operation 接到统一调度接口。它不改写底层 IR operation 保存的计算定义，而是在外层增加调度所需的输出、读写、users、顺序和生命周期状态。
 
 ## K01：operation 类型决定包装节点和读写来源
 
@@ -39,7 +39,7 @@ def create_scheduler_node(self, node: ir.Operation) -> BaseSchedulerNode:
 
 普通 `ComputedBuffer` 与 `TemplateBuffer` 共用 `SchedulerNode`，但初始化内部再分开读写来源：
 
-下面构造器收到的 `scheduler` 是当前全图 Scheduler，`node` 是 buf0 对应的 ComputedBuffer。`_init_from_node` 保存名字、输出和来源；随后从 node 取得 loop body，并生成本节点的 `ReadWrites`。本例结束时读集合含输入 x，写集合含 buf0。
+下面构造器收到的 `scheduler` 是当前全图 Scheduler，`node` 是 buf0 对应的 ComputedBuffer。`_init_from_node` 保存底层 node，为每项 IR 输出建立 `SchedulerBuffer`（其 `defining_op` 指回当前 wrapper），并初始化 `ancestors/last_usage/written` 等调度状态；名字仍由 node/output 的访问接口取得，并不是这里另存的同名字段。随后从 node 取得 loop body，并生成本节点的 `ReadWrites`。本例结束时读集合含输入 x，写集合含 buf0。
 
 ```python
 def __init__(
@@ -94,13 +94,24 @@ no-op 与 extern wrapper 的构造路径更短：二者都直接采用 operation
 
 ```python
 class ExternKernelSchedulerNode(BaseSchedulerNode):
-    def __init__(self, scheduler, node):
+    def __init__(self, scheduler: Scheduler, node: ir.Operation) -> None:
         super().__init__(scheduler)
         self._init_from_node(node)
         self.set_read_writes(node.get_read_writes())
 
+    def debug_str_extra(self) -> str:
+        return f"{self.get_name()}.node.kernel = {getattr(self.node, 'python_kernel_name', None)}"
+
+    def is_extern(self) -> bool:
+        return True
+
+    def has_side_effects(self) -> bool:
+        assert self.node is not None
+        return hasattr(self.node, "has_side_effects") and self.node.has_side_effects()
+
+
 class NopKernelSchedulerNode(BaseSchedulerNode):
-    def __init__(self, scheduler, node):
+    def __init__(self, scheduler: Scheduler, node: ir.Operation) -> None:
         super().__init__(scheduler)
         self._init_from_node(node)
         self.set_read_writes(node.get_read_writes())
@@ -290,20 +301,28 @@ slow path 依赖当前 `V.graph.sizevars` 来规范化索引。它必须在合�
 这些动作怎样变成最终依赖，由同一个记录器完成：
 
 ```python
-def load(self, name, index):
+def load(self, name: str, index: sympy.Expr) -> str:
     self._reads.add(MemoryDep(name, *self.canonicalize(index)))
+    return f"load({name}, {sympy_str(index)})"
 
-def load_seed(self, name, index):
+def load_seed(self, name: str, index: int):
     assert isinstance(index, int)
     return self.load(name, sympy.Integer(index))
 
-def store(self, name, index, value, mode=None):
-    self._writes.add(
-        MemoryDep(name, *self.canonicalize(index), mode=mode)
-    )
+def store(self, name: str, index: sympy.Expr, value: str, mode=None) -> str:
+    self._writes.add(MemoryDep(name, *self.canonicalize(index), mode=mode))
+    return f"store({name}, {sympy_str(index)}, {value}, {mode})"
 
-def bucketize(self, values, offsets_name, offsets_size, indexing_dtype, right):
+def bucketize(
+    self,
+    values,
+    offsets_name: str,
+    offsets_size: sympy.Expr,
+    indexing_dtype: torch.dtype,
+    right: bool,
+):
     self._reads.add(StarDep(offsets_name))
+    return f"bucketize({values}, {offsets_name}, {sympy_str(offsets_size)}, {indexing_dtype}, {right})"
 ```
 
 所以 `STORE(out,tmp1,mode="atomic_add")` 最终产生的 write 是 `MemoryDep(out,tmp1,...,mode="atomic_add")`；mode 不是只在调用途中出现。`LOAD_SEED(seed,index=4)` 先要求索引能转成 Python `int`，再产生常量位置的 `MemoryDep(seed,4,var_names=(),size=())`；若保存的表达式不能转成整数，fast path 在 `int(...)` 处失败。`BUCKETIZE(offsets,...)` 不建立某个具体位置的 MemoryDep，而是建立 `StarDep(offsets)`，要求整个边界数组已经可用。
@@ -417,7 +436,7 @@ K02 到此完成。下一知识点 K03 打开 `compute_dependencies` 的前半�
 
 ## K03/K04 共用源码：一次遍历同时建立 users、mutation 顺序和版本表
 
-`compute_dependencies` 是一个连续函数。进入源码前先固定普通两节点案例：`self.nodes=[op0,op1]`；op0 读 arg0_1 并写 buf0，op1 读 buf0 并写图输出 buf1；没有 alias、mutation 或 unbacked symbol。`name_to_users` 起初为每个输入/输出名准备空 DedupList，版本表为空。遍历 op0 时 arg0_1 增加 user op0；遍历 op1 时 buf0 增加 user op1；末尾 buf1 再增加虚拟 OUTPUT user。随后再把 alias 名设为共享同一列表，并用 K04 的 mutation 案例观察版本表与 weak user 怎样变化。
+`compute_dependencies` 是一个连续函数。进入源码前先固定普通两节点案例：`self.nodes=[op0,op1]`；op0 读 arg0_1 并写 buf0，op1 读 buf0 并写图输出 buf1；没有 alias、mutation 或 unbacked symbol。`name_to_users` 起初只是一个空 `defaultdict`，某个名字第一次被 alias 预处理、`add_user` 或最终复制访问时，才为它创建空 `DedupList`；版本表也为空。遍历 op0 时 arg0_1 增加 user op0；遍历 op1 时 buf0 增加 user op1；末尾 buf1 再增加虚拟 OUTPUT user。随后再用 alias 名共享同一列表，并用 K04 的 mutation 案例观察版本表与 weak user 怎样变化。
 
 ```python
 def compute_dependencies(self) -> None:
@@ -630,6 +649,10 @@ def compute_dependencies(self) -> None:
             buf.set_users(name_to_users[buf.get_name()].items)
 ```
 
+整个过程没有事务或回滚。`add_fake_dep()` 会立即替换节点的 `read_writes/unmet_dependencies`，mutation 分支会逐步更新 `mutation_renames` 与 `mutation_real_name`，输入 mutation 的末尾还会更新 `V.graph.mutated_inputs`。若后面的断言失败，当前函数没有撤销这些已经发生的修改。`name_to_users` 本身是局部表，通常要到最后的 `buf.set_users(...)` 才复制给输出 buffer；但这个最终循环若中途失败，也可能只有前几个 buffer 已经安装 users。
+
+内层 `rename()` 通过递归沿 `mutation_renames` 追到最新版本，没有另做环检测。正常构造的版本链应向更新的名字前进；若映射被破坏成环，这个 helper 不会给出一个合法出口，而会在递归中失败。
+
 ## K03：同一 storage 的名字必须看到同一份 users
 
 每个内部结果已有自己的 producer，例如 buf0 是 op0 的输出；本节不重新寻找 producer，而是反向记录“哪些节点会使用这个结果”。`NodeUser(node,can_inplace,is_weak)` 保存消费者节点、它是否可能原地复用该结果，以及这条关系是否只用于排序。`name_to_users[buffer_name]` 就是按结果名字查消费者的临时表，最后复制到对应 `SchedulerBuffer.users`。
@@ -721,7 +744,7 @@ StarDep 指向已可用 graph input，`set_read_writes` 会从 unmet 裁掉它�
 
 ### 为什么遍历时追加不会遗漏或重复
 
-mutation 先把 op1 追加到 alt_name 的 users，再遍历同一 `items`。列表语义允许遍历看见追加后的内容，代码以 `user.get_name()==node.get_name()` 跳过自身。对旧 readers 追加的 weak user 又可能落到别的 buffer 列表；DedupList 的 membership 避免同一关系重复加入。
+mutation 先把 op1 追加到 alt_name 的 users，再遍历同一 `items`。列表语义允许遍历看见追加后的内容，代码以 `user.get_name()==node.get_name()` 跳过自身。对旧 readers 追加的 weak user通常落到 reader 输出对应的列表；若 alias 让它恰好与当前正在遍历的列表是同一个对象，新条目也会被本次 Python list 迭代继续看到。它仍指向当前 mutator，随后由同一个自身检查跳过；`DedupList.membership` 又阻止相同 `NodeUser` 无限追加。
 
 ### 没有旧 reader时就没有 WeakDep
 

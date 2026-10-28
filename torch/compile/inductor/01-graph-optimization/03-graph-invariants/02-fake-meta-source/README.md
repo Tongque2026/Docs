@@ -8,6 +8,24 @@
 
 本叶子完整保留当前版本 `torch/_inductor/fx_utils.py` 中 `FakeTensorUpdater` 及其直接依赖的四个本地 helper：`get_storage`、`get_node_storage`、`get_fake`、`get_fake_args_kwargs`。源码顺序不变；新增说明统一以 `# 教学：` 开头。
 
+## fake 执行怎样得到新结果
+
+`V.fake_mode` 是当前这次编译已经安装的 `FakeTensorMode`。它是一种 `TorchDispatchMode`：进入 `with V.fake_mode` 时，mode 被放到当前线程的 dispatch mode 栈上。随后调用 `aten.add`，dispatcher 在选择 CPU/CUDA backend kernel 之前先把这次调用交给 mode。FakeTensorMode 根据 FakeTensor 参数调用对应的 fake/meta 实现，只计算输出的 shape、stride、device 等属性，再包装成新的 FakeTensor。这个路径没有真实元素可读，也不会进入 add 的 CPU/CUDA 数据计算 kernel。
+
+以 a 的新输入 c、d 为例：
+
+```text
+c.meta["val"] = FakeTensor(shape=[4,3], device=cuda)
+d.meta["val"] = FakeTensor(shape=[4,3], device=cuda)
+
+with V.fake_mode:
+    aten.add(c.fake, d.fake)
+        └─ dispatcher 由 FakeTensorMode 接管
+             └─ 返回 FakeTensor(shape=[4,3], device=cuda)
+```
+
+本篇后面所说的“fake dispatch”，就是这次被 FakeTensorMode 接住的 ATen 调用。updater 随后比较新 FakeTensor 与 a 原来的 `meta["val"]`。这里的“相同”只表示：当前比较器关心的属性足以让传播停止。它不是 FakeTensor 全部字段的完整相等关系；当前比较器没有检查 dtype，后文会用 add→eq 展示这个实现缺口。
+
 ## 先看实际实验中的一次变化怎样传播
 
 原图是：
@@ -30,24 +48,6 @@ c:[4,3]、d:[4,3] 起初未被 add 使用
 shape 不同，所以更新器写回 `a.meta["val"]`，把 relu 的 id 放入 `to_process`；遍历到 relu 时，即使它自己的 hash 未变，也会用新的 a.fake 重算并写回 `[4,3]`。实际 dispatch 顺序是 `aten.add.Tensor, aten.relu.default`。紧接着第二次调用 updater，没有任何结构或上游 meta 再变化，实际执行列表为空。
 
 这里传播的是 fake 属性变化，不是实际 tensor 数值变化。对照实验只把 target 从 add 改成 sub，shape、stride、device 与独占 storage 关系均保持等价：第一次只执行 sub，不执行 relu，传播在当前节点停止。由于没有写回，sub 的新 hash 也没有缓存；下一次调用 updater 时会再次执行 sub。
-
-## fake 执行怎样得到新结果
-
-`V.fake_mode` 是当前这次编译已经安装的 `FakeTensorMode`。它是一种 `TorchDispatchMode`：进入 `with V.fake_mode` 时，mode 被放到当前线程的 dispatch mode 栈上。随后调用 `aten.add`，dispatcher 在选择 CPU/CUDA backend kernel 之前先把这次调用交给 mode。FakeTensorMode 根据 FakeTensor 参数调用对应的 fake/meta 实现，只计算输出的 shape、stride、device 等属性，再包装成新的 FakeTensor。这个路径没有真实元素可读，也不会进入 add 的 CPU/CUDA 数据计算 kernel。
-
-以 a 的新输入 c、d 为例：
-
-```text
-c.meta["val"] = FakeTensor(shape=[4,3], device=cuda)
-d.meta["val"] = FakeTensor(shape=[4,3], device=cuda)
-
-with V.fake_mode:
-    aten.add(c.fake, d.fake)
-        └─ dispatcher 由 FakeTensorMode 接管
-             └─ 返回 FakeTensor(shape=[4,3], device=cuda)
-```
-
-updater 随后比较这份新 FakeTensor 与 a 原来的 `meta["val"]`。这里的“相同”只表示：当前比较器关心的属性足以让传播停止。它不是 FakeTensor 全部字段的完整相等关系；当前比较器没有检查 dtype，后文会用 add→eq 展示这个实现缺口。
 
 ## hash 只负责找出候选节点
 
@@ -97,7 +97,15 @@ kwargs = {"other": {"z": z.fake}}
 
 数据相关运算还可能产生 unbacked symbol：它的值不是某个输入维度，而要到运行时从该节点的结果中读取。假设节点旧结果是一份 shape `[u0,3]` 的 Tensor，`node.meta["unbacked_bindings"]` 保存的映射可以具体写成：
 
-先看两次处理在写回点两侧的位置：
+```text
+{
+    u0: (CallMethodKey("size"), SequenceKey(0))
+}
+
+沿路径读取：result.size()[0]
+```
+
+两次处理位于 `meta["val"]` 写回点的两侧：
 
 ```text
 新 fake 已判定不同
@@ -108,17 +116,13 @@ kwargs = {"other": {"z": z.fake}}
                  在新结果树中记录 u0 的新取值路径
 ```
 
-```text
-{
-    u0: (CallMethodKey("size"), SequenceKey(0))
-}
-
-沿路径读取：result.size()[0]
-```
-
 重新 fake 执行会新建符号 u1，但它仍出现在新结果的 `size()[0]`。`rebind_unbacked` 从旧 node meta 取出上面的映射，用 `key_get(new_result, path)` 得到 u1，再让 ShapeEnv 把 u1 重命名为旧符号 u0。随后 `compute_unbacked_bindings` 遍历新结果的 size、stride 和 storage_offset；返回非空映射时，updater 才覆盖 `node.meta["unbacked_bindings"]`。
 
 若结果是 tuple，路径会先进入 tuple 项。例如新符号位于 `result[1].size()[0]`，路径就是 `(SequenceKey(1), CallMethodKey("size"), SequenceKey(0))`。这样后续运行时断言仍知道从结果树的哪里取得 u0。`_maybe_evaluate_static` 只在 ShapeEnv 已有约束足以算出表达式时返回具体结论，否则保留符号而不猜值。
+
+这条重绑路径没有“找不到就跳过”的出口。旧路径在新结果中不存在时，`key_get` 会直接报错；路径取得的值若不是带符号表达式的对象，也会在读取 `.node.expr` 或后续断言处失败（`_tensor_version` 对具体整数有一条例外）。异常发生在 `node.meta["val"] = new_fake` 之前，所以节点仍保留旧 `val`；当前 updater 不捕获异常，也不会继续处理后续节点。
+
+下面保留的产品 docstring 把 argument lists 称为 “immutable in FX”。这里应按该实现依赖的使用约定理解：常规 FX 改写会给 `args/kwargs` 重新赋一个新容器。Python 仍允许在嵌套 list 上原地改元素；前面的反例已经展示这种修改不改变外层容器身份，当前 hash 会漏掉它。
 
 ```python
 class FakeTensorUpdater:
@@ -364,7 +368,7 @@ new_v.fake    ── storage C
 
 若旧结果与另一个节点共享 storage，第一项计数大于 1；重新执行后换成新 storage 就不能使用第二条豁免，因为 alias 关系已经改变。消费者可能依赖视图和修改语义，必须继续更新。
 
-`None` 也会进入 `existing_storages` 计数：缺 val、非 Tensor val、无 storage Tensor，以及 tuple/list val 的节点都会由 `get_node_storage` 记在 None 名下。这个初始计数 helper 有 `_has_storage` 防护；`is_fake_tensor_same` 的 Tensor 分支则直接调用 `get_storage(new/old)`，当前实现假定走到这里的新旧 FakeTensor 都具有 storage。
+`None` 也会进入 `existing_storages` 计数：缺 val、非 Tensor val、无 storage Tensor，以及 tuple/list val 的节点都会由 `get_node_storage` 记在 None 名下。这个初始计数 helper 有 `_has_storage` 防护；`is_fake_tensor_same` 的 Tensor 分支却直接调用 `get_storage(new/old)`。因此，无 storage Tensor 虽然能通过构造器的初始统计，却不能安全地走完 Tensor 比较：调用 `untyped_storage()` 时可能直接报错。这不是一个由 `None` 计数支持的比较分支，而是当前实现没有防护的输入边界。
 
 tuple/list 输出会逐项递归比较，但初始计数不会递归统计其中 Tensor 的 storage。假设一个节点旧 val 是 `(t0, t1)`，这个节点只给 `existing_storages[None]` 加一；t0、t1 的 storage 计数通常仍为 0。重算产生两份新的独占 storage 后，成员比较无法满足“旧 storage 计数等于 1”，于是保守地判为变化并传播。
 
@@ -387,7 +391,9 @@ unbacked binding 也有一个空结果出口：若旧 meta 含 `unbacked_binding
 
 device 比较位于 storage 豁免之前。设旧 a.fake 为 CPU `[4,3]`，重新 fake 执行得到 CUDA `[4,3]`；即使两者 shape、layout、stride、offset 都相同，新旧 device 仍不同。比较器立即返回 false，updater 写回 CUDA fake，并点名 a 的 users。独占新 storage 的豁免只处理“编号变了但共享关系未变”，不会掩盖 device 变化。
 
-同一轮遍历写回新 fake 后，`existing_storages` 只增加新 storage 的计数，没有扣减旧 storage。这会保守地保留旧共享记录：后面的节点可能因此无法使用“旧 storage 只出现一次”的豁免，从而多传播一次；它不会把已经共享的旧 storage误判为独占。比较函数本身对 Tensor 直接调用 `get_storage`，所以当前实现还假定进入 Tensor 比较分支的 fake 结果具有 storage；只有建立初始计数的 `get_node_storage` 会为无 storage Tensor 返回 None。
+同一轮遍历写回新 fake 后，`existing_storages` 只增加新 storage 的计数，没有扣减旧 storage。这会保守地保留旧共享记录：后面的节点可能因此无法使用“旧 storage 只出现一次”的豁免，从而多传播一次；它不会把已经共享的旧 storage 误判为独占。
+
+同一轮中若两个重算节点先后得到同一个新 storage，第一个节点写回后已经把该 storage 的计数加一。第二个节点比较时，“新 storage 从未出现”这一条件已经为假，所以它会判为变化并继续传播，而不会把两者新形成的共享关系当成两份互不相关的独占结果。这个判断只覆盖这里按节点统计的 Tensor 输出；tuple/list 内部 Tensor 没进入初始 storage 计数，仍按上一段所述保守传播。
 
 ## 用新情况检验理解
 

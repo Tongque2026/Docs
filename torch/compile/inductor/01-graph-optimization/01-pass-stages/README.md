@@ -25,7 +25,9 @@ Dynamo 图 ─> pre-grad ─> AOTAutograd 整理并在训练时加入反向
                                                          每张图运行 post-grad ─> Lowering
 ```
 
-pre-grad 能处理尚未整理的原始调用；joint 能在训练图拆开前同时查看前向和反向关系；post-grad 逐张处理最终要交给 Lowering 的图。每个入口都会按顺序调用一组 pass。这里的 pass 是“一轮检查图、在条件满足时修改节点和引用的程序”：具体 pass 决定找什么节点、怎样改，入口负责依次运行它们并整理改后的图。
+pre-grad 能处理尚未整理的原始调用；joint 能在训练图拆开前同时查看前向和反向关系；post-grad 逐张处理最终要交给 Lowering 的图。每个入口都会按顺序调用一组 pass。这里的 pass 是“一轮检查图、在条件满足时修改节点和引用的程序”：它可以是普通 Python 函数，也可以是 `PatternMatcherPass` 对象的 `apply` 方法。
+
+`PatternMatcherPass` 对象保存一组已经注册的局部改写规则。阶段入口拿到当前图后，调用其中一个对象的 `apply(graph)`；该对象在这张图中尝试自己保存的规则，命中时直接修改图，最后返回成功应用的 entry 数量。一个阶段可以调用多个这样的对象，也可以在它们前后运行其他普通 pass。因此，pre-grad、joint、post-grad 是三处阶段入口，`PatternMatcherPass` 是这些入口可以调用的一种具体改图对象。
 
 下面先走完 pre-grad 的一次实际改写。
 
@@ -70,7 +72,7 @@ a4 ─┘                                               ├> item1 [2,3] ─> us
 3. 新建 `unbind`。它产生包含五项结果的序列；五个 `getitem` 分别从序列中取得一项；
 4. 让每个 `useN` 改读对应的 `itemN`，然后删除五个已经无人使用的旧 ReLU 节点。
 
-寻找候选节点、检查 shape、`inplace`、路径关系和数量条件的部分称为 matcher；命中后执行上面四步的代码负责 replacement。pre-grad 入口依次运行包含这两部分的 pass，最后完成图的整理和检查。
+寻找候选节点、检查 shape、`inplace`、路径关系和数量条件的部分称为 matcher；命中后执行上面四步的代码负责 replacement。这个 batch ReLU pass 展示的是 matcher 与 replacement 的职责，不要求它一定由 `PatternMatcherPass` 类实现。pre-grad 入口依次运行这些具体 pass，最后完成图的整理和检查。
 
 这次 pre-grad 的输入和输出都是 FX `GraphModule`，但中间节点已经改变。它只改变图中的计算关系；Lowering、Scheduler 和 Codegen 随后才决定这些关系最终形成几个机器代码 kernel。
 
@@ -123,14 +125,19 @@ add_(x, 1)
 later = cos(v)
 
 AOTAutograd 处理后：
-v = aten.view(x, [-1])
-old = aten.sin(v)
-new = aten.add(x, 1)       # 普通计算，不在这里覆盖 x
-aten.copy_(x, new)         # 在原来的语义位置写回调用者的 x
-later = aten.cos(v)
+old_view = aten.view(x, [-1])
+old = aten.sin(old_view)
+new = aten.add(x, 1)             # 普通计算，不覆盖 x
+new_view = aten.view(new, [-1])
+later = aten.cos(new_view)        # 读取函数式的新值
+aten.copy_(x, new)                # 函数出口前兑现调用者可见的输入修改
 ```
 
-这个过程称为 functionalization。内部的新值计算采用函数式操作；Python 函数原本对调用者输入的修改则由显式 `copy_` 保留下来。因此，函数化后的图仍可包含这种对外可观察的写回。`copy_` 仍在 `sin(v)` 和 `cos(v)` 之间，v 仍与 x 共享存储，所以两次读取继续分别看到旧值和新值。
+这个过程称为 functionalization。图内不再让 `later` 依靠一次中途写回读取新值：
+`old_view` 继续引用旧 x，`new_view` 改为引用函数式计算得到的 `new`，所以 old 和 later
+分别读取修改前后的两个值版本。原 Python 函数还要求调用者最终看到 x 已更新，因此图在
+返回前用 `copy_(x,new)` 把新值写回输入 storage。图内值版本传播和函数出口兑现输入修改
+是两件工作。
 
 AOTAutograd 还把操作整理成 `aten.*` 调用。训练时，autograd 根据前向计算加入求梯度所需的节点，暂时形成一张同时含前向与反向工作的 joint graph；partition 随后把它拆成前向图和反向图。推理没有反向图，也不执行这次拆分。
 
@@ -195,6 +202,8 @@ joint graph 提供了 `exp` 与其反向使用者之间的完整关系。当前�
 ## post-grad 入口逐张处理最终交给 Lowering 的图
 
 `post_grad_passes` 每次收到一张已经函数化、使用 ATen 调用的图。训练时前向图和反向图分别调用一次；推理时只有一张图。这是进入 `GraphLowering` 前的最后一个通用 FX pass 入口。
+
+当前源码在 post-grad 模块中长期保存了多个 `PatternMatcherPass` 对象。注册代码把规则放入指定对象；运行到 post-grad 时，入口按顺序遍历这些对象并调用各自的 `apply(gm.graph)`。所以“一条规则在 post-grad 运行”的完整含义是：该规则注册在 post-grad 会调用的某个对象里，而 post-grad 把当前这张单图交给同一个对象执行。
 
 当前实现会在这里运行面向单图的清理和 pattern replacement。完成这些修改后，它整理节点顺序，并在末尾尝试把不会破坏其他读取结果的函数式操作改回原地形式；源码把这一步称为 reinplace。它放在末尾，因为这一步重新引入 mutation，前面的清理和匹配可以先处理没有原地写入的节点关系。本篇只解释它在流程中的位置；哪些读取关系允许 reinplace，由相应实现篇展开。
 

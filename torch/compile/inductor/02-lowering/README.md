@@ -6,7 +6,11 @@ Lowering 不是把高级算子简单换成低级算子名字。先看 `a=x+1; b=
 
 ## GraphLowering 怎样连接一张图
 
-图里 `b=relu(a)` 只保存了“b 的输入引用 a”。Lowering 必须在读到 b 时找到先前为 a 建立的计算方法。`GraphLowering` 用一个环境保存“FX node → 当前结果描述”，按拓扑顺序逐节点完成这次连接；它不会在编译时算出 eager Tensor 数值。
+图里 `b=relu(a)` 只保存了“b 的输入引用 a”。Lowering 必须在读到 b 时找到先前为 a
+建立的计算方法。`GraphLowering` 用一个环境保存“FX node → 当前结果描述”，按拓扑顺序
+逐节点完成这次连接；它不会在编译时算出 eager Tensor 数值。输入也不全是 Tensor：
+符号或 Python 标量会成为可继续参与 shape 计算的表达式，`None` 等值可以原样保留，
+模块属性中的常量和子图则由 `get_attr` 接入环境。
 
 ```text
 读到输入 x      → 环境记下：x 的 shape、dtype，以及怎样读取 x
@@ -36,17 +40,40 @@ Lowering 不是把高级算子简单换成低级算子名字。先看 `a=x+1; b=
 把结果放回表中，继续下一个 FX node
                              │
                              v
-             整理待执行工作、数据记录和返回值
-                             │
-                             v
-                         Scheduler
+               整理本图的两类出口
+                 │                 │
+                 v                 v
+       operations 交 Scheduler    inputs/constants/outputs/alias/mutation
+                                  留给 wrapper 与后续 codegen
 ```
 
-例如 add 先经过计算与索引得到位置规则，再由读图环境记成 a；mm 走特殊调用路径，但它需要存储安排先把参数变成可传入的真实张量；copy_ 由存储安排区分覆盖前后的数据版本，读图环境再记录输入已被修改。每个 FX 结果最终都变成后继节点能引用、Scheduler 能消费的 IR 或图级状态。
+例如 add 先经过计算与索引得到位置规则，再由读图环境记成 a；mm 走特殊调用路径，但
+它需要存储安排先把参数登记成有名字、有布局的 buffer，生成程序运行时才把对应张量传给
+mm；copy_ 由存储安排区分覆盖前后的数据版本，读图环境再记录输入已被修改。
+
+这里有两条不同的出口：每个 FX 结果先变成后继 FX 节点可引用的 IR、标量或图级状态；
+只有登记进 `operations` 的工作直接交给 Scheduler。共享输入 storage 的 view 可以留在
+`graph_outputs` 而不新增 operation；graph inputs、constants、alias 和 mutation 等状态
+还会由 output 收尾、wrapper 与后续 codegen 使用。
 
 ### 1. 读图并连接结果
 
-这里的“解释器”就是按 FX 节点顺序重复三个动作的 `GraphLowering`。FX 节点的 `target` 说明当前要调用谁：例如 `op="call_function", target=aten.add.Tensor, args=(x,y)` 表示用 x、y 调用 ATen 加法。`lowerings` 注册表把 target 映射到相应处理器；解释器从环境取出 args 指向的前驱结果，调用处理器，再把结果放回环境。对于 `a=x+y; b=relu(a)*2`，关系可以写成：
+这里的“解释器”按 FX 节点顺序分派不同 opcode：
+
+- `placeholder` 把 Tensor 登记为图输入；SymInt/SymFloat/SymBool 与 Python 标量转成
+  shape 计算可用的表达式；`None`、`BackwardState` 不伪装成普通 tensor input；
+- `get_attr` 取得模块属性：子 `GraphModule` 成为子图对象，0-D 或小型一维 Tensor 可
+  表示为常量/位置规则，其他 Tensor 常量登记成 `ConstantBuffer`；
+- `call_function` 可进入普通 lowering、容器 getitem、显式 passthrough 或 fallback；
+  缺处理器时还会按有无 decomposition 区分报错，处理器内部异常会带当前 target 包装成
+  `LoweringException`，并非所有未知调用都自动 fallback；
+- `output` 不只抄写返回列表：它让返回项成为可交付数据，处理 mutation 输入写回及
+  output/input 身份，并在 `finalize()` 中固定尚未确定的 buffer layout。
+
+对普通算子，FX 节点的 `target` 说明当前要调用谁：例如
+`op="call_function", target=aten.add.Tensor, args=(x,y)` 表示用 x、y 调用 ATen 加法。
+`lowerings` 注册表把 target 映射到相应处理器；解释器从环境取出 args 指向的前驱结果，
+调用处理器，再把结果放回环境。对于 `a=x+y; b=relu(a)*2`，关系可以写成：
 
 | 处理后 | FX 名字对应的内容 | 消费者 |
 | --- | --- | --- |
@@ -86,7 +113,9 @@ Reduction(ranges=[2], reduction_ranges=[128], type=sum)
 
 对 `a=x+1; b=a*2`，编译器起初可让 a 指向一条规则：“给定位置 i，读取 x[i] 再加 1”。处理 b 时把乘 2 接在这条规则后，于是同一循环可直接算 `(x[i]+1)*2`。
 
-若后面改成 `z=torch.mm(a,w)`，已有矩阵乘实现需要一份能作为参数传入的数据，不能接收一条 Python 位置规则。Lowering 此时给 a 登记有名字的结果 buffer，并保留产生它的计算：
+若后面改成 `z=torch.mm(a,w)`，已有矩阵乘实现需要一个已登记 storage 和 layout 的输入
+buffer，不能接收一条尚未执行的位置规则。Lowering 此时给 a 登记有名字的结果 buffer，
+并保留产生它的计算：
 
 ```text
 a 的结果引用
@@ -98,12 +127,18 @@ a 的结果引用
 
 独立实验把普通消费者和 mm 消费者分开观察，`operations` 的变化如下：
 
-| 请求处理到哪里 | a 当前是什么 | operations | 为什么此时变化 |
+表中的“读完 mul”快照为什么已经出现 `ComputedBuffer`，而不是等下一步读到 output？
+`GraphLowering.run_node` 在处理一个直接喂给 output 的节点后，会先按该输出的 stride
+要求固定布局；对仍是延迟规则的 tensor，这一步可触发 realize。因此实验在 mul 返回时
+已经看到 `buf0`。随后真正的 `output()` 还会统一实现返回项、处理输入 mutation/身份
+替换，并在 `finalize()` 中固定其余 buffer；两步不是重复登记两份输出。
+
+| 请求处理到哪里 | 此时追踪的具体结果 | operations | 为什么此时变化 |
 | --- | --- | --- | --- |
-| `(x+1)*2` 读完 add | 未物化的 Pointwise | `[]` | mul 可以继续组合位置规则 |
-| 同一请求读完 mul | `ComputedBuffer buf0` 中的最终 Pointwise | `[op0]` | mul 是图输出，需要稳定的返回结果 |
-| `(x+1)@weight` 读完 add | 未物化的 Pointwise | `[]` | 尚未遇到需要真实张量的消费者 |
-| 同一请求读完 mm | a 的生产 operation 加 mm operation | `[op0,op1]` | mm 必须接收真实张量，因此 a 被物化；mm 自身保留外部工作身份 |
+| `(x+1)*2` 读完 add | 中间值 a 是未物化的 Pointwise | `[]` | mul 可以继续组合位置规则 |
+| 同一请求读完 mul | 最终值 b 是 `ComputedBuffer buf0` 中的 Pointwise | `[op0]` | b 直接连接图输出，需成为稳定返回结果 |
+| `(x+1)@weight` 读完 add | 中间值 a 是未物化的 Pointwise | `[]` | 尚未遇到需要独立 buffer 的消费者 |
+| 同一请求读完 mm | a 已是 `ComputedBuffer buf0`；mm 结果是外部 operation 的 buffer | `[op0,op1]` | mm 运行时要接收张量，因此编译期先为 a 登记 buffer；mm 自身保留外部工作身份 |
 
 因此“FX add 已经处理完”并不等于“a 已经分配 buffer”。决定发生在消费者提出要求时；若消费者仍能组合规则，就可以继续延迟。
 
@@ -112,6 +147,10 @@ a 的结果引用
 ### 4. 接入普通循环以外的实现
 
 不是每个 FX target 都适合展开成 `Pointwise`。以 mm 为例，Lowering 可以比较“调用现成 ATen mm”和“把输入、输出 layout 及分块参数填入专用 kernel 模板”等候选，选中后留下已有调用记录或模板记录。histc 没有原生位置规则时，可保留“运行时调用 aten.histc”的 fallback 记录。`cond`、`while_loop` 则分别编译子图，并在父图保留运行时选择或循环。
+
+这不是 HigherOrderOperator 的完整清单。当前 Lowering 还为 Triton kernel wrapper、
+associative scan、effect token 等高阶请求提供专门入口；本层用已有实验的 cond/while
+说明“子图怎样接入父图”，不把它推广成所有高阶算子的统一内部算法。
 
 这些结果仍须向 Scheduler 说明输入、输出、device、布局和依赖，但内部计算不一定由同一套逐元素 ops 生成。
 
@@ -125,7 +164,7 @@ a 的结果引用
 
 `ExternKernelOut` 是本次 CPU 配置对 mm 的实际选择；其他设备和配置也可能交出模板候选。候选怎样形成、选择失败怎样退出，见[特殊调用](04-special-calls/README.md)。
 
-## 四条路径怎样在 Lowering 内完整交接
+## 四个代表请求怎样在 Lowering 内完整交接
 
 下面沿四个请求追踪这些职责怎样交接。
 
@@ -153,7 +192,16 @@ old 本来就是 post-grad 图的输出，因此已经物化；除此之外，Lo
 - `torch.histc([0.5,1.5,1.8,3.2], bins=4, min=0, max=4)` 没有变成 Pointwise。读图从 FX 节点取得输入和常数参数，特殊调用保留 `aten.histc.default` 的 operator 身份、参数结构和 packed 返回，建立 `FallbackKernel buf0`；该 Tensor 输出再由 `MultiOutput buf1` 引用。读图把 buf1 交给 output，Scheduler 因而看见一次有输入、有输出的外部工作。结果为 `[1,2,0,1]`。
 - `torch.cond(pred, true_fn, false_fn, [x])` 中，读图取得 predicate、两个子 GraphModule 和 operands；特殊调用分别建立子 GraphLowering，true 分支的 `x+1` 与 false 分支的 `x-1` 各自形成子图出口，并检查 size/stride/device/dtype/offset 能否统一。父图登记 `Conditional buf0`，用 `MultiOutput buf1` 代表统一结果，再由读图连接父图后继或 output。输入 x=`[2,4]` 时，pred 真得到 `[3,5]`，假得到 `[1,3]`；Lowering 编译两支接口，不等于运行时同时执行两支。
 
-若 cond 两支的输出数量、size、stride、device、dtype 或 offset 任一不一致，特殊调用就无法为父图建立一套统一的 MultiOutput，路径在 Lowering 明确失败；分支输出存在不支持的共享存储关系也会拒绝。Scheduler 不会等到运行时 predicate 已知后再猜接口。若 fallback schema 表明算子会修改输入，而且不能自动改写成函数式形式，`FallbackKernel` 会抛出 `NotImplementedError`，而不是把它当成没有副作用的外部函数。
+若 cond 两支的输出数量、size、stride、device、dtype 或 offset 任一不一致，特殊调用就
+无法为父图建立一套统一的 MultiOutput，路径在 Lowering 明确失败。当前实现也明确不支持
+这类输出 alias；现有源码检查和测试能直接证明 true 分支 alias、以及两支都 alias 时的
+失败，不能据此断言 false-only alias 必然由同一处检查拒绝。Scheduler 不会等到运行时
+predicate 已知后再猜接口。
+
+mutable fallback 也不是一律失败。当前实现先接受“原地修改并返回第一个参数”的部分
+ATen 算子，并登记 mutation 名字；collective 等还有更早的专门出口。只有没有落入这些
+受支持特例、又不能自动改写成函数式形式的 mutable operator，`FallbackKernel` 才抛出
+`NotImplementedError`，而不是把它当成无副作用的外部函数。
 
 这三条路径的共同出口仍是“有名字的 operation、输入引用、输出引用和明确的接口要求”。差别在于普通 mm 保留算法选择结果，fallback 保留任意已注册 operator 的调用结构，cond 还保留两张子图及统一的多输出形式。
 
@@ -171,15 +219,20 @@ old 本来就是 post-grad 图的输出，因此已经物化；除此之外，Lo
 | sum | `ComputedBuffer buf0 [3]` | `[buf0]` | 计算与索引建立规约；作为 mm 参数和最终输出，存储安排给它稳定身份 |
 | unsqueeze | buf0 上的 `ReinterpretView [1,3]` | `[buf0]` | 只改变 mm 看见的逻辑形状 |
 | mm | `ExternKernelOut buf1 [1,2]` | `[buf0,buf1]` | 特殊调用保留已有调用及其输出 |
-| output | graph outputs 为 buf0、buf1 | `[buf0,buf1]` | 读图整理双输出，交 Scheduler |
+| output | graph outputs 为 buf0、buf1 | `[buf0,buf1]` | 双输出留给 wrapper/codegen；两项已登记 operation 交 Scheduler |
 
-这个表把四项职责接在同一份状态上：读图负责结果引用不断档，计算与索引提供 view/pointwise/reduction 的计算内容，存储安排根据后继的实际需要决定共享还是物化，特殊调用建立 mm 外部工作。若删去“返回 rows”但保留 mm，buf0 仍然需要，因为 mm 必须取得真实输入；若删去 mm 但仍返回 rows，buf0 仍因图输出身份而需要；两种消费者都删去后，不能沿用这个理由断言仍有同样的 operation，必须重新看新的后继和 output。
+这个表把四项职责接在同一份状态上：读图负责结果引用不断档，计算与索引提供
+view/pointwise/reduction 的计算内容，存储安排根据后继的实际需要决定共享还是物化，
+特殊调用建立 mm 外部工作。若删去“返回 rows”但保留 mm，buf0 仍然需要，因为 mm
+需要一个已登记 layout 和 storage、能在运行时作为张量参数传入的 buffer；若删去 mm
+但仍返回 rows，buf0 仍因图输出身份而需要；两种消费者都删去后，不能沿用这个理由
+断言仍有同样的 operation，必须重新看新的后继和 output。
 
 ## 本层出口
 
 Lowering 完成后，关键产物不是一张新的 FX 图，而是：
 
-- `operations`：已物化、需要调度的 IR 操作；
+- `operations`：已经登记、运行时需要产生数据或发起调用的 IR operation；
 - buffers / graph inputs / constants：计算读写的存储身份；
 - graph outputs：返回值及其布局、alias 关系；
 - 图级状态：mutation、device、symbolic sizes、外部调用等信息。

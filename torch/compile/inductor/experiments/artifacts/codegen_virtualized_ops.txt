@@ -19,7 +19,7 @@ def op0(self, ops):
 [pointwise] replay=1 node=op0 ops.constant args=(2.0, torch.float32) kwargs={} -> tmp4
 [pointwise] replay=1 node=op0 ops.mul args=(CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x0}), CppCSEVariable(name: tmp4, bounds: VR[2.00000000000000, 2.000000... kwargs={} -> tmp5
 [pointwise] replay=1 node=op0 ops.store args=('buf0', x0, CppCSEVariable(name: tmp5, bounds: VR[-oo, oo], is_vec: False, dtype: torch.float32, dependent_itervars: {x0}), None) kwargs={} -> None
-[pointwise] module_load cache_key=csr57ajdsns7u44szx66r777mlerfl5lsanszmxnojtlshk5hdpl cache_path=/tmp/torchinductor_root/tmpju70wjuu/sr/csr57ajdsns7u44szx66r777mlerfl5lsanszmxnojtlshk5hdpl.py module_file=/tmp/torchinductor_root/tmpju70wjuu/sr/csr57ajdsns7u44szx66r777mlerfl5lsanszmxnojtlshk5hdpl.py callable=call
+[pointwise] module_load cache_key=ced2sdmvjrnhzycoswuscdjij4cmfs2v6g7yd5hahqppeaxawop5 cache_path=/tmp/torchinductor_root/tmpzkpanse2/ed/ced2sdmvjrnhzycoswuscdjij4cmfs2v6g7yd5hahqppeaxawop5.py module_file=/tmp/torchinductor_root/tmpzkpanse2/ed/ced2sdmvjrnhzycoswuscdjij4cmfs2v6g7yd5hahqppeaxawop5.py callable=call
 [reduction] scheduler_node.codegen node=op0 index_vars=([x0], [x1])
 [reduction] loop_body_graph node=op0:
 def op0(self, ops):
@@ -68,6 +68,6 @@ def op0(self, ops):
 [reduction] replay=4 node=op0 ops.add args=(CppCSEVariable(name: tmp0, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x1, x0}), CppCSEVariable(name: tmp1, bounds: VR[1.00000000000000, 1.000... kwargs={} -> tmp3
 [reduction] replay=4 node=op0 ops.reduction args=(torch.float32, torch.float32, 'sum', CppCSEVariable(name: tmp3, bounds: VR[-oo, oo], is_vec: True, dtype: torch.float32, dependent_itervars: {x1, x0})) kwargs={} -> tmp_acc0
 [reduction] replay=4 node=op0 ops.store_reduction args=('buf0', x0, CppCSEVariable(name: tmp_acc0, bounds: VR[-oo, oo], is_vec: False, dtype: None, dependent_itervars: set())) kwargs={} -> None
-[reduction] module_load cache_key=czssqrjmk4txrjlijpzg5qinaniutakoquaqmat4wpta6jzcyh6n cache_path=/tmp/torchinductor_root/tmp359c143v/zs/czssqrjmk4txrjlijpzg5qinaniutakoquaqmat4wpta6jzcyh6n.py module_file=/tmp/torchinductor_root/tmp359c143v/zs/czssqrjmk4txrjlijpzg5qinaniutakoquaqmat4wpta6jzcyh6n.py callable=call
+[reduction] module_load cache_key=cpeaevjbzzovynk5zplsm7ih4z34nsueojdslvycv35r6gus3lw7 cache_path=/tmp/torchinductor_root/tmp_1yu4zhh/pe/cpeaevjbzzovynk5zplsm7ih4z34nsueojdslvycv35r6gus3lw7.py module_file=/tmp/torchinductor_root/tmp_1yu4zhh/pe/cpeaevjbzzovynk5zplsm7ih4z34nsueojdslvycv35r6gus3lw7.py callable=call
 pointwise_result=[0.0, 10.0, 4.0]
 reduction_result=[8256.0, 24640.0]

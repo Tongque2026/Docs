@@ -22,9 +22,11 @@ def save_graph(label):
 
 
 def fn(x):
-    old = torch.sin(x)
+    v = x.view(-1)
+    old = torch.sin(v)
     x.add_(1)
-    return old, x
+    later = torch.cos(v)
+    return old, later, x
 
 
 def leaf(name):
@@ -185,9 +187,12 @@ with config.patch(
         "post_grad_custom_post_pass": save_graph("post"),
     }
 ):
-    actual_old, actual_x = torch.compile(fn, backend="inductor", fullgraph=True)(x)
+    actual_old, actual_later, actual_x = torch.compile(
+        fn, backend="inductor", fullgraph=True
+    )(x)
 
 torch.testing.assert_close(actual_old, torch.sin(torch.tensor([0.0, 1.0, 2.0])))
+torch.testing.assert_close(actual_later, torch.cos(torch.tensor([1.0, 2.0, 3.0])))
 torch.testing.assert_close(actual_x, torch.tensor([1.0, 2.0, 3.0]))
 
 recursive_lines = capture_recursive_entries()
@@ -199,6 +204,7 @@ text = "\n".join(
             for label in ("pre", "joint", "post")
         ),
         f"old={actual_old.tolist()}",
+        f"later={actual_later.tolist()}",
         f"caller_x={x.tolist()}",
         "===== RECURSIVE WRAPPERS =====",
         *recursive_lines,

@@ -27,7 +27,7 @@ async_compile = AsyncCompile()
 
 
 cpp_fused_relu_0 = async_compile.cpp_pybinding(['float*'], '''
-#include "/tmp/torchinductor_root/tmpotvt3ghz/vu/cvuvp4i7roujum4xemrfwnb3t4c5t3r3mihr4b7iegh6tcqvdg43.h"
+#include "/tmp/torchinductor_root/tmpos4wpcz8/vu/cvuvp4i7roujum4xemrfwnb3t4c5t3r3mihr4b7iegh6tcqvdg43.h"
 extern "C"  void kernel(float* in_out_ptr0)
 {
     {
@@ -43,7 +43,7 @@ extern "C"  void kernel(float* in_out_ptr0)
 
 
 cpp_fused_sin_1 = async_compile.cpp_pybinding(['float*'], '''
-#include "/tmp/torchinductor_root/tmpotvt3ghz/vu/cvuvp4i7roujum4xemrfwnb3t4c5t3r3mihr4b7iegh6tcqvdg43.h"
+#include "/tmp/torchinductor_root/tmpos4wpcz8/vu/cvuvp4i7roujum4xemrfwnb3t4c5t3r3mihr4b7iegh6tcqvdg43.h"
 extern "C"  void kernel(float* in_out_ptr0)
 {
     {

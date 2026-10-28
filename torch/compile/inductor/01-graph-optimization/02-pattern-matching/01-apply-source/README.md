@@ -2,7 +2,10 @@
 
 [返回 Pattern Matcher](../README.md) · [返回图优化](../../README.md) · [返回总览](../../../README.md)
 
-Q12 已经展示一条模式如何从 `(x+y)*2` 识别出 add 与 mul。本叶子打开它的调度入口：一张图可能有很多节点、同一末端也可能注册多条规则，`PatternMatcherPass.apply` 怎样只取可能的锚点，按什么顺序尝试，以及在哪些门前退出？
+Q12 已经建立了完整对象关系：规则以 `PatternEntry` 保存，注册进某个
+`PatternMatcherPass.patterns` 表；阶段代码对同一个对象调用 `apply`，图被原地修改，
+返回值是应用次数。本叶子继续打开 `apply` 的内部循环：一张图可能有很多节点、同一
+末端也可能注册多条规则，它怎样只取可能的锚点，按什么顺序尝试，以及在哪些门前退出？
 
 本篇完整讲解当前 `/work/pytorch/torch/_inductor/pattern_matcher.py` 中 `PatternMatcherPass` 从 `__init__` 到 `apply` 返回的连续范围。规则内部怎样匹配由 Q12 建立；replacement graph 怎样嵌入原图留给下一叶子 Q122。正常返回时，本篇为每个通过全部门禁且 `entry.apply(...)` 正常结束的 entry 返回一次计数；异常边界在后文单独说明。
 
@@ -15,9 +18,15 @@ pattern: mul(add(x, y), 2)
 锚点键: ("call_function", aten.mul.Tensor)
 ```
 
-注册表把这个键映射到一个 entry 列表。应用 pass 时无须拿每条规则与所有 FX 节点比较；先用 FX graph 的索引找到所有 mul 候选，再由 pattern 从锚点向输入追踪 add、x、y 和常数 2。
+注册表把这个键映射到一个 entry 列表。FX `Graph` 自己维护一张按 `op/target` 查询节点的
+表：插入或删除节点时这张表也随之更新，`find_nodes(op=..., target=..., sort=False)` 从中
+返回符合条件的一组节点。应用 pass 时无须拿每条规则与所有 FX 节点比较；先取得所有 mul
+候选，再由 pattern 从锚点向输入追踪 add、x、y 和常数 2。这里的“索引”指这张查询表，
+不是 tensor 下标，也不表示返回结果已经按图顺序排列。
 
-entry 不是由 `apply` 创建的。注册时，`PatternEntry.register` 从 pattern 取得外层节点的 `op` 和可接受的 target，然后操作 `PatternMatcherPass.__getitem__` 返回的列表。主例可简化为：
+entry 不是由 `apply` 创建的。注册时，`PatternEntry.register` 从 pattern 取得外层节点的
+`op` 和可接受的 target，然后操作 `PatternMatcherPass.__getitem__` 返回的列表。这个列表
+就是 `matcher.patterns[key]` 中保存的同一对象，不是副本。主例可简化为：
 
 ```python
 key = (entry.pattern.op, aten.mul.Tensor)
@@ -34,9 +43,20 @@ matcher[key].append(entry)
 
 同一 key 后注册的 entry 继续追加到该列表末尾；设置 `prepend=True` 的注册入口则插到开头。于是 `apply` 看到的 entry 顺序已经由注册过程确定。
 
+主例的根 `CallFunction` 只接受 `aten.mul.Tensor`，所以只登记一个 key。如果一个根 pattern
+声明了多个可接受 target，`register` 会依次把同一个 entry 登记到每个 target 对应的 key；
+这会增加候选 bucket，但不会复制 entry 对象。
+
 ## 声明范围的完整源码
 
-先给类型标注和主案例具体值：`Optional[str]` 表示 pass_name 可以是字符串或 `None`，本例取 `"tutorial"`；`DefaultDict[(op,target), List[PatternEntry]]` 是注册表，本例只有键 `("call_function", aten.mul.Tensor)`，值为一条规则；`gm` 是含 x、y、add、mul、output 的 `GraphModule`。`apply` 用键找到 mul 节点，再把该节点交给列表中的 entry；正常完成时 `count` 从 0 变 1，最终返回 1。中间的 `GraphTransformObserver` 只是观察这个 pass 前后哪些节点被增加或删除，并把记录交给图变换日志；它不替 matcher 改图，也不改变 `count`。
+先给类型标注和主案例具体值：`Optional[str]` 表示 pass_name 可以是字符串或 `None`，本例取
+`"tutorial"`；注册表的键是 `(op,target)`，值是 `List[PatternEntry]`，本例只有键
+`("call_function", aten.mul.Tensor)`，值为一条规则；`gm` 是含 x、y、add、mul、output 的
+`GraphModule`。后文局部变量 `nodes` 则是“多个候选集合组成的列表”，不是注册表，也不是
+已经摊平的 Node 列表。`apply` 用键找到 mul 节点，再把该节点交给列表中的 entry；正常
+完成时 `count` 从 0 变 1，最终返回 1。中间的 `GraphTransformObserver` 只是观察这个 pass
+前后哪些节点被增加或删除，并把记录交给图变换日志；它不替 matcher 改图，也不改变
+`count`。
 
 下面保留 `__init__`、`__getitem__`、`apply` 的全部产品语句和原顺序。仅 `# 教学：` 注释由本教程加入；产品注释原样保留。
 
@@ -183,7 +203,12 @@ nodes = [
 ]
 ```
 
-这里花括号只表示 `find_nodes(..., sort=False)` 返回的索引集合，不承诺集合内部已有图顺序。`chain.from_iterable(nodes)` 摊平成 `mul_0, mul_1, neg_0` 这样的节点流；最后一次 `sorted(..., reverse=True)` 使用每个 FX Node 随图中位置维护的排序键，统一得到从图尾到图头的顺序。不同普通 key 精确限制了不同的 `(op,target)`，而所有 call_module key 只追加一份“全部 call_module”集合，所以本构造不会因为多个注册 key 重复加入同一个候选节点。
+这里花括号只表示 `find_nodes(..., sort=False)` 返回的索引集合，不承诺集合内部已有图顺序。
+`chain.from_iterable(nodes)` 摊平成 `mul_0, mul_1, neg_0` 这样的节点流；最后一次
+`sorted(..., reverse=True)` 比较 FX Node 的 `_sort_key`。节点被插入双向链表中的某个位置
+时，FX 同步计算这个位置的排序键，因此统一排序得到从图尾到图头的顺序。不同普通 key
+精确限制了不同的 `(op,target)`，而所有 call_module key 只追加一份“全部 call_module”
+集合，所以本构造不会因为多个注册 key 重复加入同一个候选节点。
 
 例如整张图的确定顺序是：
 
@@ -211,7 +236,7 @@ mul_1 → neg_0 → mul_0
 | 4 | `entry.pattern.match(mul)` | 得到含 `add,mul` 的 Match，捕获 x、y |
 | 5 | mutation region 集合 | `{0}`，大小为 1 |
 | 6 | `extra_check` | x 的 fake dtype 为 float32，返回 true |
-| 7 | 应用与计数 | replacement entry 执行，`count=1` |
+| 7 | 应用与计数 | entry 原地改图并返回 `None`，外层不读取其返回值；`count=1` |
 
 把所有短路放到一条线上：
 

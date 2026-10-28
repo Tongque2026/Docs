@@ -1,6 +1,6 @@
 # 从 `torch.compile` 的图到可调用函数：Inductor 总览
 
-> 源码基线：`/work/pytorch`，commit `8332c5622aabd9535969e9a8d0ed60e4a90e4402`。本文只依据该工作区当前源码、相关测试与本教程的独立实验。
+> 源码基线：`/work/pytorch`，commit `2fe68cd930f39cd52d5045976a22b28e4865147e`。本文只依据该工作区当前源码、相关测试与本教程的独立实验。
 
 你已经知道 `torch.compile` 会捕获图，但要读懂 Inductor，先要看清“图”里究竟保存了什么。以贯穿案例为例：
 
@@ -23,9 +23,27 @@ def fn(x, y):
 
 FX 是 PyTorch 保存这类计算关系的一种表示。每个 FX node 记录一项输入、操作或返回；边由“后一步引用前一步的结果”形成。`GraphModule` 把这张图、相关模块属性和可执行的 `forward` 组织在一起。比如把 relu 的输入从 `a` 改成 `x`，就不再计算 `relu(x+y)`，而是计算 `relu(x)`；一条边连向谁，直接决定程序算什么。
 
-现在才进入四个组件。先不记内部类名，只看同一份计算关系每一步多了什么。
+现在才进入四个组件。先不记内部类名，只看计算关系经过每一步会发生什么。
 
-对上面的三个算术操作，本例的图优化没有替换节点，交给 Lowering 的 FX 图仍记录“先加、再 relu、最后乘 2”。Lowering 会把它补成一条可以代入位置的规则：
+先看图优化确实改动节点和引用时发生什么。本教程的独立规则把
+`mul(add(x,y),2)` 改写成 `add(mul(x,2),mul(y,2))`：
+
+```text
+改写前：x,y → add(a) → mul(a,2)(b) → output(b)
+
+改写后：x → mul(m0) ─┐
+                       ├→ add(d) → output(d)
+          y → mul(m1) ─┘
+```
+
+规则建立三个新节点，让 output 从读取 `b` 改为读取 `d`，再删除已经没有使用者的旧
+`mul` 和旧 `add`。独立实验固定 `x=[1,2,3]`、`y=[10,20,30]`，改写前后都得到
+`[22,44,66]`；它没有证明这项分配律对所有浮点输入都逐位等价，因此这是一条用于观察
+机制的教学规则，不是产品可以无条件采用的规则。交给 Lowering 的节点和边已经改变。
+具体的查找、重接和删除留到图优化篇。
+
+贯穿全文的 `add→relu→mul` 案例在当前配置下没有发生这类替换，交给 Lowering 的 FX
+图仍记录“先加、再 relu、最后乘 2”。Lowering 会把它补成一条可以代入位置的规则：
 
 ```text
 给定输出位置 i
@@ -35,7 +53,9 @@ FX 是 PyTorch 保存这类计算关系的一种表示。每个 FX node 记录�
   写到输出位置 i
 ```
 
-这份“有哪些输入、输出范围多大、每个位置怎样计算”的编译器记录，后文称为 Inductor IR。对本例，它至少让后一步知道：读取 x、y，写一份输出，位置 i 从 0 到 2。
+这份“有哪些输入、输出范围多大、每个位置怎样计算”的编译器记录，后文称为 Inductor
+IR。若取后文使用的三元素输入 `x=[-2,1,3]`、`y=[1,4,-1]`，它至少让后一步知道：
+读取 x、y，写一份输出，位置 i 从 0 到 2。
 
 Scheduler 再把这项工作包装成一条待生成记录，可以先把它想成：
 
@@ -47,7 +67,7 @@ Scheduler 再把这项工作包装成一条待生成记录，可以先把它想�
 必须排在谁后面：没有其他计算
 ```
 
-这样的记录后文称为 scheduler node。Scheduler 会比较多条记录之间谁读谁写、谁必须先执行，以及能否放进同一个循环。后文把这种“多项工作合成一个生成单元”称为 fusion（融合）。本例从 Lowering 得到的是一条已经组合好的位置规则，Scheduler 将它作为一个生成单元，最终产生下面这一类循环：
+这样的记录后文称为 scheduler node。Scheduler 会比较多条记录之间谁读谁写、谁必须先执行，以及能否放进同一个循环。后文把这种“多项工作合成一个生成单元”称为 fusion（融合）。本例从 Lowering 得到的是一条已经组合好的位置规则，Scheduler 将它作为一个生成单元并调用 CPU 后端；CPU 后端的 Codegen 工作据此写出下面这一类循环：
 
 ```cpp
 for (int64_t i = 0; i < 3; i++) {
@@ -70,9 +90,9 @@ torch.compile 前半段交来一张 FX GraphModule
                  │  怎样计算、读写哪份数据、是否要调用已有函数
                  ▼
 3. Scheduler：比较各项工作的读写，安排先后并决定哪些放进同一生成单元
-                 │  已排好次序和分组的工作记录
+                 │  形成最终节点序列，并按序调用后端与 wrapper 的生成接口
                  ▼
-4. Codegen：生成设备或 CPU 执行代码；外围函数准备内存、调用并返回
+4. Codegen：后端与 wrapper 根据这些调用写出设备/CPU 代码和外围函数
                  │
                  ▼
 一个可调用的编译结果
@@ -97,9 +117,14 @@ torch.compile 前半段交来一张 FX GraphModule
 | Scheduler 前 | 各项待执行工作已经形成，但还没有比较它们的读写关系 | 谁必须先执行；哪些工作放在同一个生成单元；每份数据最后由谁读取 |
 | Codegen 前 | 工作已经排好顺序和分组，但还不是机器能执行的程序 | CPU/CUDA 等目标代码，以及检查输入、准备内存、调用和返回的外围代码 |
 
-图优化本身还会在编译流程的三个位置运行。AOTAutograd 之前称为 pre-grad；训练时前向和反向仍在一张图里时称为 joint；拆成独立的前向图或反向图以后、进入 Lowering 前称为 post-grad。
+图优化本身还会在编译流程的三个位置运行。AOTAutograd 之前称为 pre-grad；
+AOTAutograd 层处理的图上称为 joint——训练时它在 partition 前处理仍含前向与反向关系的
+joint graph，推理编译路径也会运行 joint passes，但此时没有反向图；某一张推理图、
+forward 图或 backward 图即将单独进入 Lowering 前称为 post-grad。
 
-FX Graph Cache 位于单图编译主干之外。它保存某张单图从 post-grad 往后的编译结果；命中后可以恢复已有结果，不再重做这张图的 post-grad、Lowering、Scheduler 和 Codegen。
+FX Graph Cache 是单图编译主干中的一道门，位于 `post-grad` 之前。它保存某张单图从
+post-grad 往后的编译结果；命中后可以恢复已有结果，不再重做这张图的 post-grad、
+Lowering、Scheduler 和 Codegen。
 
 如果某一步已经不缺对应信息，它可以不产生新工作。例如纯转置可能只保留共享视图，没有独立转置 kernel。
 
@@ -119,13 +144,22 @@ compile_fx
             └─ miss / bypass：fx_codegen_and_compile
                  ├─ post_grad_passes
                  ├─ GraphLowering(...).run(...)
-                 └─ GraphLowering.codegen()
-                      ├─ Scheduler(self.operations)
-                      ├─ Scheduler.codegen()
-                      └─ wrapper_code.generate(...) → 编译/加载 callable
+                 └─ graph.compile_to_fn()
+                      ├─ compile_to_module() / _compile_to_module()
+                      │    ├─ GraphLowering.codegen()
+                      │    │    ├─ Scheduler(self.operations)
+                      │    │    ├─ Scheduler.codegen()
+                      │    │    └─ wrapper_code.generate(...) → wrapper Python 源码
+                      │    └─ PyCodeCache.write/load → Python module
+                      └─ 从返回的 module 取得 module.call
 ```
 
-`compile_fx` 并不是只收一张最初的 Dynamo 图然后直线走到底。训练时 AOTAutograd 会准备前向与反向图；动态形状也会增加符号尺寸和输入条件。普通 `torch.compile` 在当前 Python 进程中交回可调用函数；AOT 编译则预先生成可保存、可独立部署的源码、输入输出信息和加载入口。本篇先抓住每一张交给 `_compile_fx_inner` 的单图共有的主干。
+`compile_fx` 并不是只收一张最初的 Dynamo 图然后直线走到底。训练时 AOTAutograd 会在
+这次编译过程中准备前向与反向图；它解决自动求导图的形成与切分，不等于
+AOTInductor。普通 `torch.compile` 最终在当前 Python 进程中交回 callable；另一条
+`compile_fx_aot` 路径设置 `aot_mode=True`，由 AOTInductor 生成部署产物，并直接返回
+已编译文件的路径。动态形状还会增加符号尺寸和输入条件。本篇先抓住每一张交给
+`_compile_fx_inner` 的单图共有主干。
 
 ## 一个逐元素案例走完四个阶段
 
@@ -171,7 +205,11 @@ def value_at(i):
 
 ### Scheduler 交出什么
 
-`GraphLowering.codegen()` 用 `self.operations` 创建 `Scheduler`。本例只有一项产生最终输出的工作，因此没有跨工作项的先后冲突；Scheduler 把它交成一个 CPU 调度工作项，并记录输出何时完成使用。Scheduler 不计算数值，它交出的是后端要生成的工作及其生存期安排。
+`GraphLowering.codegen()` 用 `self.operations` 创建 `Scheduler`。本例只有一项产生最终
+输出的工作，因此没有跨工作项的先后冲突；Scheduler 形成一个 CPU 调度节点，记录其
+依赖和生存期边界，再按最终顺序调用 CPU 后端的生成入口。Scheduler 不计算数值；它
+决定哪个最终节点何时进入哪个生成接口，CPU 后端与 wrapper 才具体写出循环、分配、
+调用和释放代码。`Scheduler.codegen()` 不返回一份等待 Codegen 再读取的节点列表。
 
 ### Codegen 交出什么
 
@@ -192,12 +230,12 @@ wrapper 检查输入 shape/stride，分配 `buf0`，调用 `cpp_fused_add_mul_re
 
 ## 四个组件分别回答什么问题
 
-| 组件 | 进入时拥有 | 核心问题 | 交出给下一步 |
+| 组件 | 进入时拥有 | 核心问题 | 本阶段完成后的状态 |
 | --- | --- | --- | --- |
 | 图优化 | 带元信息的 FX 图 | 能否在不改变程序结果的前提下整理、删减或替换节点？ | 改写后的 FX 图 |
 | Lowering | FX 节点、样例输入的 shape/device/dtype 信息 | 每个算子在 Inductor 中如何表示计算、布局、存储、修改或外部调用？ | Inductor IR 操作和图级状态 |
-| Scheduler | 已物化的 IR 操作及其读写 | 哪些操作有依赖，按何顺序执行，哪些能融合？ | 排序和融合后的调度节点 |
-| Codegen | 调度节点、目标 device、布局与生存期 | 如何生成目标后端 kernel，并由 wrapper 正确调用？ | 可编译、可加载、可调用的模块 |
+| Scheduler | 需要在运行时产生数据或调用已有实现的 IR operation 及其读写 | 哪些操作有依赖，按何顺序执行，哪些能融合；最终按什么次序调用哪个生成入口？ | 最终调度节点及其依赖/生存期；后端与 wrapper 已按序收到生成调用 |
+| Codegen | Scheduler 传入后端/wrapper 的节点、目标 device、布局与生存期 | 各生成接口具体怎样写 kernel、分配、调用与释放代码？ | 可编译、可加载、可调用的模块 |
 
 同一个词在不同层可能指不同对象。“node”可能是 FX node、IR operation 或 scheduler node；“fusion”可能是 FX 模式替换，也可能是 scheduler 将循环合成一个 kernel。阅读源码时先问当前对象属于哪一层。
 
@@ -214,7 +252,7 @@ wrapper 检查输入 shape/stride，分配 `buf0`，调用 `cpp_fused_add_mul_re
 | 图优化 | 交出一张包含 `aten.sum.dim_IntList` 请求的规范化 FX 图；本例没有把求和改成三个加法节点 |
 | Lowering | 建立两个坐标：`row` 选择输出 0 或 1，`column` 遍历组内 0、1、2；记录组合操作是 sum |
 | Scheduler | 看到一项读取 6 个输入位置、写 2 个输出位置的规约工作，安排依赖、融合和执行顺序 |
-| Codegen | 当前 CPU 实验生成外层两行、内层规约循环及累计值；wrapper 分配长度 2 的结果并调用 kernel |
+| Codegen | CPU 后端需要覆盖外层两个 `row` 与每行三个 `column` 的规约迭代；具体代码可以向量化或展开，不保证字面上是朴素双循环；wrapper 分配长度 2 的结果并调用 kernel |
 
 对第 1 行，累计值按 `0→3→7→12` 变化。Lowering 交出的不只是“算子叫 sum”，还必须让后续知道一个输出对应哪一组输入。
 
@@ -262,13 +300,26 @@ FX：mm → relu → output
 | Scheduler | 父图看到一项带子图接口的控制流工作，按它对 predicate、operands 和输出的依赖安排位置，而不是把 add、sub 当作父图中必定连续执行的两项工作 |
 | Codegen | wrapper 保留运行时条件，只调用被 predicate 选中的分支；最终仍通过统一输出接口返回一份结果 |
 
-这里“编译两支”与“运行两支”不同。编译器必须先确认两支返回同样数量的结果，而且对应结果的 shape、stride、dtype 和 device 能组成同一个父图输出，运行时才能只选其中一支。如果 false 分支改成返回 shape `[1,2]`，而 true 分支仍返回 shape `[2]`，Lowering 无法确定父图究竟返回哪种形状，本例会在进入正常调度和生成前失败。
+这里“编译两支”与“运行两支”不同。若一张含 `cond` 的 FX 图到达 Inductor Lowering，
+它必须先确认两支返回同样数量的结果，而且对应结果的 shape、stride、dtype 和 device
+能组成同一个父图输出，运行时才能只选其中一支。如果到达这里的 false 分支返回 shape
+`[1,2]`，而 true 分支返回 shape `[2]`，Lowering 会在进入正常调度和生成前拒绝它。
+从 Python `torch.cond` 构造这种不一致请求时，前端或 AOTAutograd 也可能更早报错；本篇
+只说明它确实到达 Lowering 后的检查。
 
 ### 无计算图与缓存命中：主干可以有快速出口
 
 若单图没有需要 Inductor 生成的计算，`_compile_fx_inner` 可以把原 `GraphModule.forward` 包成 boxed callable。普通 Python 函数接收多个位置参数；这里的 boxed callable 统一接收一个列表 `args=[x,y,...]`，取出参数后返回单图约定的结果 tuple。它不虚构 Scheduler 节点或空 kernel。
 
-另一种快速路径是 FX Graph Cache 命中。它发生在进入 `fx_codegen_and_compile` 之前：此时 pre-grad 已经在 AOTAutograd 之前运行，训练图的 joint passes 也已经在拆分前运行。当前单图的节点和常量、输入的 dtype/device/shape/stride，以及影响生成代码的配置共同参与定位缓存候选；候选自己的 shape 检查再判断它能否用于本次尺寸。合法候选保存 wrapper 源码的 cache key、代码路径、输入输出信息和 shape 检查表达式；由此加载 wrapper 并恢复 callable。因此命中时省去的是这张单图后续的 post-grad、Lowering、Scheduler 和 Codegen，不是前面的所有图处理，也不是实际运行。调用时 wrapper 和 kernel/已有函数仍会执行。
+另一种快速路径是 FX Graph Cache 命中。它发生在进入 `fx_codegen_and_compile` 之前：
+此时 pre-grad 已经在 AOTAutograd 之前运行，训练图的 joint passes 也已经在拆分前运行。
+当前单图的节点和常量、输入的 dtype/device/shape/stride，以及影响生成代码的配置共同
+参与定位缓存候选；候选自己的 shape guard 再判断它能否用于本次尺寸。磁盘候选是去掉
+当前进程 callable 的 `CompiledFxGraph`，其中保存 wrapper 源码、wrapper cache key 和
+line map、设备与 mutation 信息、常量、输出 stride、guard 等；命中时再经 Python
+wrapper 代码缓存恢复当前进程的 callable。因此命中省去的是这张单图后续的 post-grad、
+Lowering、Scheduler 和 Codegen，不是前面的所有图处理，也不是实际运行。调用时 wrapper
+和 kernel/已有函数仍会执行。
 
 例如同一张 `relu(x+1)*2` 图在两个独立进程共用一个新缓存目录：本教程实验第一次观察到一次 FX cache miss，第二次观察到一次 hit，两次都计算相同结果。正确结果只说明程序行为一致；明确的 hit/miss counter 才说明第二次走了缓存出口。
 
@@ -304,7 +355,10 @@ projected[0,0] = rows[0] + rows[2] = 49280
 projected[0,1] = rows[1] + rows[2] = 49408
 ```
 
-独立实验 [`experiments/17_root_composite.py`](experiments/17_root_composite.py) 采集到的四阶段交接如下：
+下面先给出这条请求在四阶段的完整交接；其中 Lowering 对象轨迹和最终数值由独立实验
+[`experiments/17_root_composite.py`](experiments/17_root_composite.py) 直接采集，FX
+节点关系、Scheduler 顺序和生成安排分别由当前源码中相邻阶段的接口推出，不冒充为该
+实验的直接输出：
 
 ```text
 图优化    → 交出含 permute、add、relu、sum、unsqueeze、mm 和两个输出引用的 FX 图
@@ -313,7 +367,10 @@ Scheduler → 安排先产生 buf0，再调用读取 buf0 和 weight 的 mm
 Codegen   → 生成完成转置读取、add、relu、sum 的 CPU kernel，再由 wrapper 调用 mm 并返回 buf0、buf1
 ```
 
-为什么 sum 在这里必须成为 `buf0`？它一方面是最终第一个输出，另一方面又是 mm 的输入。mm 不能接收一条尚未执行的 Python 位置规则；它需要可传给已有实现的真实张量。于是 Lowering 在这个交接处给三项和稳定的存储身份。
+为什么 sum 在这里必须成为 `buf0`？它一方面是最终第一个输出，另一方面又是 mm 的
+输入。编译阶段的 mm 调用不能只引用一条尚未执行的位置计算规则；它需要一项带稳定
+名字和布局的 IR buffer，生成程序运行时这项 buffer 才对应可传给已有 mm 实现的张量。
+于是 Lowering 在这个交接处给三项和登记 `buf0` 的存储身份。
 
 接下来 Scheduler 面对的不是原来的六个 FX 算子，而是两个需要执行的 IR operation：先产生 `buf0`，再由 mm 读取它和 weight、写 `buf1`。视图、加法和 relu 已经包含在产生 `buf0` 的索引与计算中。Codegen 因而生成一个完成转置读取、加一、relu 和规约的 CPU kernel，再由 wrapper 调用 mm，最后同时返回 `buf0`、`buf1`。实验数值正是 `rows=[24512,24640,24768]`、`projected=[[49280,49408]]`。
 
@@ -325,7 +382,9 @@ Codegen   → 生成完成转置读取、add、relu、sum 的 CPU kernel，再�
 
 1. `a=x+y; b=relu(a); return b*2` 改成同时返回 `a` 和 `b*2`。图优化仍交出两条使用 a 的边；Lowering 不能只把 a 当成 b 内部可随意消失的临时规则，还要保留能交给输出的结果身份；Scheduler 和 Codegen 必须保证该结果在返回前有效。
 2. `x.t()` 后面接一个只接受连续输入的已有函数。视图给出的 stride 是 `[1,3]`，不满足这个函数对输入排布的要求；Lowering 需要先准备一份连续数据，Scheduler 再把准备工作排在已有函数调用之前，wrapper 按这个顺序连接两者。
-3. 上述 `cond` 的两支 shape 相同，但一支返回 float32、另一支返回 int64。数值个数相同仍不能形成统一接口；Lowering 比较两支输出时会拒绝，而不是让 Scheduler 猜测运行时会选哪种 dtype。
+3. 若一张到达 Lowering 的 `cond` 图中，两支 shape 相同，但一支返回 float32、另一支
+   返回 int64，数值个数相同仍不能形成统一接口；Lowering 比较两支输出时会拒绝，而
+   不是让 Scheduler 猜测运行时会选哪种 dtype。
 
 这三题分别改变输出身份、消费者布局要求和控制流接口。能够指出“哪份对象发生什么变化、为什么由哪个阶段处理”，才算掌握本层协作；只背四个组件名称还不够。
 

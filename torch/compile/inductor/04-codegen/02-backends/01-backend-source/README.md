@@ -4,17 +4,115 @@
 
 前一篇已经看到两个生成结果：CPU 把 N=19 切成 16 个元素的向量主循环和
 3 个元素的尾部；Triton 用 `pid*XBLOCK+arange` 得到逻辑位置，再用 mask
-挡住 19 以外的位置。本篇从这些结果反查产生它们的实现，并继续使用 N=19
-逐点计算和 2×128 按行求和两个案例。正文先按当前产品文件中方法出现的顺序
-保留源码，再按真正的调用顺序解释；最后一节才打开 CPU 的向量候选选择。
+挡住 19 以外的位置。本篇从同一个输入开始追踪这两条路径：Scheduler 已经选好
+一个融合组，组内的 `SchedulerNode` 各自保存一份可重放的 `LoopBody`。本篇的
+出口也相同：wrapper 中既有 kernel 定义，又有运行时调用这份 kernel 的语句。
 
-进入 backend 时，LoopBody 已经把原计算重放成 load、算术、reduction 和
-store 请求。两条 backend 路径接收这些请求，却把生成语句暂存在不同对象中。
-先固定后文会反复修改的状态：
+先看完整交接。这里的“生成”不是立刻执行 kernel，而是向 wrapper 写入稍后编译
+和调用 kernel 所需的程序文本。
 
-CPU 的 `args` 由 kernel group 持有并传给每个 `CppKernel`；每个 kernel 自己
-新建 CSE 和代码缓冲区。下面表格先列这些对象进入一次重放后的职责，表后再展示
-构造时的空状态怎样被第一次 load 改变。
+| 步骤 | CPU | Triton |
+| --- | --- | --- |
+| 1. 接住融合组 | `CppScheduling.codegen_node` 取得组内 `SchedulerNode` | `SIMDScheduling.codegen_node` 取得组内 `SchedulerNode` |
+| 2. 整理执行次序 | 直接把这些节点交给一个 `CppKernelProxy` | `generate_node_schedule` 把节点和“暂时退出/重新进入规约”的标记排成 `node_schedule` |
+| 3. 创建 kernel | proxy 经 `kernel_group.new_kernel(...)` 创建 scalar `CppKernel`、`CppVecKernel` 或 `CppTile2DKernel` | `codegen_node_schedule` 根据范围、规约提示和 index dtype 创建 `TritonKernel` |
+| 4. 重放 `LoopBody` | `CppKernelProxy.codegen_nodes` 把每个节点包装成函数，再对 scalar/vector kernel 重放 | `codegen_node_schedule_with_kernel` 先收集所有索引，再第二次遍历并调用 `node.codegen(index_vars)` |
+| 5. 得到定义 | kernel 的分段代码组成 loop nest；`KernelGroup.codegen_group` 加上 C++ 函数签名 | `TritonKernel.codegen_kernel` 加上 decorator、Python 函数签名和函数体 |
+| 6. 登记定义 | `CppScheduling.define_kernel` 把源码和 kernel 名写入 wrapper | `TritonScheduling.define_kernel` 把源码、编译语句和 kernel 名写入 wrapper |
+| 7. 登记调用 | `KernelGroup.call_kernel` 把 C++ 参数调用写入 wrapper | `TritonKernel.call_kernel` 计算参数与 grid，并把 Triton launch 写入 wrapper |
+
+CPU 入口中的两个对象按下面的顺序创建。在本页选择 C++ backend 的路径中，外层
+Scheduler 把 `CppScheduling` 缓存在自己的 backend 表里，并把自身传给其构造函数；
+因此构造函数中的 `if scheduler` 成立并调用 `reset_kernel_group()`。该方法把新的
+`KernelGroup` 保存到 `self.kernel_group`；使用 C++ wrapper 时，具体对象是它的子类
+`CppWrapperKernelGroup`。每次普通 `codegen_node` 调用只创建一个局部
+`CppKernelProxy(self.kernel_group)`：proxy 记住的正是这一个 group，并把生成的
+loop nest 交回同一个 group。proxy 本身不跨这次调用保存；group 则可以累计多个节点，
+直到后文的 `flush()` 写出函数并再次调用 `reset_kernel_group()`。
+
+```python
+def __init__(self, scheduler):
+    super().__init__()
+    self.scheduler = scheduler
+    if scheduler:
+        self.reset_kernel_group()
+    self._ready_to_flush = False
+
+def reset_kernel_group(self):
+    from .cpp_wrapper_cpu import CppWrapperCpu
+
+    self.kernel_group: Union[CppWrapperKernelGroup, KernelGroup]
+    if isinstance(V.graph.wrapper_code, CppWrapperCpu):
+        self.kernel_group = CppWrapperKernelGroup()
+    else:
+        self.kernel_group = KernelGroup()
+
+def codegen_node(
+    self,
+    node: Union[OuterLoopFusedSchedulerNode, FusedSchedulerNode, SchedulerNode],
+):
+    """
+        Turn an set of pre-fused nodes into a C++ kernel.
+        """
+    kernel_group = self.kernel_group
+
+    if isinstance(node, OuterLoopFusedSchedulerNode):
+        self.codegen_outer_loop_node(node)
+    else:
+        nodes: List[SchedulerNode] = node.get_nodes()  # type: ignore[assignment]
+        nodes = self.try_loop_split(nodes)
+        cpp_kernel_proxy = CppKernelProxy(kernel_group)
+        cpp_kernel_proxy.codegen_nodes(nodes)
+        kernel_group.finalize_kernel(cpp_kernel_proxy, nodes)
+
+    args_num = self._get_scheduled_num_args()
+    if args_num > CppScheduling.MAX_FUSED_KERNEL_ARGS_NUM:
+        self._set_flush_status(True)
+```
+
+本页的 N=19 案例走 `else` 分支。`OuterLoopFusedSchedulerNode` 另走
+`codegen_outer_loop_node`；它不改变这里要建立的所有权关系：具体 proxy 仍接收当前
+`kernel_group`，生成结果仍由该 group 汇集。
+
+因此，`CppKernel` 和 `TritonKernel` 都不是上游提前交给 backend 的成品。CPU 侧由
+`CppKernelProxy` 驱动 `KernelGroup.new_kernel` 创建具体 kernel；Triton 侧由继承自
+`SIMDScheduling` 的 `codegen_node_schedule` 通过 `self.kernel_type` 创建
+`TritonKernel`。
+`LoopBody` 也不是在进入 backend 前已经变成了一串 load/store 请求；它保存的是
+可重放的计算。只有某个 kernel 成为当前 handler 后，重放才会把 `load`、算术、
+`reduction` 和 `store` 调到这个 kernel 上，并逐步填充它的代码缓冲区。
+
+N=19 的逐点融合组沿 CPU 主线会经历：
+
+```text
+SchedulerNode
+  -> CppKernelProxy
+  -> 创建 scalar CppKernel，重放 LoopBody，得到正确的标量循环底稿
+  -> 若向量条件成立，再创建 CppVecKernel 重放同一 LoopBody
+  -> 在本机实验条件下，loop nest 选择 16 个元素的 vector 主循环和 3 个元素的 tail
+  -> KernelGroup.codegen_group 组成一个 C++ 函数
+  -> define_kernel 登记定义
+  -> call_kernel 登记一次带输入、输出指针的调用
+```
+
+同一融合组沿 Triton 主线会经历：
+
+```text
+SchedulerNode
+  -> node_schedule
+  -> 创建 TritonKernel(groups=(19, 1), ...)
+  -> 第一次遍历收集索引，确定能否原地写及地址形式
+  -> 第二次遍历重放 LoopBody，把 load/compute/store 写进分段缓冲区
+  -> codegen_kernel 组成 decorated Triton 函数
+  -> TritonScheduling.define_kernel 登记源码和异步编译语句，返回 kernel_name
+  -> call_kernel 用参数、numel 和 grid 登记一次 launch
+```
+
+后文分别打开上述主线中的 kernel 内部状态。CPU 的 `args` 由 kernel group 持有并
+传给每个 `CppKernel`；每个 kernel 自己新建 CSE 和代码缓冲区。
+
+下面表格先列这些对象进入一次重放后的职责，表后再展示构造时的空状态怎样被
+第一次 load 改变。
 
 | CPU `CppKernel` 状态 | 初始用途 | 谁写入 | 最终消费者 |
 | --- | --- | --- | --- |
@@ -22,7 +120,7 @@ CPU 的 `args` 由 kernel group 持有并传给每个 `CppKernel`；每个 kerne
 | `cse` | 已生成表达式到临时变量的映射 | load、算术等调用 `cse.generate` | 后续表达式复用同一临时值 |
 | `loads`、`compute`、`stores` | 三个起初为空的代码缓冲区 | load、算术、普通写分别追加语句 | scalar/vector kernel printer 按执行顺序拼接 |
 | `reduction_prefix/suffix` | 规约循环前后的代码区 | 累计初始化与 `store_reduction` 等写入 | loop nest 把它们放在规约循环外侧 |
-| `call_ranges/itervars` | 尚未建立的循环范围与符号 | `set_ranges` 第一次调用建立 | LoopBody 重放和最终 C++ 循环 |
+| `call_ranges/itervars` | 尚未建立的循环范围与符号 | proxy 从 `SchedulerNode.group[1]` 取得范围，`set_ranges` 第一次调用据此建立符号 | LoopBody 重放和最终 C++ 循环 |
 | `loop_nest` | 尚未建立 | `CppKernelProxy` 先用 scalar kernel 建树，再把部分区域换成 vector kernel | `codegen_loops_impl` 打印最终循环 |
 
 `DeferredLine(buffer_name,text)` 是带 buffer 身份的待输出语句。若后续确认该 buffer 已删除，printer 可以跳过这行；否则它在相应代码区被拼入结果。
@@ -45,6 +143,13 @@ cse.generate 的结果：生成 “auto tmp0 = in_ptr0[x0];” 追加到 loads�
 这里的参数映射属于传入的 `KernelArgs`；CSE、代码区和 accumulator cache 属于
 当前具体 kernel。向量版本不会复用 scalar 版本的临时表达式缓存，只会用共享的
 参数映射保证函数参数与访问表达式名称一致。
+
+Triton 侧的 `range_trees` 也不是凭空存在。`codegen_node_schedule` 先由融合组范围
+得到 `tiled_groups`，再用这些范围构造 `TritonKernel`；共同基类建立
+`range_trees`、`range_tree_nodes` 和规约状态，随后 `TritonKernel.__init__`
+调用 `codegen_range_tree` 写入最初的范围代码。`allow_block_ptr=True` 是
+`TritonKernel` 的类级能力开关；它只表示该 kernel 类型允许尝试 block pointer，
+真正能否使用仍由 K03 的地址条件决定。
 
 | Triton `TritonKernel` 状态 | 初始用途 | 谁写入 | 最终消费者 |
 | --- | --- | --- | --- |
@@ -157,7 +262,11 @@ reduction_depth=1
 return ([x0],[])
 ```
 
-LoopBody 的逻辑索引原来写作自己的符号，例如 z0。重放时 Q411 已把它代成 x0；`load("arg0_1",x0)` 再调用 `rename_indexing`，在这个简单例中仍是 x0。`args.input` 给逻辑名分配形如 `in_ptr0` 的参数，于是候选表达为 `in_ptr0[x0]`。CSE 产生临时变量并用 `update_on_args` 记住它来自哪个 buffer 和已改写索引，供后续分析/复用。
+LoopBody 的逻辑索引原来写作自己的符号，例如 z0。重放时，它先按当前 kernel 的
+循环变量映射代成 x0；`load("arg0_1",x0)` 再调用 `rename_indexing`，在这个简单
+例中仍是 x0。`args.input` 给逻辑名分配形如 `in_ptr0` 的参数，于是候选表达为
+`in_ptr0[x0]`。CSE 产生临时变量并用 `update_on_args` 记住它来自哪个 buffer 和
+已改写索引，供后续分析/复用。
 
 普通 `store("buf0",x0,tmp,None)` 通过 `args.output` 得到 `out_ptr0`，把 `out_ptr0[x0] = tmp;` 包在 `DeferredLine("buf0",...)` 中。DeferredLine 让后续若 buf0 被删除，输出阶段可以跳过该行；这里登记语句不等于立即写进最终字符串。
 
@@ -239,12 +348,14 @@ def get_reduction_code_buffer(loops, buffer="prefix"):
                     prefix = prefix + kernel.non_parallel_reduction_prefix
                 return prefix
 
-def gen_loop(loop):
-    loop_lines = loop.lines()
-    if loop_lines is None:
-        return
-    code.writelines(loop_lines)
-    with code.indent():
+def gen_loop(loop: LoopLevel):
+    with contextlib.ExitStack() as stack:
+        loop_lines = loop.lines()
+        if loop_lines is None:
+            return
+        code.writelines(loop_lines)
+        stack.enter_context(code.indent())
+        # generate inner loops or loop body
         if loop.inner:
             gen_loops(loop.inner, loop.is_reduction)
         else:
@@ -337,7 +448,7 @@ active_prefixes = "zyxr"[-len(numels):]
 for 每个 (i,prefix):
     is_reduction = (prefix == "r")
     grid_dim = None if is_reduction else "xyz".find(prefix)
-    tensor_dim = p 在本 kernel tensor 维序中的位置；没有则为 None
+    tensor_dim = prefix 在本 kernel tensor 维序中的位置；没有则为 None
     is_loop = is_reduction and not persistent_reduction
     建 root(name=prefix+"index", numel=numels[i], 上述字段)
 ```
@@ -357,7 +468,10 @@ for 每个 (i,prefix):
 每个 root entry 保存 prefix、numel、program 维、tensor 维和是否在分块循环中；
 root 继续切分时产生的子 entry 以自己的迭代符号登记到
 `range_tree_nodes`，让 `indexing` 能从表达式中的 free symbol 找回所属 tree。
-构造完成后，`TritonKernel.__init__` 立即调用：
+共同基类构造完 range tree 后，`TritonKernel.__init__` 立即调用
+`self.codegen_range_tree()`。该方法遍历刚建立的 tree：非 loop tree 的初始坐标
+写进 `body`；若当前处于 non-persistent 规约，r tree 的第一组 lane 坐标 `rbase`
+也写进 `body`。下面先代入 N=19，再展示该方法的完整源码。
 
 先走 N=19 的逐点例：参与实际地址的是 x tree，`prefix="x"`、
 `is_loop=False`、`grid_dim=0`、`tensor_dim=0`、`numel=19`，当前
@@ -1888,7 +2002,7 @@ def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
 因此 decorator、形参和 body 结构共同表达执行策略，任何一项都不能只靠函数名推断。
 
 K05 到此完成。K06 回到 CPU，完整打开 `CppKernelProxy` 怎样从 scalar 底稿选择
-向量主循环、尾部和最终 loop nest，从而接回 Q42 的 16+3 实测结果。
+向量主循环、尾部和最终 loop nest，从而解释前文 N=19 的 16+3 结果。
 
 
 ## K06：CppKernelProxy 从 scalar 语义底稿生成 vector 主循环与尾部
@@ -2205,7 +2319,7 @@ removed/inplaced buffer 同步回 graph。
 
 | 阶段 | 起止位置 | kernel | 处理元素 |
 | --- | --- | --- | --- |
-| scalar 底稿 | 0..18 | `CppKernel` | 建立完整正确语义，暂作 fallback |
+| scalar 底稿 | 0..18 | `CppKernel` | 建立完整正确语义，并可供未向量化区域使用 |
 | split 后 main | 0..15 | `CppVecKernel(factor=16)` | 一次处理 16 项 |
 | split 后 tail | 16..18 | masked vector 或 scalar | `steps=3`，只处理 3 项 |
 
@@ -2241,10 +2355,185 @@ scalar。若根本没有循环变量（单个 scalar 结果），在生成 scala
 既不等于完整 group、也不等于纯外层 group 时触发断言，因为现有 loop nest 无法在
 不改变坐标含义的情况下安放它。
 
+## 两条路径怎样闭合到 wrapper
+
+到目前为止，CPU 得到了一棵待包装成 C++ 函数的 loop nest，Triton 得到了
+decorated Python 函数源码；两边都还没有在 wrapper 中形成运行时调用。入口总表中的
+最后两步负责把各自的生成结果接回 wrapper。
+
+CPU 会先等待当前 `KernelGroup` 需要 flush。flush 时依次发生：
+
+```text
+KernelGroup.codegen_group()
+  输入：共享的 KernelArgs、已经打印到 loops_code 的一个或多个 loop nest
+  输出：带 extern "C" 函数签名的完整 C++ 源码
+
+CppScheduling.define_kernel(src_code, scheduled_nodes)
+  产生：例如 cpp_fused_add_relu_0 这样的 kernel_name
+  写入：wrapper 中编译这段 C++ 源码的定义记录
+
+KernelGroup.call_kernel(wrapper, kernel_name)
+  从同一 KernelArgs 取得 call_args 和 arg_types
+  写入：wrapper 中调用 cpp_fused_add_relu_0(...) 的语句
+```
+
+`finalize_kernel` 与后三步不在同一时刻：`codegen_node` 当次就调用
+`finalize_kernel`，把当前 loop nest 打进 group 的 `loops_code`；等调度器随后决定
+flush 这个 group，才执行下面的 `codegen_group → define_kernel → call_kernel`。
+因此一个 group 可以先累计多个可放在同一 C++ 函数中的 loop nest。
+
+下面四个方法就是这段交接的当前实现。`codegen_group` 消费前面已经写好的
+`loops_code`；`define_kernel` 登记完整源码；`call_kernel` 只登记调用；`flush`
+严格按这个顺序连接三者，最后才换成新的空 group。
+
+```python
+def codegen_group(self, name=None) -> str:
+    self.stack.close()
+    if not self.scheduled_nodes:
+        return ""
+    code = BracesBuffer()
+    # 1. Include header files
+    # TODO: support kernel profile on other platforms
+    enable_kernel_profile = config.cpp.enable_kernel_profile and sys.platform in [
+        "linux",
+        "win32",
+    ]
+    if enable_kernel_profile:
+        code.writelines(["#include <ATen/record_function.h>"])
+    code.writeline(codecache.cpp_prefix())
+
+    # 2. Function definition
+    kernel_decl_name = str(Placeholder.KERNEL_NAME) if name is None else name
+    kernel_name = str(Placeholder.DESCRIPTIVE_NAME) if name is None else name
+    arg_defs, _, _ = self.args.cpp_argdefs()
+    arg_defs = ",\n".ljust(25).join(arg_defs)
+    func_export_decl = get_export_declaration()
+    code.writeline(
+        f'extern "C" {func_export_decl} void {kernel_decl_name}({arg_defs})'
+    )
+
+    # 3. Function body
+    with code.indent():
+        if enable_kernel_profile:
+            graph_id = V.graph.graph_id
+            prefix = "graph_" + str(graph_id) + "_" if graph_id is not None else ""
+            code.writelines(
+                [
+                    f'RECORD_FUNCTION("{prefix + kernel_name}", c10::ArrayRef<c10::IValue>({{}}));'
+                ]
+            )
+        for old, new in self.args.aliases():
+            code.writeline(f"auto {old} = {new};")
+        code.splice(self.loops_code)
+    return code.getvalue()
+
+def define_kernel(self, src_code, nodes, kernel_args=None):
+    wrapper = V.graph.wrapper_code
+    fused_name = (
+        get_fused_kernel_name(nodes, config.cpp.descriptive_names)
+        if config.cpp.descriptive_names
+        else ""
+    )
+    kernel_name = "_".join(["cpp", fused_name, wrapper.next_kernel_suffix()])
+    kernel_decl_name = kernel_name if V.graph.cpp_wrapper else "kernel"
+    src_code = src_code.replace(str(Placeholder.KERNEL_NAME), kernel_decl_name)
+    src_code = src_code.replace(str(Placeholder.DESCRIPTIVE_NAME), kernel_name)
+    # TODO(voz): Ostensibly, we should not need this. But there are cases where C++ codegen does
+    # not use BracesBuffer, so we have no good indicator of a C++ buffer atm.
+    src_code = src_code.replace("#pragma CMT", "//")
+
+    compile_wrapper = IndentedBuffer()
+    args = self.kernel_group.args if kernel_args is None else kernel_args
+    _, _, arg_types = args.cpp_argdefs()
+    if not V.graph.cpp_wrapper:
+        compile_wrapper.writeline(f"async_compile.cpp_pybinding({arg_types!r}, '''")
+    compile_wrapper.splice(src_code, strip=True)
+    if not V.graph.cpp_wrapper:
+        compile_wrapper.writeline("''')")
+    wrapper.define_kernel(kernel_name, compile_wrapper.getvalue(), cuda=False)
+    return kernel_name
+
+def call_kernel(self, wrapper, kernel_name):
+    _, call_args, arg_types = self.args.cpp_argdefs()
+    wrapper.generate_kernel_call(
+        kernel_name, call_args, cuda=False, arg_types=arg_types
+    )
+
+def flush(self):
+    src_code = self.kernel_group.codegen_group()
+    if src_code:
+        kernel_name = self.define_kernel(
+            src_code, self.kernel_group.scheduled_nodes
+        )
+        self.kernel_group.call_kernel(V.graph.wrapper_code, kernel_name)
+    self.reset_kernel_group()
+    self._set_flush_status(False)
+```
+
+这里共享 `KernelArgs` 很关键：生成函数签名与生成调用参数读取的是同一个参数账本，
+所以前面第一次 load 分配的 `in_ptr0` 不会在调用处变成另一个无关参数。调用登记完成
+后，`CppScheduling.flush` 创建新的空 `KernelGroup`；下一个融合组不会继续写进旧函数。
+
+普通的单-kernel Triton 路径不等待 group flush。`codegen_node_schedule` 完成当前
+kernel 后立即依次做：
+
+```text
+TritonKernel.codegen_kernel()
+  输出：含 @triton_heuristics... decorator、def 函数签名和 body 的源码字符串
+
+TritonScheduling.define_kernel(src_code, node_schedule, kernel)
+  按源码查 wrapper.src_to_kernel；相同源码可以复用已有名字
+  新源码则产生 kernel_name，并写入 async_compile.triton(...) 定义记录
+
+kernel.call_kernel(kernel_name)
+  从 kernel.args 取得 tensor/scalar 参数
+  从 range_trees 追加 xnumel 等范围参数并构造 grid
+  写入：wrapper 中按该 grid launch kernel_name 的调用语句
+```
+
+配置允许 `multi_kernel` 且命中 persistent reduction 时，源码还会先生成并登记一个
+non-persistent 候选，再把两个候选包装成 `MultiKernel` 统一登记调用。那是一个 kernel
+组内保留两个实现供选择的分支；本段 N=19 主线没有规约，走的是上面的单-kernel顺序。
+
+以 N=19 的逐点 kernel 为例，源码定义里的 `XBLOCK` 是编译期/launch 配置参数；实际
+长度 19 则由 `call_kernel` 作为 `xnumel` 加入调用参数和 grid。kernel 内部据此得到
+三组 program 位置并用 `xmask` 挡住 19..23。换言之，K02 的范围树同时服务两个地方：
+`codegen_kernel` 用它生成函数体中的坐标，`call_kernel` 用它生成 wrapper 的范围参数
+与 grid。只展示 decorated 函数而不展示这次调用，无法说明 `program_id` 会启动几组。
+
+Triton 主线在 `define_kernel` 返回名字后先对节点调用 `mark_run()`，再登记
+`call_kernel`；随后把删除/原地复用的 buffer 信息同步回 graph，并由
+`scheduler.free_buffers()` 为已经结束使用期的 buffer 写释放记录。CPU 的
+`mark_run()` 更早发生在 proxy 重放节点时，wrapper 定义和调用则到 group flush 才写入。
+这些先后顺序意味着 `mark_run` 不是“wrapper 调用已经成功登记”的凭证；成功出口仍要
+走完整条路径。至此，融合组才从 `SchedulerNode` 得到 wrapper 中可编译、可调用的一对记录。
+
+## 生成中途失败时，哪些状态已经改变
+
+这些生成方法会边走边写代码缓冲区、参数账本和 wrapper，不是先在临时副本里完成后再
+一次性提交。当前直接调用链中的异常会向上传播；下表只说明本页能从这些方法证明的局部
+状态，不据此推断更高层编译入口是否另有重试或 fallback。
+
+| 失败位置 | 失败前可能已经改变的状态 | 本页这条路径会不会继续登记一次可运行调用 |
+| --- | --- | --- |
+| CPU scalar 重放 | `KernelArgs`、当前 kernel 的代码区，以及 `mark_run` 已分配的输出；若 kernel 尚未返回，removed/inplace 集合还没有同步回 graph | 不会；异常越过 `finalize_kernel/flush` |
+| CPU vector 主 kernel 重放 | scalar loop nest 已建立，部分 vector kernel 状态已写 | 不会静默使用 scalar 结果；本次编译继续抛异常 |
+| CPU tail kernel 重放 | main 可能已经绑定到 vector kernel，tail 可能只完成一部分 | 不会把这棵半成品 loop tree 输出成成功结果 |
+| Triton 第一次索引遍历 | inplace 决策和部分索引集合可能已经形成 | 不会进入完整源码定义与调用 |
+| Triton 第二次重放 | kernel 的 loads/compute/stores 等缓冲区可能已有前缀内容 | 不会调用 `define_kernel/call_kernel` |
+| Triton `define_kernel` | 即使 header 还没有定义文本，`src_to_kernel` 映射和 kernel 名后缀也可能已经改变；若向 header 写入时失败，还可能留下部分文本 | 后续 `call_kernel` 不执行 |
+| `call_kernel` | kernel 定义已经登记；Triton header、workspace 分配、kernel 调用或 workspace 释放记录可能只写到其中某一步，参数与 grid 的 Python list 本身只是局部计算 | 异常继续向上，本页没有撤销这些已写内容的事务逻辑 |
+
+因此，“已经生成一部分源码”不等于“wrapper 已具备一对完整的定义和调用记录”；
+而具备这对记录也只表示生成完成，不证明后续编译或运行成功。Triton 主线还要走完
+graph buffer 状态同步与 `free_buffers`；CPU 本页证明的是 flush 写完定义和调用后重置
+kernel group，不把 Triton 的收尾顺序套到 CPU 上。
+
 至此，CPU 路径从 SchedulerNode 重放、scalar 语义底稿、向量/尾部选择走到最终
-loop nest；Triton 路径从 range tree、indexing、访存缓冲区走到完整 decorated kernel。
-两者都消费 Q411 的 LoopBody，但 CPU 把并行宽度固化进 C++ loop nest，Triton 把范围
-参数与 block hint 交给 decorator 和运行 launch 配置。
+loop nest，再由 flush 形成 C++ 定义和调用；Triton 路径从 kernel 创建、range tree、
+indexing、访存缓冲区走到 decorated kernel，并立即登记定义和 launch。两者都重放
+`LoopBody`：CPU 把并行宽度固化进 C++ loop nest，Triton 把范围参数与 block hint
+交给 decorator 和运行 launch 配置。
 
 
 

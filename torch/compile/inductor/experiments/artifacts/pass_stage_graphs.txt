@@ -4,31 +4,40 @@
 
 def forward(self, L_x_ : torch.Tensor):
     l_x_ = L_x_
-    old = torch.sin(l_x_)
+    v = l_x_.view(-1)
+    old = torch.sin(v)
     add_ = l_x_.add_(1);  l_x_ = add_ = None
-    return (old,)
+    later = torch.cos(v);  v = None
+    return (old, later)
     
 ===== JOINT =====
 
 
 
 def forward(self, arg0_1):
-    sin = torch.ops.aten.sin.default(arg0_1)
+    view = torch.ops.aten.view.default(arg0_1, [-1])
+    sin = torch.ops.aten.sin.default(view);  view = None
     add = torch.ops.aten.add.Tensor(arg0_1, 1)
+    view_1 = torch.ops.aten.view.default(add, [-1])
+    cos = torch.ops.aten.cos.default(view_1);  view_1 = None
     copy_ = torch.ops.aten.copy_.default(arg0_1, add);  arg0_1 = add = copy_ = None
-    return (sin,)
+    return (sin, cos)
     
 ===== POST =====
 
 
 
 def forward(self, arg0_1):
-    sin = torch.ops.aten.sin.default(arg0_1)
+    view = torch.ops.aten.reshape.default(arg0_1, [-1])
+    sin = torch.ops.aten.sin.default(view);  view = None
     add = torch.ops.aten.add.Tensor(arg0_1, 1)
+    view_1 = torch.ops.aten.reshape.default(add, [-1])
+    cos = torch.ops.aten.cos.default(view_1);  view_1 = None
     copy_ = torch.ops.aten.copy_.default(arg0_1, add);  arg0_1 = add = copy_ = None
-    return (sin,)
+    return (sin, cos)
     
 old=[0.0, 0.8414709568023682, 0.9092974066734314]
+later=[0.5403022766113281, -0.416146844625473, -0.9899924993515015]
 caller_x=[1.0, 2.0, 3.0]
 ===== RECURSIVE WRAPPERS =====
 direct_names=['while_cond', 'while_body', 'true_graph', 'false_graph']

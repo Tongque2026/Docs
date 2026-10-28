@@ -83,7 +83,14 @@ def lower_scalar(value, *, shape_env=None, fake_mode=None):
         with fake_context, V.set_graph_handler(graph):
             graph.run(value)
     except Exception as exc:
-        error = f"{type(exc).__name__}:{exc}"
+        # A plain object is printed with its process-specific memory address.
+        # Keep this artifact stable while retaining detailed messages for the
+        # bool case and other meaningful failures.
+        error = (
+            type(exc).__name__
+            if type(value) is object
+            else f"{type(exc).__name__}:{exc}"
+        )
     input_value = graph.graph_inputs.get("scalar", "<not-registered>")
     outputs = getattr(graph, "graph_outputs", [])
     events.append(

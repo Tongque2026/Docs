@@ -121,7 +121,8 @@ class StorageBox(MutableBox):
 `inner_fn_opcount()` 会用 `OpCounterCSE` 符号执行一次 inner_fn。计数器的 load 分支说明了前文“非平凡读取”和去重的精确定义：底层 mock handler 为相同读取产生同一 value；只有该 value 尚未出现在 `var_names` 时才登记读取，而 index 不是 Python int 或 SymPy Integer 时才增加 `nontrivial_read_count`。
 
 ```python
-def inner_fn_opcount(self):
+@cache_on_self
+def inner_fn_opcount(self) -> OpCountResult:
     opcounter = OpCounterCSE(V.MockHandler())
     with V.set_ops_handler(opcounter), patch.object(
         FlexibleLayout, "allow_indexing", True
@@ -130,7 +131,7 @@ def inner_fn_opcount(self):
         return opcounter.getvalue()
 
 
-def load(self, name, index):
+def load(self, name: str, index: sympy.Expr) -> str:
     val = self.parent_handler.load(name, index)
     if val not in self.var_names:
         self._used_ops.add("load")
@@ -180,9 +181,12 @@ FlexibleLayout 已有一份暂定 stride，但仍允许改变。冻结分两层�
 当前 `FlexibleLayout` 不保存一个以后才解释的 `_stride_order`。构造时若第四个参数非空，代码直接把它当 fill order 计算 stride；否则立即计算默认连续 stride。后面的 `as_stride_order` 才接收 stride order，并先调用 `stride_order2fill_order`：
 
 ```python
-def stride_order2fill_order(order):
+def stride_order2fill_order(
+    order: Sequence[Union[int, Integer]]
+) -> Sequence[Union[int, Integer]]:
     lookup = {pos: idx for idx, pos in enumerate(order)}
-    return [lookup[i] for i in range(len(order))]
+    fill_order = [lookup[i] for i in range(len(order))]
+    return fill_order
 
 
 class FlexibleLayout(Layout):
@@ -201,7 +205,7 @@ padding 只在 `comprehensive_padding=True` 且调用路径允许时发生。以
 对齐元素数和总开关来自这两个直接 helper；阈值与 byte 对齐的具体默认值是当前配置值，案例把 1024 和 128 bytes 代入，而算法本身读取 config：
 
 ```python
-def get_align_for_dtype(dtype):
+def get_align_for_dtype(dtype: torch.dtype) -> int:
     return config.padding_alignment_bytes // dtype.itemsize
 
 def should_pad_strides(self):
@@ -509,9 +513,13 @@ def decide_layout(self):
 上面真正把多条 stride hints 合成一个 fill order 的是 `pick_loop_order`。它比较任意两个输出维 a、b：对每一项读取分别投票；a 的绝对 stride 更小，或 b 在该读取中是广播 stride 0，就给 a 一票。b 同理。票多的维放在前面，表示先填、stride 更小；平票时维号较大的维在前，保持默认连续顺序。size=1 的维不影响地址，被移到最后。
 
 ```python
-def pick_loop_order(stride_lengths, sizes, priority_idx=()):
+def pick_loop_order(
+    stride_lengths: List[List[int]],
+    sizes: List[sympy.Expr],
+    priority_idx: Tuple[int, ...] = (),
+) -> List[int]:
     @functools.cmp_to_key
-    def index_cmp(a, b):
+    def index_cmp(a: int, b: int) -> int:
         if sizes[a] == 1 or sizes[b] == 1:
             return cmp(sizes[a] == 1, sizes[b] == 1)
 
@@ -582,7 +590,7 @@ size=1 维在地址上没有多个位置可排序。例如输出 shape `[2,1,3]`
 `require_strides` 开头反复调用的 storage helper 先把包装拆开。TensorBox 递归到 `data`；StorageBox 只有在 `data` 已是 Buffer 时才交回 `(StorageBox, layout)`，并按参数冻结；ReinterpretView 递归取得底层 StorageBox，但保留 view 自己的 layout。其他对象抛 NotImplementedError，因此 `is_storage_and_layout` 返回 false。
 
 ```python
-def is_storage_and_layout(x):
+def is_storage_and_layout(x: IRNode) -> bool:
     try:
         as_storage_and_layout(x, freeze=False)
         return True
@@ -591,9 +599,13 @@ def is_storage_and_layout(x):
 
 
 def as_storage_and_layout(
-    x, freeze=True, want_contiguous=False,
-    stride_order=None, allow_padding=False, exact_strides=None,
-):
+    x: IRNode,
+    freeze: bool = True,
+    want_contiguous: bool = False,
+    stride_order: Optional[Sequence[Union[int, Integer]]] = None,
+    allow_padding: bool = False,
+    exact_strides: Optional[Sequence[Union[int, Integer]]] = None,
+) -> Tuple[StorageBox, Layout]:
     if isinstance(x, TensorBox):
         return as_storage_and_layout(
             x.data,
@@ -689,7 +701,7 @@ def require_strides(
                 )
             )
         ):
-            # 教学：已经满足 order/exact（忽略 size 0/1 无关差异）时复用原对象。
+            # 教学：已经满足 order/exact（exact 比较忽略 size-1 维）时复用原对象。
             return x
         elif isinstance(x.get_layout(), MutationLayoutSHOULDREMOVE):
             if isinstance(x.get_layout().real_layout(), FlexibleLayout):
@@ -772,7 +784,9 @@ def require_stride_order(cls, x, order, allow_padding=False):
 这里的“exact 相等”会忽略 size=1 维，而不是忽略 size=0 维或任意符号差异。helper 先保留 `size_hint(dim,fallback=2) != 1` 的维，再把两组对应 stride 求 hint 后逐项比较：
 
 ```python
-def significant_strides_equal(strides1, strides2, size):
+def significant_strides_equal(
+    strides1: Sequence[_IntLike], strides2: Sequence[_IntLike], size: Sequence[_IntLike]
+) -> bool:
     non_1_indices = [
         i
         for i, dim in enumerate(size)
@@ -786,6 +800,7 @@ def significant_strides_equal(strides1, strides2, size):
 前面不能复用时，`copy_input` 不是一个含糊的“以后也许复制”：它立即建立读取 x loader 的同 shape/dtype Pointwise，并调用 realize，使返回值拥有新的 ComputedBuffer 身份。新 Pointwise 只读旧 x，不继承 MutationLayout；因此外部调用拿到的是独立逻辑结果，原 mutation 对象仍保留自己的写入身份。
 
 ```python
+@staticmethod
 def copy_input(x):
     pw = Pointwise.create(
         device=x.get_device(),
@@ -843,6 +858,12 @@ def convert_to_reinterpret_view(cls, x):
     offset = V.graph.sizevars.offset_var(index, range_vars)
     expected = sympy_dot(range_vars, strides) + offset
     if index != expected:
+        log.debug(
+            "convert_to_reinterpret_view failed: stride=%s offset=%s index=%s",
+            strides,
+            offset,
+            index,
+        )
         raise NotImplementedError
 
     return ReinterpretView(

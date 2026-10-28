@@ -25,7 +25,20 @@ get_attr 节点
 
 两条路径最后都给 FX Interpreter 一个可放入 env 的结果，但来源不同：函数节点执行一条构造规则，属性节点读取 GraphModule 已有对象。
 
+这里的 `lowerings` 是一张进程内注册表，内容是“FX target → 构造 Inductor IR 的 Python callable”。导入 `torch._inductor.lowering` 时，诸如 `@register_lowering(aten.add...)` 的装饰器会取得相应 overload，把原函数包上一层参数广播、类型提升和 IR 校验逻辑，再写入 `lowerings[target]`。因此 GraphLowering 开始解释节点时，add 等常用操作已经有表项；`call_function` 只负责查表并调用，不在现场重新寻找 add 的实现。`make_fallback(target)` 采用同一个接口为缺失 target 新增一项，所以原生 lowering 和临时 fallback 最终都从这张表交给统一调用点。
+
 本篇沿用 Q211 的名字规则：`qualify_name(name)` 在当前 GraphLowering 有子图名时返回 `子图名_name`，否则返回原名。常量先限定子图名，再把点号等不适合作变量名的字符换成下划线。
+
+tensor 常量登记使用三张表，TorchBind 对象另有一张表：
+
+| 表 | 本篇写入的内容 | 后续接收者 |
+| --- | --- | --- |
+| `constants` | 生成期名字 → 真实 Tensor | ConstantBuffer 用名字引用它；scheduler/codegen 把这些名字视为已有 buffer，wrapper 和编译产物保存真实 Tensor |
+| `constant_reprs` | 名字 → 含 device、dtype、size、stride 和 tensor hash 的字符串；TorchBind 项为空字符串 | wrapper 把每项写入生成源码，使这份表示参与代码缓存内容；它不是运行时 Tensor 本身 |
+| `allocated_constant_name` | 生成期名字 → 原 GraphModule 属性名 | AOT C++ wrapper 写常量元数据的 `original_fqn`，需要恢复原始 module 名时也用它查回来源 |
+| `torchbind_constants` | 属性 target → ScriptObject | wrapper/编译产物保留对象，使用该 IR 的外部调用可以按名字取得真实 ScriptObject |
+
+这四张表在 GraphLowering 构造时已经存在；本篇的方法只增加或复用条目。`Constant` 和小向量内联结果不登记 tensor 常量，因而不会增加前三张表。
 
 ## 完整源码
 
@@ -315,6 +328,8 @@ constants keys 只有 ['table_const']
 ScriptObject 是由 TorchScript/C++ 注册、从 GraphModule 属性取出的有状态对象；TorchBindObject 是 Inductor 为它建立的 IR 包装，后续自定义 operator 可以把这份对象作为参数传回已注册的 C++ 实现。这个分支写入 `torchbind_constants[target]`，同时令 `constant_reprs[target]=""`；它不写普通 tensor 使用的 `constants` 或 `allocated_constant_name`。
 
 tensor 常量只用 `constants` 检查名字冲突，TorchBind 只写 `torchbind_constants`；两者没有统一的跨表查重，却共享 `constant_reprs`。正常情况下同一 GraphModule 属性 target 只有一种值类型；若 tensor 名字清理后恰好撞上另一个 TorchBind target，后登记者会覆盖 `constant_reprs` 的同名项，两个各自类型表中的对象仍同时存在。这是当前源码的组合边界。
+
+这些登记也没有事务回滚。新 tensor 常量依次写 `constants`、`constant_reprs`、`allocated_constant_name`；若后一次赋值自身抛出异常，前面的表项仍会保留。ScriptObject 分支先写 `torchbind_constants`，再写空的 `constant_reprs`，最后构造 `TorchBindObject`，后一步失败同样不会撤销前面的写入。正常字典赋值很少失败，但这条顺序决定了调试异常时可能看到的部分状态。
 
 `get_attr` 没有像统一 lowering 调用点那样包装异常。点分属性不存在时，递归查找的原异常直接向外；属性既不是 GraphModule、ScriptObject 也不是 Tensor 时，在 Tensor assert 失败。之后 `.item()`、tensor lowering、常量登记若失败，也从各自位置直接向外。正常分支的类型选择到此已经完整；任意 helper 内部异常不另列为新的属性类别。
 

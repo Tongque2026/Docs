@@ -6,8 +6,15 @@
 输入不适用的机器码误当成命中。本叶子把这两个问题分开：hash details 找“同类编译
 请求”，每个候选保存的 guards 再判断“当前符号值能否使用这一版本”。
 
-先看真实入口 `FxGraphCache.load` 的完整控制顺序。后文各节只是在展开这张图中的
-一段，不会改变它们的先后关系：
+真正的上游入口是 `_compile_fx_inner`。非 AOT 的零算子图在这里直接返回 boxed
+`gm.forward`。这里的 boxed 表示调用者把这张图的全部实参装在一个 Python list 中
+传入，callee 接收这一个 list，而不是接收展开的 `fn(*args)`；零算子路径会先给普通
+`gm.forward` 加上这层调用适配。它不会进入 FX Graph Cache；AOT mode 也绕过这条 cache 分支，但 AOT 的
+零算子图不会走前述提前返回，而会继续自己的 codegen。只有 cache 开启、未被
+`force_disable_caches` 禁用且不是 AOT mode 的普通单图编译，才调用
+`FxGraphCache.load`。后文先展开 `load` 的完整控制顺序，再在结尾接回
+`_compile_fx_inner` 给 cache 返回对象标记同一 boxed 调用协议，并交给 AOTAutograd 的
+compiler plumbing：
 
 ```text
 输入：compile_fx_fn、gm、example_inputs、fx_kwargs、inputs_to_check、local/remote
@@ -23,27 +30,47 @@
               |      -> 用真实 SymInt 再求 guard，安装到当前 ShapeEnv
               |      -> hit
               |
-              └─ 损坏候选逐个跳过，最终无可用候选；或 artifact 以 OSError 加载失败
+              └─ local/remote 候选读取或反序列化失败时跳过；或全部 guard 拒绝；
+                 或选中 artifact 的 loader 抛 OSError
                      -> miss：调用 compile_fx_fn
                      -> 保存去掉 callable 的 metadata 副本
 
 hit / miss / bypass
   -> 共同执行 post_compile（当前输入 stride、cudagraph、realign）
-  -> 返回当前进程可调用的 CompiledFxGraph
+  -> load 返回 current_callable 非空的 CompiledFxGraph
+  -> _compile_fx_inner 设置 _boxed_call=True，再交给上层 compiler plumbing
 ```
+
+这个容错范围不能扩大到整个候选处理过程。整数 hint 的 guard 求值、wrapper artifact
+重写、非 `OSError` 的 loader 异常、真实 SymInt 的第二次 guard 求值、统计恢复或 trace
+记录失败都会继续向外传播。在 `_lookup_graph` 内，只有源码明确捕获的 local/remote
+读取反序列化异常和 `load_by_key_path` 的 `OSError` 会退化为继续候选或 miss。
+`load` 外层另行处理 remote client 构造失败、`BypassFxGraphCache` 和保存阶段的部分
+pickle/write 异常，不能把这些不同作用域的捕获混成一条规则。
 
 因此 bypass 与 miss 不同：miss 已经有安全 key，只是没有可用候选；bypass 连安全查找
 的前提都不成立。hit 也不是直接返回磁盘对象，必须先恢复当前进程的 callable，再走
 共同后处理。
 
-贯穿全文的跨进程案例也先走完一次。run1 传入同一份规范化图和动态输入，形成 key K；
-本地 K 目录为空，所以 compile 得到 graph B，并从编译后的 ShapeEnv 为当前
-`s0=16` 生成候选 guard H0，将
-`current_callable` 清空后的副本保存为 K/H0；run1 保留原 B 的 callable，经过
-post-compile 后执行。run2 是新进程，同一图细节再次形成 K；它读取 H0，用本次整数
-hint 验证 guard，按 artifact key 加载本进程的 wrapper `module.call`，再以真实 SymInt
-求 guard 并安装到当前 ShapeEnv，经过 post-compile 后返回可调用 graph。若 run2 的
-hint 不满足 H0，它继续其他叶子；全部拒绝才重新编译并保存新叶子。
+贯穿全文的实测跨进程案例使用静态输入，不和后面的动态双 guard 推演混用：
+
+```python
+def fn(x):
+    return torch.relu(x + 1) * 2
+
+x = torch.arange(-3.0, 16.0)  # 19 项：-3,-2,...,15
+```
+
+run1 与 run2 各在独立进程中编译同一函数，并共享一个空的临时 cache 目录。run1 形成
+key K，本地目录为空，所以 compile 得到原 graph B；保存副本清空 callable。这个静态
+案例不需要用 `s0%16` 一类动态 guard 解释命中。run1 执行时，-3、-2、-1 三项经
+`x+1` 和 relu 后都是 0，其余 0..15 变成 1..16；因此结果和为
+`2*(1+2+...+16)=2*136=272`。run2 在新进程再次形成 K，从 artifact 恢复本进程的
+`module.call`，同样得到 272。
+
+后文的 `s0=32/19`、H0/H1 是独立的动态 shape 推演，用来解释“同 key 多候选怎样靠
+guard 选择”，不是实验 15 的 run1/run2。动态候选若本次 hint 不满足 H0，就继续其他
+叶子；全部拒绝才重新编译并保存新叶子。
 
 ## K01：把会改变代码生成的信息变成稳定 hash details
 
@@ -970,11 +997,11 @@ cache entry 保存 `metrics_deltas` 和 `counter_deltas`。命中后将它们加
 
 ```text
 相同 graph details -> 相同 f... key
-本地 candidate -> guard 合法
+本地 candidate 的 guards_expr 为空 -> 不需要动态条件，直接选中
 candidate.current_callable 原为 None
 -> 定位/加载 wrapper .py
 -> 取得新进程中的 module.call
--> 回装 guards 与统计
+-> 恢复统计；本例没有动态 guard 需要回装
 -> CompiledFxGraph 可调用
 -> result_sum=272.0，fxgraph_cache_hit=1
 ```
@@ -1048,7 +1075,9 @@ local 分支先抛异常时，控制流直接进入 `except`，本次不会继�
 
 ### K04 状态推演
 
-同一个 key 依次编译两个 guard 版本：
+下面换成一个独立的动态 shape 状态推演；它不是实验 15 的静态 run1/run2，也不声称
+当前编译器对这两个尺寸实测后必然产生如下表达式。先约定同一个 key 已经依次编译出
+两个 guard 版本，再观察缓存怎样保存和选择它们：
 
 ```text
 第一次 s0=32:
@@ -1071,14 +1100,29 @@ K04 到此完成。K05 打开 `load` 的统一控制流、bypass 检查、post-c
 `CompiledFxGraph` boxed callable，把 run1/run2/cond 三条路径走到同一返回口。
 
 
-## K05：hit、miss、bypass 最终都交出同一种 boxed graph
+## K05：hit、miss、bypass 最终都交出同一种可恢复 graph
 
 ### 完整源码：`CompiledFxGraph` 保存哪些可恢复内容
 
-先看 run1 刚编译完成的一份对象：`current_callable=module.call`，`cache_key=P`，`source_code` 是 wrapper 文本，`cache_path` 指向 P.py，`output_strides=[(1,)]`，`guards_expr="s0%16!=0"`，mutated inputs 为空。保存磁盘副本时只有 `current_callable` 被置为 None；其余字段保留。run2 命中后用 P.py 恢复新的 `module.call`，所以反序列化对象再次变成同一种可调用 `CompiledFxGraph`。
+先看 run1 刚编译完成的一份对象。`graph.compile_to_fn()` 先得到
+`current_callable=module.call`，随后 `codegen_and_compile` 用它构造
+`CompiledFxGraph`。构造时保存 wrapper key/source/linemap、device、mutation、
+constants、output strides、禁用 cudagraph 原因和 metrics/counter deltas；此时
+`guards_expr=None`，`cudagraph_info=None`、`fx_kwargs={}`、`inputs_to_check=()`，
+编译耗时也还没有写入。
+
+`codegen_and_compile` 返回前再补入本次 `cudagraph_info`、真实 `fx_kwargs`、
+`inputs_to_check` 和 boxed forward device index；cache miss 的外层计时结束后再写
+`_time_taken_ns`。保存时浅复制当前 graph，把副本的 `current_callable` 清空，并只在
+副本上写入从当前 ShapeEnv 产生的 `guards_expr`。因此 run1 原对象仍是
+`current_callable=module.call, guards_expr=None`；磁盘副本则是
+`current_callable=None`。实验 15 使用静态输入，没有 `s0%16` 这类动态条件，因而
+不能把前一节动态案例的 guard 填到这份磁盘副本上。run2 命中后用 wrapper artifact
+恢复新的 `module.call`。
 
 ```python
 # 教学源码：CompiledFxGraph 完整产品定义；本注释仅标识教学副本。
+@dataclasses.dataclass
 class CompiledFxGraph:
     """
     Class holding a compiled FX graph. This is the object serialized on disk
@@ -1166,8 +1210,17 @@ HigherOrderOperator 还可能携带子图、Python callable 或专用状态。�
 恢复，所以 `_check_can_cache` 看到任意 HOO 都先 bypass，并注明以后应逐类支持。这是
 根据当前检查范围作出的保守处理，不表示分支图本身无法编译。
 
-实验 15 的 `torch.cond` 图含 HigherOrderOperator，因此状态是 bypass=1、miss=0、hit=0；
-异常被 `load` 捕获后仍调用 `compile_fx_fn`，结果 `[3,5]` 正常。
+实验 15 还单独运行：
+
+```python
+pred = torch.tensor(True)
+x = torch.tensor([2.0, 4.0])
+result = torch.cond(pred, lambda v: v + 1, lambda v: v - 1, [x])
+```
+
+图中的 `torch.cond` 是 HigherOrderOperator，因此状态是 bypass=1、miss=0、hit=0；
+`load` 捕获 `BypassFxGraphCache` 后仍调用 `compile_fx_fn`。因为 `pred=True`，执行 true
+分支，把 `[2.0,4.0]` 的每一项加 1，所以结果是 `[3.0,5.0]`。
 
 ### `load` 的三条控制流
 
@@ -1198,16 +1251,21 @@ cache 保存的是编译 artifact，不保存当前 tracing context 和本次输
 这些结果不写回 cache entry。它们依赖当前进程、当前输入和本次 BoxedBool，若直接返回
 磁盘 graph 而跳过，就会丢失运行合同。
 
-### `CompiledFxGraph` 同时保存缓存产物和运行函数
+### `CompiledFxGraph` 的字段分三次形成
 
-构造函数保存 callable、wrapper key/source/linemap、device、mutation、constants、输出
-stride、cudagraph 信息、metrics/counters、fx kwargs、inputs_to_check 和编译耗时等。
-磁盘 copy 只把 `current_callable` 置 None，其余字段为 lookup/save/post-compile 提供
-恢复信息。
+第一步是构造函数：保存 callable、wrapper key/source/linemap、device、mutation、
+constants、输出 stride、cudagraph 禁用原因和 metrics/counters，并把尚未得到的
+guard、cudagraph info、fx kwargs、inputs_to_check 初始化为空。第二步由
+`codegen_and_compile` 和 cache miss 计时器补入本次编译 metadata 与 `_time_taken_ns`。
+第三步只发生在保存副本上：清空 callable，并写入裁剪后的 `guards_expr`。所以不能把
+“磁盘对象最后拥有哪些字段”误写成“构造函数一次性保存了所有字段”，也不能说保存
+副本只修改 callable。
 
 `__call__(inputs)` 只做两件事：断言 callable 已恢复，再把同一 boxed list 交给它。
-它不会把列表展开为 `*args`。因此 wrapper 的 `def call(args)`、入口 `args.clear()` 和
-编译出口 `_boxed_call=True` 使用同一协议。
+它不会把列表展开为 `*args`。`FxGraphCache.load` 本身只保证 callable 非空；回到真实
+`_compile_fx_inner` 后才设置 `_boxed_call=True`，再把对象交给 forward/backward
+compiler plumbing，最终由 AOTAutograd 一侧按 boxed 输入协议消费。直接单独调用
+`load` 不能据此假定 boxed flag 已设置。
 
 ### 三个实验进程走到同一出口
 
@@ -1217,12 +1275,12 @@ run1: lookup None
   -> post_compile -> boxed call -> sum 272
 
 run2: lookup candidate
-  -> restore wrapper module.call -> guards/metrics
+  -> guards_expr 为空，restore wrapper module.call -> metrics
   -> post_compile -> boxed call -> sum 272
 
 cond: check 发现 HigherOrderOperator
   -> bypass -> compile（不 lookup/save）
-  -> post_compile -> boxed call -> [3,5]
+  -> post_compile -> boxed call -> [3.0,5.0]
 ```
 
 这三条路最终都必须得到 `current_callable is not None`。hit 不是跳过所有加载，bypass
@@ -1240,5 +1298,10 @@ cond: check 发现 HigherOrderOperator
   均照常发生。
 
 至此，生成源码、模块加载、FX Graph Cache 的候选选择和 `CompiledFxGraph` 的恢复已经连成一次完整路径。
+
+本篇是 Codegen 第三个层次的最后一个源码叶子。接下来返回
+[缓存、编译与加载父篇](../README.md)，再按正式阅读顺序回到
+[Inductor 总览](../../../README.md)核对四个一级模块的入口、出口和案例交接；不再从
+这里继续展开 PyCodeCache、远端服务或底层编译器缓存的内部实现。
 
 

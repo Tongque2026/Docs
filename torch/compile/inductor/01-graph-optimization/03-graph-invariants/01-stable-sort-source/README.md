@@ -24,7 +24,15 @@ Argument 'x' of Node 'add' was used before it has been defined
 
 ## 声明范围的完整源码
 
-先固定类型与状态。`List[...]` 是 Python 列表类型标注；`_args(add)` 在本例返回 `[y,x]`。进入 `stable_topological_sort` 时，`graph.nodes` 的线性顺序为 `[y,add,x]`；`pending` 反向保存这三项，`ready` 起初为空，`waiting` 也为空。遍历到 add 时 x 尚未 ready，所以 `waiting[x]=[add]`；x 就绪后再唤醒 add。代码结束时顺序为 `[y,x,add]`，`waiting={}`。
+先固定类型与状态。`List[...]` 是 Python 列表类型标注；`_args(add)` 在本例返回 `[y,x]`。
+进入 `stable_topological_sort` 时，`graph.nodes` 的线性顺序为 `[y,add,x]`；`pending` 反向
+保存这三项，`ready` 起初为空，`waiting` 也为空。遍历到 add 时 x 尚未 ready，所以
+`waiting[x]=[add]`；x 就绪后再唤醒 add。代码结束时顺序为 `[y,x,add]`，`waiting={}`。
+
+源码注释随后说 Node “恰在三个 collection 之一”，这里的三个处理状态特指：在 pending
+中、在 ready 中、或者作为 waiting 的 **value** 等待唤醒。waiting 的 key 只是依赖索引，
+不算第四种处理状态；例如 `waiting[x]=[add]` 时，add 是 waiter，而 x 仍可能同时在 pending。
+若把整个字典连 key 一起按“collection”理解，产品注释的字面说法并不成立。
 
 下面保留两个函数的全部产品语句、注释和原顺序。仅 `# 教学：` 开头的注释由教程加入。
 
@@ -283,6 +291,18 @@ stable sort 移动同一批 Node 对象，不调用节点 target。因此：
 
 若顺序为 `consumer1,consumer2,y,x`，两者的 args 都是 `(x,y)`：它们先共同挂到 y；y 唤醒时各自发现 x 尚缺，再按原先顺序共同挂到 x；x ready 后仍以 consumer1、consumer2 的顺序进入合法前缀。最终是 `y,x,consumer1,consumer2`。
 
-若把 consumer2 改为依赖 consumer1，它在第二次检查时即使 x、y 都 ready，也还会因 consumer1 未 ready 而继续等待；只有 consumer1 完成才被再次唤醒。决定顺序的是实际 Node 引用，不是第一次选择的 waiting key。
+再看一张参数和原顺序都确定的变体：
+
+```text
+原顺序：consumer2, consumer1, x, y
+consumer1.args = (x, y)
+consumer2.args = (consumer1, x, y)
+```
+
+consumer2 首查缺 `[consumer1,x,y]`，挂到最后一项 y；consumer1 也挂 y。x、y 依次 ready
+后，y 按登记顺序先唤醒 consumer2。此时 x、y 已 ready，但 consumer1 尚未 ready，所以
+consumer2 改挂 consumer1。consumer1 随后 ready 并再次唤醒 consumer2，最终顺序为
+`x,y,consumer1,consumer2`。实验记录 consumer1 检查 2 次、consumer2 检查 3 次。决定顺序
+的是完整 Node 引用和参数次序，不是第一次选择的 waiting key。
 
 至此，`_args` 的容器遍历、pending/ready/waiting/cursor、移动和唤醒、重复重查、稳定顺序以及两个断言条件都有具体状态支撑。

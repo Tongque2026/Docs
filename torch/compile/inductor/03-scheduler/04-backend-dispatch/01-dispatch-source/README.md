@@ -4,16 +4,29 @@
 
 Q34 已经让我们按节点类型画出提交时间线。本篇打开实际控制循环：它维护哪几份状态，为什么在 extern/template/device 边界先 flush，以及分派后哪个 `node` 被加入 available/completed。
 
-先固定循环中的四份状态：
+先固定循环直接维护的状态：
 
 | 状态 | 保存什么 | 谁使用它 |
 | --- | --- | --- |
-| `self.backends[device]` | 每个 device 已创建的有状态生成器及其尚未提交的工作 | 分派调用继续积累；`flush()` 要求所有已创建 backend 提交 |
+| `self.backends[device]` | 每个 device 已缓存的有状态生成器；待提交工作保存在生成器内部 | 分派调用继续向实例交任务；`flush()` 要求所有已创建 backend 提交 |
 | `current_device` | 当前 wrapper device guard 所在设备 | 下一节点决定是否 flush、退出旧 guard、进入新 guard |
 | `buffer_names_to_free` | 已到最后一次使用、等待安全提交点释放的 buffer 名 | `flush()` 在 backend 工作写出后调用 `free_buffers()` 兑现 |
 | `available_buffer_names` / `completed_operations` | Scheduler 外层循环已经登记的 buffer 名和 operation 名 | available 在调度构造时用于裁掉已由输入、常量或先前结果满足的依赖；completed 在后续 inplace 判断中过滤已经处理过的使用者 |
 
 这两份“完成”集合是编译期记账，不表示设备已经执行。具体 backend 还会在 `mark_run()` 中分配输出并记录生成状态；template 案例会展示 backend 处理范围与 Scheduler 外层记账范围为何不同。
+
+### `_codegen` 接到的不是一组全空状态
+
+`Scheduler` 构造时已经完成节点建立、依赖、DCE、融合和 last usage，随后 `codegen()` 才调用 `_codegen()`。入口各状态如下：
+
+- `self.nodes` 是融合、组合和最终拓扑处理后的节点序列，每个节点已有 `last_usage`；
+- `completed_operations` 在 Scheduler 构造时建为空集合，codegen 前没有正常路径向其中加入 operation；
+- `available_buffer_names` 初始已经包含图输入、常量和 torchbind 常量，构造期间发现的新常量也会加入；它不是空集合；
+- `current_device` 在进入 codegen 前被明确重置为 `None`，`buffer_names_to_free` 也建为空集合；
+- `self.backends` 虽然最初为空，却不保证到 codegen 时仍为空。普通 `SchedulerNode` 构造时就可能为计算 group 取得 backend，融合检查也会访问 backend。因此 `_codegen` 负责复用或按需补建实例，不等于“第一个普通节点才首次创建 backend”；
+- `origin_to_index` 是 `enter_context()` 按需填充的 FX node 顺序缓存。
+
+这些对象都属于同一个 Scheduler。`_codegen` 没有另建事务副本；后文的 backend、wrapper 和 Scheduler 集合会按语句顺序逐项改变。
 
 ```text
 最终节点序列
@@ -27,11 +40,11 @@ Q34 已经让我们按节点类型画出提交时间线。本篇打开实际控�
 遍历结束：退出最外 guard，再 final flush
 ```
 
-## K01：backend 延迟创建，首节点前的 flush 可以是空操作
+## K01：backend 按需缓存，flush 只提交实例内部已有的工作
 
 ### flush 先提交所有已创建 backend，再尝试释放
 
-`BaseScheduling` 是各设备代码生成器共同实现的接口；`self.backends` 把具体 `torch.device` 映射到这类对象。本例刚开始时字典为空，首次空 flush 不调用任何 backend；创建 CPU 生成器并暂存节点后，字典为 `{cpu: CppScheduling}`，下一次 flush 会调用它的 `flush()`，随后 `free_buffers()` 把已经到最后使用的数据转成 wrapper 释放请求。
+`BaseScheduling` 是各设备代码生成器共同实现的接口；`self.backends` 把具体 `torch.device` 映射到这类对象。映射里有实例，不等于实例内部已经积累待提交节点：一个 CPU backend 可能早在 SchedulerNode 构造时就已缓存，但其 codegen group 仍为空。下一次 flush 会调用所有已缓存实例的 `flush()`，随后 `free_buffers()` 把已经到最后使用的数据转成 wrapper 释放请求。
 
 ```python
 def flush(self) -> None:
@@ -42,7 +55,7 @@ def flush(self) -> None:
     self.free_buffers()
 ```
 
-`self.backends` 只含已经按需创建的实例。第一个节点前调用 `flush()` 时它可以仍为空；循环不执行，但 `free_buffers()` 仍安全运行。flush 不是“必然生成一个 kernel”，而是“让当前所有 backend 兑现已积累工作，并在其后兑现可释放项”。
+`self.backends` 只含已经按需创建的实例。第一个节点前调用 `flush()` 时，字典可能为空，也可能已有一个内部没有待提交工作的 backend；两种情况都不必生成 kernel，但 `free_buffers()` 仍会运行。flush 不是“必然生成一个 kernel”，而是“让当前所有 backend 兑现各自已经积累的工作，并在其后兑现可释放项”。
 
 ### backend 创建与缓存的完整实现
 
@@ -112,29 +125,33 @@ def enter_context(self, node: BaseSchedulerNode) -> None:
 
 ### pointwise 的首尾状态
 
-实验 11 的最终列表只有 `op0_op1`，初始状态可写成：
+实验 11 的最终列表只有 `op0_op1`。到 `_codegen` 入口，CPU backend 已可能在此前节点构造或融合检查中缓存；这里关心的是它尚未接到本轮 `codegen_node`。状态应写成：
 
 ```text
-backends={}
+backends={cpu: CppScheduling}     # 可能已缓存；内部待生成组为空
 current_device=None
 buffer_names_to_free={}
+available_buffer_names={arg0_1,...}  # 已含本图输入与常量
+completed_operations={}
 ```
 
-访问 CPU 节点时 `cpu != None`，主循环先调用 `flush`。此时没有 backend，因而没有 C++ kernel；随后设置 `current_device=cpu`。普通分派第一次调用 `get_backend(cpu)`，才创建并缓存 `CppScheduling`，再把 op0/op1 累积进它的 kernel group。遍历结束的 final flush 看到这个实例，提交 `[op0,op1]` 并兑现 pending free。
+访问 CPU 节点时 `cpu != None`，主循环先调用 `flush`。已缓存 backend 的组仍为空，因而这次不生成 C++ kernel；随后设置 `current_device=cpu`。普通分派通过 `get_backend(cpu)` 复用该实例，再把 op0/op1 累积进它的 kernel group。遍历结束的 final flush 提交 `[op0,op1]` 并兑现 pending free。若某个只有 extern/nop 的图在 codegen 前确实尚未创建 backend，同一控制流也允许字典为空；那只是另一种入口，不是普通 pointwise 的必然状态。
 
 这解释了实验顺序：
 
 ```text
-scheduler.flush                    # 空 backend 集合
-create_backend(cpu)=CppScheduling
+scheduler.flush                    # backend 可已缓存，但内部组为空
+get_backend(cpu)=已有 CppScheduling
 cpp.codegen_node(op0_op1)          # 只积累
 scheduler.flush
 cpp.flush([op0,op1])               # 真正提交
 ```
 
+这个普通节点同时经过三层状态：`codegen_node` 先改变 C++ backend 内部待提交组；随后外层循环把 `buf0/buf1` 与 `op0/op1` 分别加入 available/completed；最后 `flush` 才让 backend 把 kernel 调用写进 wrapper。三者发生在不同语句，不能用“节点已经生成”同时代替。
+
 ### K01 理解验收
 
-若首节点是 extern，前置 `flush()` 时 `backends` 仍可能为空；extern 分派本身不需要普通 CPU backend。K03 的完整循环会在该节点之后查询对应 backend 的 `ready_to_flush()`，这一步才创建并缓存它。若同一 Scheduler 后来出现普通 CPU 节点，会复用这个实例。
+若首节点是 extern，且此前节点构造与调度判断都没有需要某个普通 backend，前置 `flush()` 时 `backends` 仍可能为空；extern 分派本身不需要普通 CPU backend。K03 的完整循环会在该节点之后查询对应 backend 的 `ready_to_flush()`，这一步才可能创建并缓存它。若同一 Scheduler 后来出现普通 CPU 节点，会复用这个实例。
 
 K01 到此完成。K02 打开 extern 调用和主循环中的边界顺序。
 
@@ -188,7 +205,17 @@ def codegen(self) -> None:
         return self._codegen()
 ```
 
-下面按源码顺序阅读 `_codegen`。先固定节点序列：CPU 普通 A、CPU 普通 B、CPU extern C、CUDA foreach D、nop E；`current_device=None`，backend 缓存为空，available/completed 与待释放集合都为空，stack 检查、debug sync、freezing 均关闭。A 首先创建 CPU backend，A/B 在同组积累；C 前 flush 后走 extern；D 触发设备切换、进入 CUDA guard 并走 foreach；E 不切设备，只更新逻辑完成状态；循环结束退出 guard 并最终 flush。开头的测试开关只在测试配置下检查调用栈没有重复 frame。
+下面按源码顺序阅读 `_codegen`。先固定一组用于手算控制流的假定节点：CPU 普通 A、CPU 普通 B、CPU extern C、CUDA foreach D、nop E。图输入为 x、y，并假定没有常量、torchbind 常量或构造中新发现的常量，所以入口恰为 `available={x,y}`；`completed={}`、`current_device=None`、pending free 为空。CPU/CUDA backend 可以已经缓存，但内部待提交组均为空；stack 检查、debug sync、freezing 均关闭。各节点的名字如下：
+
+| 节点 | operation 名 | 输出 buffer | `last_usage` |
+| --- | --- | --- | --- |
+| A ordinary | `{A}` | `{a}` | `{x}` |
+| B ordinary | `{B}` | `{b}` | `{a}` |
+| C extern | `{C}` | `{c}` | `{b}` |
+| D foreach | `{D0,D1}` | `{d0,d1}` | `{c,y}` |
+| E nop | `{E}` | `{e}` | `{d0}` |
+
+A/B 在同一个 CPU backend group 积累；C 前先提交 A/B，再直接写 extern；D 触发设备切换、进入 CUDA guard并走 foreach；E 不切设备，只更新逻辑完成状态；循环结束退出 guard 并最终 flush。开头的测试开关只在测试配置下检查调用栈没有重复 frame。
 
 ```python
 def _codegen(self) -> None:
@@ -297,6 +324,20 @@ def _codegen(self) -> None:
     self.flush()
 ```
 
+把上面的具体名字代入，且假定 backend 都不主动请求提前 flush：
+
+| 处理完成到 | backend / wrapper 新动作 | pending free | `available_buffer_names` | `completed_operations` |
+| --- | --- | --- | --- | --- |
+| 入口 | backend 组为空，wrapper 尚无本例调用 | `{}` | `{x,y}` | `{}` |
+| A | CPU backend 积累 A | `{x}` | `{x,y,a}` | `{A}` |
+| B | 同一 backend 再积累 B | `{x,a}` | `{x,y,a,b}` | `{A,B}` |
+| C | C 前 flush 写 A+B kernel 并释放 x/a；extern 写 wrapper 调用后立即释放 b | `{}` | 再加 c | 再加 C |
+| D | 切换前空 flush，进入 CUDA guard；combo backend 接收 D | `{c,y}` | 再加 d0/d1 | 再加 D0/D1 |
+| E | `mark_run()`，不生成 kernel，也不查 ready | `{c,y,d0}` | 再加 e | 再加 E |
+| 结束 | 先写 guard exit，再 final flush；backend 提交已有工作，随后 free | `{}` | 不再变化 | 不再变化 |
+
+这里的 available 一栏是累计集合，表中“再加”表示保留前面的所有名字。backend 已接收任务、wrapper 已写调用、Scheduler 已登记 available/completed 是三件事：例如 D 的 combo backend 先接收 D，外层两集合随后才更新；若最终 flush 尚未发生，wrapper 还不一定已有该 backend 的 kernel 调用。
+
 ### 分派顺序决定同一个对象走哪条路
 
 判断依次是 template、extern、foreach、普通 Scheduler/Fused、nop。template 放在最前，是因为带 epilogue 的 `FusedSchedulerNode` 同时也是融合组；若先按普通 fused 判断，它会错误进入 `codegen_node`。extern 直接调用上节方法；foreach 还要检查 backend 是 `SIMDScheduling` 或 `CUDACombinedScheduling`，否则抛 AssertionError；普通节点进入 backend `codegen_node`；剩余对象必须是 nop，只 `mark_run()`。
@@ -351,28 +392,39 @@ extern/template 即使 device 未变也先 flush，但不会退出再进入同�
 
 遍历结束时，若当前 device 需要 guard，先发出最外层 exit 请求，再执行 final `flush()`。这是 Scheduler 调用这些生成接口的顺序；wrapper 如何组织缓冲区和缩进由 Q43/Q431 展开。
 
-### CPU 普通 A、extern C、CUDA E 的完整推演
+### 同一五节点案例中的 device 与提交边界
 
-假定节点序列为 CPU ordinary A、CPU ordinary B、CPU extern C、CPU ordinary D、CUDA ordinary E：
+继续使用 K03 的 CPU ordinary A/B、CPU extern C、CUDA foreach D、nop E：
 
 | 节点 | 进入前动作 | 分派与状态 | 进入下项前状态 |
 | --- | --- | --- | --- |
-| A | `None→CPU`，空 flush，无 guard | CPU backend 首次创建，积累 A | current=CPU，available/completed 加 A |
-| B | 无边界 | 同一 backend 积累 B | CPU group=A+B |
-| C | extern 边界 flush A+B | 直接写 extern，自己 free | CPU group 空，状态加 C |
-| D | 无 device 切换 | 新 CPU group 积累 D | pending free 等待安全提交 |
-| E | CPU→CUDA，先 flush D；CPU 无 exit；CUDA enter(index) | CUDA backend 积累 E | current=CUDA |
+| A | `None→CPU`，flush 已缓存但空闲的 backend，无 guard | CPU backend 积累 A | current=CPU；available 加 buffer a，completed 加 operation A |
+| B | 无边界 | 同一 backend 积累 B | CPU group=A+B；两集合分别再加 b 与 B |
+| C | extern 边界 flush A+B | 直接写 extern，随后 free | CPU group 空；两集合分别再加 c 与 C |
+| D | CPU→CUDA，先做一次边界 flush；CPU 无 exit；CUDA enter(index) | CUDA combo backend 接收 D | current=CUDA；两集合分别加 d0/d1 与 D0/D1 |
+| E | nop 不切 device、不 flush | 只 `mark_run()` | current 仍为 CUDA；两集合分别加 e 与 E，跳过 ready |
 | 结束 | 先请求 CUDA guard exit | final flush CPU/CUDA backend，再 free | pending 集合被兑现 |
 
-若 CUDA backend 在 E 后 `ready_to_flush()` 为真，会先中途 flush E；末尾 final flush 仍执行，但可以是空操作。
+若 CUDA backend 在 D 后 `ready_to_flush()` 为真，会先中途 flush D；E 不查询 ready，末尾 final flush 仍执行，并兑现 E 加入的 pending free。
 
 ### 失败与退化出口
 
-- `get_estimated_runtime()` 仅用于 debug log；异常被捕获后记 0.0，不阻断 codegen。
-- 测试专用 stack 检查发现相同 `(filename,lineno)` 重复 frame 时 assert；遇到 Dynamo `_compile_inner` 边界停止反向扫描。
-- 不支持 device、缺 Triton、旧 CUDA、foreach backend 类型错误、需要 guard 却无 index 都明确失败，不静默换路径。
-- 首节点为 nop 且启用 Triton debug sync 时，当前实现因局部 `device` 未赋值而失败；实验 11 已覆盖该出口。
-- 节点没有 origin 时 `enter_context` 不调用 wrapper；空 backend/pending 集合的 flush 合法。
+`_codegen` 不是事务。除 runtime 估算日志这一处主动捕获外，控制循环没有用 `try/finally` 恢复 guard、backend、pending free 或两份完成集合。异常会向上传播；源码没有承诺在同一个 Scheduler 上从失败节点继续或重试。各失败点留下的状态不同：
+
+| 异常位置 | 已经发生 | 尚未发生 / 不会自动恢复 |
+| --- | --- | --- |
+| `get_estimated_runtime()` | 改写一条 debug 日志为 0.0 | 异常在这里被捕获，正常 codegen 继续 |
+| stack 测试检查 | 只完成局部 stack/seen 扫描 | 发现重复 frame 后 assert，节点循环尚未开始 |
+| `create_backend(device)` 失败 | `add_device_info(device)` 已可能写入图；若来自节点 device 切换，旧工作可能已 flush，guard exit/enter 和 `current_device` 也可能已逐步改变 | `self.backends[device] = ...` 的右侧没有成功返回，因此该 key 不会插入；没有统一撤销 device info 或 wrapper guard 语句 |
+| ordinary/template/foreach backend 分派中失败 | 当前节点的 last usage 已加入 pending；backend 可能已部分修改自己的组、输出或生成状态 | 本节点的 available/completed 尚未更新；backend 内部是否能恢复只能由具体实现回答 |
+| extern 分派中失败 | extern counter、inplace 决定、`mark_run`、wrapper 调用或部分 free 可能已按失败位置发生 | 外层 available/completed 只在整个 extern helper 返回后更新；没有回滚 |
+| nop + debug sync | pending 已加入，`mark_run()` 已执行 | 首节点 nop 因 `device` 未绑定抛 `UnboundLocalError`；若前面有非 nop，则可能错误复用上一轮 device 去同步旧 backend。sync 抛出时两集合尚未更新 |
+| `flush()` 的第 k 个 backend 失败 | 排在前面的 backend 已 flush；第 k 个可能部分提交 | 后面的 backend 未 flush，`free_buffers()` 尚未调用；没有反向撤销已写 wrapper 内容 |
+| `free_buffers()` 中途失败 | 前面若干名字可能已经写出 free 请求 | pending 集合在函数末尾才整体 clear，因此失败时仍保留原集合；重试会怎样处理重复请求取决于 wrapper，本文不能假定幂等 |
+| `ready_to_flush()` 失败 | 当前节点分派和 available/completed 更新都已完成 | 本轮主动 flush 未发生 |
+| 最终 `flush()` 失败 | 需要 guard 的 device 已先写出最外层 exit 请求 | backend 可能部分提交，pending 可能未兑现；没有函数内 cleanup |
+
+测试专用 stack 检查遇到 Dynamo `_compile_inner` 边界会停止反向扫描。节点没有 origin 时 `enter_context` 不调用 wrapper；空 backend 或空 pending 集合本身仍是合法状态。外层编译框架可能整体放弃这次生成产物，但本篇所示 Scheduler 调用链没有把这些局部字段恢复成入口快照。
 
 ### K04 理解验收
 
@@ -380,4 +432,4 @@ extern/template 即使 device 未变也先 flush，但不会退出再进入同�
 
 若一个 backend 直到首个 extern 完成后的 ready 查询才创建，首 extern 前的 Scheduler.flush 不会调用它；一旦缓存存在，后续每次 Scheduler.flush 都会遍历它，即使其内部当前没有工作。
 
-K04 到此完成。七个方法共同形成一条连续控制链：延迟创建有状态 backend，在边界提交，按节点身份分派，更新生成状态，并在安全点兑现 last usage。
+K04 到此完成。本文完整展示的七个外层方法是 `flush`、`codegen_extern_call`、`create_backend`、`get_backend`、`enter_context`、`codegen` 和 `_codegen`；`enter_context` 内另有嵌套函数 `get_order`。它们共同形成一条连续控制链：按需缓存有状态 backend，在边界提交，按节点身份分派，更新生成状态，并在安全点兑现 last usage。

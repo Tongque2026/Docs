@@ -30,8 +30,7 @@ matcher = PatternMatcherPass(pass_name="tutorial_distribute_mul")
 def replacement(a, b):
     return a * 2 + b * 2
 
-
-
+replacement_graph = make_fx(replacement)(torch.ones(3), torch.ones(3))
 
 pattern = CallFunction(
     aten.mul.Tensor,
@@ -418,6 +417,31 @@ def probe_replace_with_graph():
     assert optional_result[1] is None
     torch.testing.assert_close(optional_result[0], torch.tensor([3.0]))
 
+    # Equal-length positional replacement is also non-transactional.  The
+    # first Node/Node pair is committed before the later None/Node pair fails.
+    partial_graph = torch.fx.Graph()
+    partial_x = partial_graph.placeholder("x")
+    partial_old = partial_graph.call_function(aten.neg.default, (partial_x,))
+    partial_output = partial_graph.output((partial_old, None))
+    partial_gm = torch.fx.GraphModule(nn.Module(), partial_graph)
+    partial_match = ProbeMatch([partial_old, None])
+    try:
+        ReplacementPatternEntry.replace_with_graph(
+            partial_match, partial_gm.graph, unpacked_graph, [partial_x]
+        )
+    except AssertionError:
+        partial_failure = "None/Node"
+    else:
+        raise AssertionError("None/Node output pair unexpectedly succeeded")
+    partial_calls = [n for n in partial_gm.graph.nodes if n.op == "call_function"]
+    partial_values = partial_output.args[0]
+    assert partial_old._erased
+    assert len(partial_calls) == 2
+    assert partial_values[0] is partial_calls[0]
+    assert partial_values[1] is None
+    assert not partial_calls[1].users
+    assert partial_match.erase_calls == 0
+
     removed_gm, removed_x, removed_first, removed_second = make_multi_output_original()
 
     def remove_first_output(x):
@@ -460,6 +484,14 @@ def probe_replace_with_graph():
         "packed_failure": packed_failure,
         "old_meta_fallback": dict(new_meta_node.meta),
         "optional_result": (optional_result[0].tolist(), optional_result[1]),
+        "partial_none_node_failure": partial_failure,
+        "partial_none_node_calls": [n.name for n in partial_calls],
+        "partial_none_node_output": [
+            partial_values[0].name,
+            partial_values[1],
+        ],
+        "partial_none_node_old_erased": partial_old._erased,
+        "partial_none_node_erase_calls": partial_match.erase_calls,
         "removed_result": (removed_result[0], removed_result[1].tolist()),
         "raw_graph_error": raw_graph_error,
     }

@@ -26,6 +26,17 @@ Q33 已经给出融合条件，本篇打开控制循环。融合并非“一次�
 
 `SchedulerNode` 表示一个普通当前组，`FusedSchedulerNode` 表示已经含多个 operation 的当前组。`ExternKernelSchedulerNode` 是由外部 kernel 完成的组；template、foreach 和 `GroupedSchedulerNode` 各有专门接口约束，遇到对应门时再说明。
 
+### 进入融合前，Scheduler 已经准备好的状态
+
+这里的 `nodes` 不是本篇临时创建的一批裸 operation。`Scheduler` 先为 Lowering 交出的 operation 建立调度节点和 `read_writes/unmet_dependencies`，再完成依赖构造、第一次拓扑排序、DCE 和 `ancestors/min_order/max_order` 计算。foreach 组合节点建立后还会再做一次拓扑排序；可选的 pre-fusion custom pass 也在融合之前运行。随后，`fuse_nodes(self.nodes)` 才接到首轮当前组列表。内建路径在进入 custom pass 之前已经建立以下状态；若用户配置了 custom pass，这些也是该回调返回的新节点列表必须继续满足的合同，因为 Scheduler 不会在回调之后重建或统一验证它们：
+
+- dead operation 已经移除，组间依赖与当前节点集合对应；
+- 每个原 operation 名都能在 `name_to_fused_node` 找到它此刻所属的当前组；初始普通节点通常映向自己，foreach 组合会把成员名改指向组合组；
+- 每个内部 buffer 名都能在 `name_to_buf` 找到原来的 buffer 对象及其 defining operation；
+- `ancestors` 保存原 operation 的上游闭包，`min_order/max_order` 保存当前组覆盖的原始顺序范围。
+
+这两张 name 映射用途不同。普通融合只把现有 operation 和 buffer 装进一个更大的组，不新建或改名 buffer，所以 `name_to_buf` 不需要随融合更新；旧候选、祖先或依赖要查“某个原 operation 现在属于哪个组”时，则必须经过不断更新的 `name_to_fused_node`。源码对这些内部名字使用下标查找，缺项会直接抛 `KeyError`，本篇各方法不会临时补建映射。
+
 ## K01：一轮节点数不再减少时，融合达到固定点
 
 首段输入 `nodes: List[BaseSchedulerNode]` 是当前组列表。以 `[op0,op1]` 为例，op0 写 buf0、op1 同位置读取 buf0；`old_len=2`。`fuse_nodes_once` 处理完这一轮候选后返回含一个 `FusedSchedulerNode(op0,op1)` 的列表，`new_len=1`；控制回到外层，外层随即停止并返回这一项。若没有候选被接受，new_len 仍为 2，外层也停止。
@@ -85,7 +96,7 @@ def fuse_nodes(self, nodes: List[BaseSchedulerNode]) -> List[BaseSchedulerNode]:
 
 K01 到此完成。下一知识点 K02 逐句展开 `get_possible_fusions`：共享 buffer 分组、aggressive group、方向尝试、priority 过滤和 score 排序。
 
-## K02：先用共享关系缩小 pair，再按 backend priority 和 score 排序
+## K02：先发现候选，再按 backend priority 过滤并用 score 排序
 
 ### 候选发现只比较可能有关的节点
 
@@ -453,11 +464,11 @@ def can_fuse(self, node1: BaseSchedulerNode, node2: BaseSchedulerNode) -> bool:
 
 shifted-index 两节点有共同 buffer 名，但精确 Dep 不相等。metric 未启用时 WhyNoFuse 记录 `no shared data`；启用对应 metric 且 common names 非空时，它先记录细分原因，再记录 `no shared data due to indexing mismatch`。
 
-上面的类型、方向、device、共享、成员数和依赖判断都只读当前组状态。任一早退都不会修改 `fused_nodes` 或 `name_to_fused_node`；真正的组替换只发生在 K04 的 `backend.fuse` 之后。
+上面的早退都不会修改 `fused_nodes` 或 `name_to_fused_node`；真正的组替换只发生在 K04 的 `backend.fuse` 之后。但“组容器不变”不等于节点毫无变化：精确共享为零时，`has_shared_data_after_reordering_loop` 可能真正重排节点循环、刷新依赖并增加 loop-reordering metric，之后 pair 仍可能被成员数、vertical/backend、cycle 或收益门拒绝，这些变化不会回滚。
 
 template 只能位于 pair 的第一项，后面接它的 epilogue。若列表顺序得到 `(pointwise, template)`，正向检查会因 `node2.is_template()` 拒绝；K02 随后尝试反向 `(template, pointwise)`。反向 pair 仍需保证 pointwise 没有 alias/mutation、不是 reduction，并且启用了 epilogue fusion。
 
-`has_shared_data_after_reordering_loop` 只在精确 Dep 交集为零时提供一次补充判断：它检查两组的访问在允许调整逐点循环顺序后能否变成相同的精确访问。返回 true 只让 pair 越过 `no shared data` 门；纵向 pair 随后仍要由 `can_fuse_vertical` 对 producer write 与 consumer unmet dependency 逐项匹配。
+`has_shared_data_after_reordering_loop` 只在精确 Dep 交集为零时提供一次补充判断：它检查两组的访问在允许调整逐点循环顺序后能否变成相同的精确访问。它可能先真正重排循环并刷新依赖，再重新计算共同访问的字节分数；即使最后分数仍为 0、函数返回 false，已经发生的重排也不会恢复。返回 true 只让 pair 越过 `no shared data` 门；纵向 pair 随后仍要由 `can_fuse_vertical` 对 producer write 与 consumer unmet dependency 逐项匹配。
 
 在 `aggressive_fusion=True` 下，两个同 loop group、无共享 buffer、都不是 reduction 的普通节点可以越过共享门。若它们没有祖先关系，就继续检查合并是否提高峰值内存，再交给 backend 的 horizontal 门。aggressive 只扩展候选与准入机会，不直接执行 merge。
 
@@ -627,6 +638,25 @@ K03 到此完成。下一知识点 K04 展开一轮执行：旧候选映射到�
 
 `get_possible_fusions(nodes)` 只在一轮开始时生成候选。循环处理前一个 pair 后，候选里的原节点可能已经属于新的融合组，所以 `fuse_nodes_once` 不能直接拿旧对象继续合并。
 
+先看一轮的控制骨架，再分别打开 cycle 和收益判断：
+
+```text
+复制本轮当前组，得到 fused_nodes
+生成并排好本轮候选表
+for 每个旧候选 (old1,old2)：
+    用 name_to_fused_node 找到两端现在所属的 current1/current2
+    重新检查 can_fuse(current1,current2)
+    检查合并是否成环
+    检查融合版本是否值得接受
+    backend.fuse 返回新组 current3
+    fused_nodes 中删 current1/current2，加 current3
+    让 current3 的每个原 operation 名都映向 current3
+按 min_order 排序当前组，再做拓扑排序并裁掉组内已满足的依赖
+返回本轮新列表
+```
+
+前一个 merge 只会改变当前组集合和 operation→当前组映射，不会重写候选表。后续候选仍保存旧端点，但每次执行前都会重新解析、重新检查，因此能把旧 `(B,C)` 变成当前 `(AB,C)`；若两端都已进入 AB，则重新检查会拒绝同一对象与自身融合。
+
 ### 收益门的完整实现
 
 先走最常见的 CPU 普通节点路径：node1/node2 都不是 template 或 foreach，`benchmark_fusion=False`。于是 `is_multi_template=False`，函数在第一个收益判断直接返回 true，不会构造计时表。
@@ -782,7 +812,9 @@ def speedup_by_fusion(
     return ms_fused < ms1 + ms2
 ```
 
-这段门有三类出口。关闭 benchmark 的普通节点、CPU、foreach、当前不支持测量的 template，以及含 atomic-add 的组直接允许；multi-template 会按已有 timing 过滤 Triton choice，再实际测融合版本并固定最快 choice；普通 GPU 路径分别测两项和融合项，只有 `ms_fused < ms1+ms2` 才接受。任一测量为无穷大表示寄存器 spilling，直接拒绝。特定 `Loop-carried variable` 编译错误被当前实现作为 workaround 放行，其他编译错误继续抛出。
+这段门有三类出口。关闭 benchmark 的普通节点、CPU、foreach、当前不支持测量的 template，以及含 atomic-add 的组直接允许；multi-template 会按已有 timing 过滤 Triton choice，再实际测融合版本并固定最快 choice；普通 GPU 路径分别测两项和融合项，只有 `ms_fused < ms1+ms2` 才接受。任一测量为无穷大时，当前收益门都按 `register spilling` 这一拒绝理由处理；Triton benchmark 也可能把一般编译失败转成无穷大，所以这个标签不一定等于底层真实原因。特定 `Loop-carried variable` 编译错误若传播到这里，则被当前实现作为 workaround 放行；其他传播到这里的编译错误继续抛出。
+
+收益门返回 false 只表示“不合并这两个当前组”，不表示此次尝试没有其他副作用。benchmark 会设置 Scheduler 的 `current_device`；Triton 路径可能生成并缓存代码及 `.kernel_perf`，慢融合还可能写日志、metric 和 `logged_slow_fusion`。这些状态在拒绝后不会回滚。multi-template 对单个 choice 的临时切换由 context manager 在退出时恢复，但一旦找到严格更快的 choice，`finalize_as_triton_caller` 会永久固定它；若后续 backend merge 或本轮收尾再异常，该选择也不会恢复。其他 backend 还会留下什么，只能由各 backend 的 benchmark 实现判断，不能从 Scheduler 这一段统一推出。
 
 实验 10 在 CPU 且 `benchmark_fusion=False`，所以它证明静态融合与组更新，不证明 GPU benchmark 更快。
 
@@ -834,6 +866,10 @@ def fuse_nodes_once(
     self.prune_redundant_deps(nodes)
     return nodes
 ```
+
+静态门、cycle 门或收益门拒绝时，本 pair 不会修改 `fused_nodes` 和 `name_to_fused_node`，循环继续处理下一候选；但 loop reorder 造成的节点循环与依赖变化、日志、metric、候选评分缓存和上述 benchmark 状态可能已经保留。异常也不是整轮事务回滚：在当前 pair 合并前抛出时，本 pair 的组容器尚未改变，但此前候选已经成功产生的组和映射仍然保留。
+
+`backend.fuse` 必须先完整返回 `node3`，本方法才依次删除两个旧组、加入新组并更新映射。正常不变量保证两端是不同且仍存在的当前组；源码仍没有快照。若 backend 内部抛出，它自身是否留下状态由该 backend 决定；若在返回 `node3` 后的删除、加入或映射更新之间发生异常，`fused_nodes` 可能只完成部分替换。轮末排序和拓扑排序只构造局部列表，随后 `prune_redundant_deps` 才逐节点改写依赖；裁边中途失败会保留已经处理节点的新依赖。以上路径都没有回滚，外层也拿不到一次完整返回的新列表。
 
 映射后必须再次调用 `can_fuse`。旧候选 `(B,C)` 生成时 B 尚未与 A 合并；执行到它时实际检查的是 `(AB,C)`，成员数、祖先、设备、共享访问和 backend 条件都可能改变。若两个旧端点已映到同一组，`can_fuse` 的 `node1 is node2` 会拒绝，不会把一个组从 `fused_nodes` 删除两次。
 

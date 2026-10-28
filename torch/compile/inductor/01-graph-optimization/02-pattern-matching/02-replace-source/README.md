@@ -20,6 +20,31 @@ replacement：x → mul_x ─┐
 
 `x`、`y` 已经是原图节点，不应复制 placeholder。`mul_x`、`mul_y`、`add_new` 要在原图创建。最后让原来读取 `mul_old` 的 output 改读 `add_new`，再删除失去用户的旧节点。
 
+读源码前还要先固定五个容易混淆的对象：
+
+| 对象 | 本例具体内容 | 谁产生，谁消费 |
+| --- | --- | --- |
+| `output_nodes` | `[mul_old]` | `match.output_nodes()` 取出原图中等待被替换的旧输出；后面的 `replace` 按位置消费 |
+| 规范化后的 `args` | `[x_old,y_old]` | `normalize_args` 把 Match 捕获值排成模板 placeholder 顺序；`Replacer.run(*args)` 消费 |
+| `env` | `rx→x_old`、随后 `r_mul_x→mul_x` 等 | 父类 Interpreter 在每个模板节点的 `run_node` 返回后自动记录；后续模板节点查表取得已经解释好的原图对象 |
+| `replacement` | 最终为原图节点 `add_new`，随后包装成 `[add_new]` | 模板 output 从 env 取结果并返回；输出迁移逻辑消费 |
+| 原 `graph` | 含旧 add/mul，并逐步加入三个新 call | `graph.call_function`、user 重接和 erase 都直接修改它；函数正常结束仍返回 `None` |
+
+因此 `fetch_args_kwargs_from_env(node)` 不是读取 tensor 数据。它把当前模板节点参数中的
+模板 Node 换成 env 里对应的解释结果：placeholder 对应捕获的原图输入，较早的模板 call
+对应刚在原图创建的新 Node。第一个 `graph.call_function` 执行时原图就已经开始变化，函数
+没有事务或自动回滚。
+
+输出接口有三种形状。一个模板 Node 会先包装成一元素列表；多个值保持为序列；某个位置
+也可以是 `None`。等量的新旧输出按列表位置对应；一个旧输出面对多个新值时，旧输出必须
+是由 `getitem` users 拆用的 packed 值。`output_nodes` 不能为空，多输出时第 0 项必须是真实
+Node；模板顶层也必须返回 Node 或可按位置处理的序列，而不能只返回顶层 `None`。违反这些
+前提会在相应访问、断言或 `len(...)` 处异常，已经插入的节点不会自动撤销。
+
+`percolate_tags` 只在输出迁移时处理 `recompute` 和 `ac_graph_id`：它从对应新输出反向走过
+新内部节点，到规范化 `args` 中的捕获输入便停止。详细队列状态留在源码后的案例，但读到
+函数时可以先把它理解为“把旧输出的两种 checkpoint 标签留在本次新建的内部子图中”。
+
 ## 声明范围的完整源码
 
 进入长代码块前固定几项 Python 与 FX 对象：`@dataclasses.dataclass` 会为字段生成初始化等样板方法；这里的实例保存 `normalize_args` 等 replacement 配置。`match` 保存本次捕获的 x、y 和旧输出节点，`graph` 是正在修改的原图，`replacement_graph` 是含 placeholder、mul、add、output 的模板图，`args=[x,y]` 把两个模板 placeholder 绑定到原图节点。内部 `Replacer` 逐个解释模板节点：placeholder 直接取 args，普通调用在原 graph 新建节点，output 收集新 add；随后旧 mul 的 users 改读新 add。
@@ -267,7 +292,8 @@ replacement 的 placeholder 与 output 由 `Interpreter` 处理。中间 `call_f
 AttributeError: 'Graph' object has no attribute 'named_modules'
 ```
 
-当前正常调用路径传入 GraphModule；若只传裸 Graph，这一实现会在读取 `owning_module.graph` 时失败。
+当前正常调用路径传入 GraphModule；若只传裸 Graph，当前实现会在 Interpreter 构造时调用
+`replacement_graph.named_modules()`，因此得到上面的 `AttributeError`。
 
 ## 两个旧输出怎样选择插入点并逐位替换
 
@@ -334,7 +360,16 @@ Match 的 output pattern 可以包含 None。源码明确区分：
 | Node | None | 所有 users 改接 None，擦除 old |
 | Node | Node | 正常迁移 meta、tag 和 users |
 
-实验一将 `[old,None]` 对应 `[x+1,None]`，输入 `[2]` 得到 `([3],None)`；实验二将两个旧输出对应 `[None,x+3]`，得到 `(None,[5])`。它们分别走过 None/None 与 Node/None 分支。
+实验一将 `[old,None]` 对应 `[x+1,None]`，输入 `[2]` 得到 `([3],None)`；它同时走过
+Node/Node 和 None/None。实验二将两个旧输出对应 `[None,x+3]`，得到 `(None,[5])`；它同时
+走过 Node/None 和 Node/Node。
+
+`None/Node` 失败也不是事务。第三个实验让旧接口 `[old,None]` 对应两个新节点
+`[x+1,x+2]`。replacement 先把两个新节点都建进原图；`zip` 处理第一对 Node/Node 时，
+output 已从 old 改读 `x+1`，old 随即删除。处理第二对 None/Node 才触发断言。异常后的状态
+是：output 为 `(x+1,None)`，`x+2` 已创建但没有 user，old 已删除，末尾
+`match.erase_nodes()` 尚未调用。由此，“无回滚”不仅可能留下新节点，也可能留下已经完成的
+旧 user 迁移和旧节点删除。
 
 ## meta 有两种来源
 
@@ -386,7 +421,10 @@ captured x: 无这两项
 | 2 | `[new_add]` | `new_add` | 写标签，加入输入节点 `x` | `{new_mul,new_add}` / `[x]` |
 | 3 | `[x]` | `x` | `x in input_stops`，不写、不展开 | visited 不变 / `[]` |
 
-常数 1、2 不是 FX Node，不会出现在 `all_input_nodes`。若两条新路径共享一个内部节点，第二次弹到它时 `visited` 会阻止重复展开。
+常数 1、2 不是 FX Node，不会出现在 `all_input_nodes`。在同一次 `percolate_tags` 的反向
+遍历中，若两条依赖路径汇合到同一个内部节点，第二次弹到它时 `visited` 会阻止重复展开。
+不同旧输出会分别调用 `percolate_tags`，每次都有自己新建的 `visited`，前一次遍历不会替
+后一次去重。
 
 `visited` 防止共享子图被反复处理。产品注释明确称这种 many-to-many 标签映射为 best effort；它可能把某些新节点标得过宽，不是精确的一一来源证明。
 
@@ -398,6 +436,11 @@ replacement 返回单 Node 时先包装成一元素列表。之后只有两个�
 - 数量不等：断言旧输出恰好一个，把整份 replacement 序列交给 packed surgery。
 
 若两个旧输出却只有一个新输出，会在数量不等分支因 `len(output_nodes)!=1` 断言失败；它不会猜测哪一个旧输出对应新值。packed 分支中的 getitem 索引也直接用于 `new[idx]`，越界或不适用索引会按 Python/序列行为失败。
+
+还有两个更早的输入前提：`output_nodes` 为空时，选择插入点会访问不存在的第 0 项；模板
+顶层只返回 `None` 时，后续会对 `None` 求长度。这两种输入都异常退出，不是“没有输出所以
+什么也不做”。前者尚未进入节点插入阶段；后者可能已经解释完模板中位于 output 前的
+`call_function`，因而可能留下新节点。
 
 ## `apply` 最后补上的一层参数整理
 

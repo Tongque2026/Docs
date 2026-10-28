@@ -105,6 +105,43 @@ assert recheck_order == ["y", "x", "add"]
 assert recheck_count == 3
 
 
+# A consumer can be woken after x/y are ready yet still wait for another
+# consumer.  Fix the original order and complete args so the trace is unique.
+dependent_graph = torch.fx.Graph()
+
+
+def dependent_target(first, x, y):
+    return first
+
+
+dependent_second = dependent_graph.call_function(dependent_target, ())
+dependent_first = dependent_graph.call_function(operator.add, ())
+dependent_x = dependent_graph.placeholder("x")
+dependent_y = dependent_graph.placeholder("y")
+dependent_first.args = (dependent_x, dependent_y)
+dependent_second.args = (dependent_first, dependent_x, dependent_y)
+dependent_checks = []
+
+
+def recording_dependent_args(node):
+    dependent_checks.append(node.name)
+    return real_args(node)
+
+
+with mock.patch.object(pattern_matcher_module, "_args", recording_dependent_args):
+    stable_topological_sort(dependent_graph)
+dependent_order = [n.name for n in dependent_graph.nodes]
+lines.append(
+    "dependent_consumers="
+    + ",".join(dependent_order)
+    + f" first_checks={dependent_checks.count(dependent_first.name)}"
+    + f" second_checks={dependent_checks.count(dependent_second.name)}"
+)
+assert dependent_order == ["x", "y", "add", "dependent_target"]
+assert dependent_checks.count(dependent_first.name) == 2
+assert dependent_checks.count(dependent_second.name) == 3
+
+
 # _args recursively visits positional/keyword containers and preserves repeats.
 arg_graph = torch.fx.Graph()
 arg_x = arg_graph.placeholder("x")
@@ -322,6 +359,92 @@ lines.append(
 )
 
 
+def transpose_composite(a, b):
+    z = torch.ops.aten.add.Tensor(a, b)
+    return torch.ops.aten.relu.default(z), torch.ops.aten.sin.default(z)
+
+
+# One deterministic end-to-end maintenance case.  Snapshot metadata first,
+# insert a new transpose before its producer, redirect both old consumers, then
+# repair topology, refresh fake metadata, regenerate forward, and lint.
+composite_gm = make_fx(transpose_composite, tracing_mode="fake")(
+    torch.randn(2, 3), torch.randn(2, 3)
+)
+composite_add = next(
+    n for n in composite_gm.graph.nodes if n.target == torch.ops.aten.add.Tensor
+)
+composite_relu = next(
+    n for n in composite_gm.graph.nodes if n.target == torch.ops.aten.relu.default
+)
+composite_sin = next(
+    n for n in composite_gm.graph.nodes if n.target == torch.ops.aten.sin.default
+)
+composite_updater = FakeTensorUpdater(composite_gm.graph)
+composite_mode = composite_add.meta["val"].fake_mode
+old_consumers = [composite_relu, composite_sin]
+with composite_gm.graph.inserting_before(composite_add):
+    composite_t = composite_gm.graph.call_function(
+        torch.ops.aten.transpose.int, (composite_add, 0, 1)
+    )
+for consumer in old_consumers:
+    consumer.replace_input_with(composite_add, composite_t)
+lines.append(
+    "composite_broken_order="
+    + ",".join(n.name for n in composite_gm.graph.nodes)
+)
+lines.append("composite_t_has_val_before=" + str("val" in composite_t.meta))
+stable_topological_sort(composite_gm.graph)
+lines.append(
+    "composite_fixed_order=" + ",".join(n.name for n in composite_gm.graph.nodes)
+)
+composite_log = RecordOps()
+with composite_log, V.set_fake_mode(composite_mode):
+    composite_updater.incremental_update()
+lines.append("composite_meta_ops=" + ",".join(composite_log.ops))
+lines.append(
+    "composite_shapes="
+    + str(
+        {
+            "t": list(composite_t.meta["val"].shape),
+            "relu": list(composite_relu.meta["val"].shape),
+            "sin": list(composite_sin.meta["val"].shape),
+        }
+    )
+)
+lines.append(
+    "composite_strides="
+    + str(
+        {
+            "z": list(composite_add.meta["val"].stride()),
+            "t": list(composite_t.meta["val"].stride()),
+            "relu": list(composite_relu.meta["val"].stride()),
+            "sin": list(composite_sin.meta["val"].stride()),
+        }
+    )
+)
+composite_gm.recompile()
+composite_gm.graph.lint()
+lines.append(
+    "composite_targets="
+    + ",".join(
+        str(n.target) for n in composite_gm.graph.nodes if n.op == "call_function"
+    )
+)
+composite_output = next(n for n in composite_gm.graph.nodes if n.op == "output")
+lines.append(
+    "composite_output="
+    + str(tuple(n.name for n in composite_output.args[0]))
+)
+lines.append("composite_code=" + " ".join(composite_gm.code.split()))
+composite_a = torch.tensor([[-1.0, 2.0, 3.0], [4.0, -5.0, 6.0]])
+composite_b = torch.ones(2, 3)
+composite_result = composite_gm(composite_a, composite_b)
+composite_expected_t = (composite_a + composite_b).transpose(0, 1)
+torch.testing.assert_close(composite_result[0], torch.relu(composite_expected_t))
+torch.testing.assert_close(composite_result[1], torch.sin(composite_expected_t))
+lines.append("composite_result_shape=" + str(list(composite_result[0].shape)))
+
+
 def dce_case(x, y):
     torch.sin(y)  # Pure and unused.
     x.copy_(y)  # Side effect and unused as a data result.
@@ -354,5 +477,14 @@ assert dtype_before == torch.float32 and dtype_after == torch.float32
 assert missing_log.ops == []
 assert old_alias_shared and not new_alias_shared
 assert alias_log.ops == ["aten.clone.default", "aten.relu.default"]
+assert "val" in composite_t.meta
+assert list(composite_t.meta["val"].shape) == [3, 2]
+assert list(composite_t.meta["val"].stride()) == [1, 3]
+assert list(composite_relu.meta["val"].shape) == [3, 2]
+assert list(composite_sin.meta["val"].shape) == [3, 2]
+assert list(composite_relu.meta["val"].stride()) == [1, 3]
+assert list(composite_sin.meta["val"].stride()) == [1, 3]
+assert composite_log.ops[0] == "aten.transpose.int"
+assert {"aten.relu.default", "aten.sin.default"}.issubset(composite_log.ops)
 (OUT / "graph_invariants.txt").write_text("\n".join(lines) + "\n")
 print((OUT / "graph_invariants.txt").read_text())

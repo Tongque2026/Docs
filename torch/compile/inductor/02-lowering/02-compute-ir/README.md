@@ -1,6 +1,6 @@
 # 计算 IR：一个逻辑索引最终读到哪里、算出什么
 
-[返回 Lowering](../README.md) · [上一篇：GraphLowering 解释器](../01-graph-interpreter/README.md) · [返回总览](../../README.md)
+[返回 Lowering](../README.md) · [上一篇：GraphLowering 解释器](../01-graph-interpreter/README.md) · [下一篇：存储与数据版本](../03-storage-layout/README.md) · [返回总览](../../README.md)
 
 实现叶子：[Pointwise、Reduction 与 View 构造源码](01-ir-construction-source/README.md)。
 
@@ -39,7 +39,11 @@ def inner_fn(index):
     return fn(*inputs_loaded)
 ```
 
-随后 `Pointwise.create(device, dtype, inner_fn, ranges)` 把它包装成 TensorBox。注意 `inner_fn` 在 Lowering 时主要是一份规则；真正 codegen 时，ops handler 才把 `load/add/store` 等动作写成目标后端代码。
+随后 `Pointwise.create(device, dtype, inner_fn, ranges)` 把它包装成 TensorBox。`inner_fn`
+是一份可以反复重放的规则：创建它之后，GraphLowering 的 `run_node` 会为登记读取关系
+在分析用的 ops handler 下调用它；Scheduler 接到已登记 operation 后，也会在依赖或工作量
+分析中重放；生成目标代码时，再换成 CPU 或 Triton handler，把同一组
+`load/add/store` 动作写成后端代码。
 
 ### 同形状 add 的六个位置
 
@@ -139,11 +143,85 @@ row=0 同理得到 3，因此结果为 `[3,12]`。这里 column 不能并入普�
 
 实验用 `[2,128]` 同时运行两种情况：非 keepdim 为 `ranges=[2]`，keepdim 为 `ranges=[2,1]`；二者的 `reduction_ranges` 都是 `[128]`、type 都是 sum。两种情况对每个 row 都读取相同 128 个元素，差别只是输出坐标系统和输出 layout（本例分别为 size `[2]` 与 `[2,1]`）。
 
-### Reduction 构造可能有三种出口
+### Reduction 构造会按组内大小选择不同出口
 
-Reduction 的坐标模型不保证最终一定保留为单层 `Reduction`。组内没有元素或只有一个元素时，构造器可用恒等值或唯一输入建立等价 Pointwise；较小静态规约也可能展开为 Pointwise。较大的规约可以保留为一层 Reduction，或先产生若干部分结果，再由第二层 Reduction 合并。
+前面的坐标模型描述“一项输出怎样对应一组输入”，但构造器未必返回单层
+`Reduction`。下面按四类组内情况说明；最后一类还会分成单层和两层两个出口。
 
-本实验的 `[2,128]` sum 实际保留 `ranges=[2]`、`reduction_ranges=[128]`、`type=sum`。构造器怎样处理 0 项、1 项、静态展开和 split 决策，留到[构造实现叶子](01-ir-construction-source/README.md)。本层只要求后继按实际返回对象继续处理。
+#### 组内 0 项：恒等值 Pointwise 或失败
+
+设输入 shape 是 `[2,0]`，沿 dim 1 求和。输出仍有两个位置，但每个位置都没有输入项。
+sum 的恒等值是 0，所以构造器交出：
+
+```text
+Pointwise(ranges=[2])
+inner_fn([row]) = 0
+结果 = [0,0]
+```
+
+prod、xor_sum 和 any 也有当前实现支持的空组恒等值；max 没有这条空组定义。实验直接调用
+当前构造器时，zero-size sum 返回 Pointwise，而 zero-size max 报出
+`max not supported for zero-dimension tensors`。因此“规约维长度为 0”还不足以决定成功，
+必须同时看 reduction type。
+
+#### 组内 1 项：直接值，或 arg reduction 的索引 0
+
+对 shape `[2,1]` 沿 dim 1 求 sum，每个 row 只有 column 0：
+
+```text
+Pointwise(ranges=[2])
+inner_fn([row]) = input_loader([row,0])
+```
+
+这里不需要累计器。argmax/argmin 的结果则是唯一元素在组内的索引 0，而不是该元素的数值：
+
+```text
+Pointwise(ranges=[2])
+inner_fn([row]) = 0  # dtype 是 arg reduction 的输出 dtype
+```
+
+实验中的 size-one sum 和 size-one argmax 都返回 Pointwise；二者的 `inner_fn` 含义如上。
+
+#### 小型静态组：可以把几项运算展开进 Pointwise
+
+当前阈值下，`ranges=[2]、reduction_ranges=[3]` 的 sum 会把三个读取和两次加法展开在
+Pointwise 的 `inner_fn([row])` 中。这个快速路径同时要求组内大小是小于阈值的静态值，
+并且输出元素总数不等于 1。实验对比得到：
+
+```text
+输出 2 项，组内 3 项 → Pointwise(ranges=[2])
+输出 1 项，组内 3 项 → Reduction(ranges=[1], reduction_ranges=[3])
+```
+
+第二行即使组内同样只有三项，也不会使用这条 Pointwise 展开路径。
+
+#### 普通或大型组：单层 Reduction，或两层 Reduction
+
+本实验的 `[2,128]` sum 实际保留
+`Reduction(ranges=[2], reduction_ranges=[128], type=sum)`。普通 reduction lowering 发现
+构造结果仍是 `Reduction` 后，会立即让它拥有 `ComputedBuffer` 并登记 operation；因此
+实验在 sum 节点已经看到 `ComputedBuffer → Reduction`，不必等它成为图输出才完成这一步。
+退化或展开成 Pointwise 的前三条路径不会在这个位置主动登记 buffer，后续消费者仍可把
+它们与别的逐元素规则组合。
+
+在不适合直接把很大范围规约成单一输出的设备后端上，当前启发式还可以选择分块数 `S`：
+
+```text
+原任务：输出 ranges=R，每项遍历 N 个组内位置
+
+第一层：ranges=R+[S]
+        reduction_ranges=[ceil(N/S)]
+        产生并物化 S 份部分结果
+
+第二层：ranges=R
+        reduction_ranges=[S]
+        合并这 S 份部分结果
+```
+
+最后一块不足 `ceil(N/S)` 项时，loader 用 mask 和该 reduction type 的默认值补齐。本环境
+的 CPU 实验没有进入 split；上图只说明当前源码选中 split 后的对象和坐标交接，不报告
+GPU 实机选择结果。阈值、设备能力和分块数怎样决定，留到
+[构造实现叶子](01-ir-construction-source/README.md)。
 
 ## View：先改逻辑坐标，不必新增计算 operation
 
@@ -228,8 +306,13 @@ mm      → ExternKernelOut buf1(size=[1,2])    operations=[ComputedBuffer, Exte
 | IR | 必要信息 | 交给下一职责的内容 |
 | --- | --- | --- |
 | Pointwise | device、dtype、ranges、inner_fn | 一条可继续被后继 loader 组合的位置规则 |
-| Reduction | 上述信息 + reduction_ranges/type/src_dtype | 输出空间、组内空间和组合规则 |
+| Reduction 构造结果 | ranges、reduction_ranges、type、src_dtype 和 loader | 按条件交出 Pointwise、单层 Reduction，或已物化的第一层加第二层 Reduction |
 | View/ReinterpretView | 新 size、reindex 或固定 stride/offset、共享 data | 读取原 storage 的坐标关系，通常不新增 operation |
 
-这些对象先交给[存储与数据版本](../03-storage-layout/README.md)。可继续组合的规则仍由后继 loader 引用；图输出、外部调用或其他物化条件会让规则进入 `ComputedBuffer` 并登记 operation。Scheduler 只读取已经登记的 operations，并在分析或生成时重放其中的计算/索引规则；共享原 storage 的 view 没有独立 operation，也不会单独成为调度节点。
+这些对象先交给[存储与数据版本](../03-storage-layout/README.md)。可继续组合的规则仍由后继
+loader 引用；普通 `Reduction` 会在其 lowering 中主动进入 `ComputedBuffer`，其他规则则
+可因图输出、外部调用或别的物化条件登记为 operation。`Scheduler(self.operations)` 只把
+已登记 operation 包装成初始调度工作，同时还会从当前 GraphLowering 读取输入、输出、
+buffer、常量和 layout 等图级状态。共享原 storage 的纯 view 没有独立 operation，因而
+不会单独成为调度节点。
 

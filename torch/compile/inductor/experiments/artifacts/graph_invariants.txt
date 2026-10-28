@@ -6,6 +6,7 @@ deep_broken_order=output,mul,add,x,y
 deep_fixed_order=x,y,add,mul,output
 same_dependency_waiters=x,neg,relu
 last_arg_recheck=y,x,add checks=3
+dependent_consumers=x,y,add,dependent_target first_checks=2 second_checks=3
 nested_args=x,y,x,y
 external_dependency=AssertionError
 cycle=AssertionError
@@ -25,5 +26,15 @@ dtype_change_ops=aten.eq.Tensor before=torch.float32 after=torch.float32
 missing_fake_ops=
 python_target_meta_unchanged=torch.float32
 alias_change_ops=aten.clone.default,aten.relu.default old_shared=True new_shared=False
+composite_broken_order=a_1,b_1,transpose_int,add,relu,sin,output
+composite_t_has_val_before=False
+composite_fixed_order=a_1,b_1,add,transpose_int,relu,sin,output
+composite_meta_ops=aten.transpose.int,prim.device.default,aten.relu.default,aten.sin.default
+composite_shapes={'t': [3, 2], 'relu': [3, 2], 'sin': [3, 2]}
+composite_strides={'z': [3, 1], 't': [1, 3], 'relu': [1, 3], 'sin': [1, 3]}
+composite_targets=aten.add.Tensor,aten.transpose.int,aten.relu.default,aten.sin.default
+composite_output=('relu', 'sin')
+composite_code=def forward(self, a_1, b_1): add = torch.ops.aten.add.Tensor(a_1, b_1); a_1 = b_1 = None transpose_int = torch.ops.aten.transpose.int(add, 0, 1); add = None relu = torch.ops.aten.relu.default(transpose_int) sin = torch.ops.aten.sin.default(transpose_int); transpose_int = None return (relu, sin)
+composite_result_shape=[3, 2]
 dce_before=aten.sin.default,aten.copy_.default
 dce_after=aten.copy_.default
